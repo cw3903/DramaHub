@@ -18,6 +18,9 @@ double _dramaScreenScale(BuildContext context) {
   return (w / 360).clamp(0.85, 1.15);
 }
 
+/// 1페이지당 드라마 카드 개수 (홈탭 페이지네이션과 동일 디자인)
+const int _dramaCardsPerPage = 30;
+
 /// 리뷰 탭 - 검색창 + 인기 순위 / 신작 / 카테고리 탭 + 그리드 드라마 카드
 class DramaScreen extends StatefulWidget {
   const DramaScreen({super.key});
@@ -164,48 +167,57 @@ class _DramaScreenState extends State<DramaScreen> {
                   ],
                 ),
               ),
-            // 탭별 그리드
+            // 탭별 그리드 (조회수 한 번 로드해서 인기/신작/카테고리 공통 사용)
             Expanded(
-              child: ValueListenableBuilder<List<DramaItem>>(
-                valueListenable: DramaListService.instance.listNotifier,
-                builder: (context, _, __) {
-                  final baseList =
-                      DramaListService.instance.getListForCountry(country);
-                  final newList = DramaListService
-                      .instance.getListForCountrySortedByReleaseDate(country);
-                  if (baseList.isEmpty) {
-                    final scale = _dramaScreenScale(context);
-                  return Center(
-                      child: Text(
-                        s.get('notReadyYet'),
-                        style: GoogleFonts.notoSansKr(
-                          fontSize: (15 * scale).roundToDouble(),
-                          color: cs.onSurfaceVariant,
-                        ),
-                      ),
-                    );
-                  }
-                  return TabBarView(
-                    children: [
-                      _PopularGrid(
-                        country: country,
-                        baseList: baseList,
-                        onTapCard: _openDetail,
-                        posterPlaceholder: _posterPlaceholder,
-                      ),
-                      _DramaGridView(
-                        list: newList,
-                        country: country,
-                        onTapCard: _openDetail,
-                        posterPlaceholder: _posterPlaceholder,
-                      ),
-                      _DramaGridView(
-                        list: baseList,
-                        country: country,
-                        onTapCard: _openDetail,
-                        posterPlaceholder: _posterPlaceholder,
-                      ),
-                    ],
+              child: FutureBuilder<Map<String, int>>(
+                future: DramaViewService.instance.getViewCountsLast7Days(),
+                builder: (context, viewSnapshot) {
+                  final viewCounts = viewSnapshot.data ?? {};
+                  return ValueListenableBuilder<List<DramaItem>>(
+                    valueListenable: DramaListService.instance.listNotifier,
+                    builder: (context, _, __) {
+                      final baseList =
+                          DramaListService.instance.getListForCountry(country);
+                      final newList = DramaListService
+                          .instance.getListForCountrySortedByReleaseDate(country);
+                      if (baseList.isEmpty) {
+                        final scale = _dramaScreenScale(context);
+                        return Center(
+                          child: Text(
+                            s.get('notReadyYet'),
+                            style: GoogleFonts.notoSansKr(
+                              fontSize: (15 * scale).roundToDouble(),
+                              color: cs.onSurfaceVariant,
+                            ),
+                          ),
+                        );
+                      }
+                      return TabBarView(
+                        children: [
+                          _PopularGrid(
+                            country: country,
+                            baseList: baseList,
+                            viewCounts: viewCounts,
+                            onTapCard: _openDetail,
+                            posterPlaceholder: _posterPlaceholder,
+                          ),
+                          _DramaGridWithPagination(
+                            list: newList,
+                            country: country,
+                            viewCounts: viewCounts,
+                            onTapCard: _openDetail,
+                            posterPlaceholder: _posterPlaceholder,
+                          ),
+                          _DramaGridWithPagination(
+                            list: baseList,
+                            country: country,
+                            viewCounts: viewCounts,
+                            onTapCard: _openDetail,
+                            posterPlaceholder: _posterPlaceholder,
+                          ),
+                        ],
+                      );
+                    },
                   );
                 },
               ),
@@ -240,40 +252,33 @@ class _DramaScreenState extends State<DramaScreen> {
   }
 }
 
-/// 인기 순위 탭: 7일 조회수 기준 정렬 후 그리드
+/// 인기 순위 탭: 7일 조회수 기준 정렬 후 그리드 (viewCounts는 상위 FutureBuilder에서 공통 전달)
 class _PopularGrid extends StatelessWidget {
   const _PopularGrid({
     required this.country,
     required this.baseList,
+    required this.viewCounts,
     required this.onTapCard,
     required this.posterPlaceholder,
   });
 
   final String? country;
   final List<DramaItem> baseList;
+  final Map<String, int> viewCounts;
   final void Function(DramaItem item) onTapCard;
   final Widget Function(BuildContext context) posterPlaceholder;
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<Map<String, int>>(
-      future: DramaViewService.instance.getViewCountsLast7Days(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        final viewCounts = snapshot.data!;
-        final sorted = [...baseList]
-          ..sort((a, b) =>
-              (viewCounts[b.id] ?? 0).compareTo(viewCounts[a.id] ?? 0));
-        return _DramaGridView(
-          list: sorted,
-          country: country,
-          viewCounts: viewCounts,
-          onTapCard: onTapCard,
-          posterPlaceholder: posterPlaceholder,
-        );
-      },
+    final sorted = [...baseList]
+      ..sort((a, b) =>
+          (viewCounts[b.id] ?? 0).compareTo(viewCounts[a.id] ?? 0));
+    return _DramaGridWithPagination(
+      list: sorted,
+      country: country,
+      viewCounts: viewCounts,
+      onTapCard: onTapCard,
+      posterPlaceholder: posterPlaceholder,
     );
   }
 }
@@ -302,9 +307,9 @@ class _DramaGridView extends StatelessWidget {
       padding: EdgeInsets.fromLTRB(16 * r, 12 * r, 16 * r, 24 * r),
       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
-        childAspectRatio: 0.46,
-        crossAxisSpacing: 2 * r,
-        mainAxisSpacing: 6 * r,
+        childAspectRatio: 0.48,
+        crossAxisSpacing: 8 * r,
+        mainAxisSpacing: 12 * r,
       ),
       itemCount: list.length,
       itemBuilder: (context, index) {
@@ -338,6 +343,144 @@ class _DramaGridView extends StatelessWidget {
   }
 }
 
+/// 인기/신작/카테고리 공통: 30개씩 페이지네이션 + 홈탭과 동일한 페이지 UI
+class _DramaGridWithPagination extends StatefulWidget {
+  const _DramaGridWithPagination({
+    required this.list,
+    required this.country,
+    required this.viewCounts,
+    required this.onTapCard,
+    required this.posterPlaceholder,
+  });
+
+  final List<DramaItem> list;
+  final String? country;
+  final Map<String, int> viewCounts;
+  final void Function(DramaItem item) onTapCard;
+  final Widget Function(BuildContext context) posterPlaceholder;
+
+  @override
+  State<_DramaGridWithPagination> createState() => _DramaGridWithPaginationState();
+}
+
+class _DramaGridWithPaginationState extends State<_DramaGridWithPagination> {
+  int _currentPage = 0;
+  bool _showPageInput = false;
+  final TextEditingController _pageInputController = TextEditingController();
+
+  @override
+  void dispose() {
+    _pageInputController.dispose();
+    super.dispose();
+  }
+
+  Widget _buildMinimalPagination(ColorScheme cs, int currentPage, int totalPages, int totalCount) {
+    if (totalCount == 0 || totalPages == 0) return const SizedBox.shrink();
+    final c = currentPage;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          GestureDetector(
+            onTap: c > 0 ? () => setState(() { _currentPage = c - 1; _showPageInput = false; }) : null,
+            child: Padding(padding: const EdgeInsets.all(8), child: Icon(LucideIcons.chevron_left, size: 22, color: c > 0 ? cs.onSurface.withOpacity(0.75) : cs.onSurface.withOpacity(0.18))),
+          ),
+          const SizedBox(width: 12),
+          GestureDetector(
+            onTap: () => setState(() { _showPageInput = !_showPageInput; if (_showPageInput) _pageInputController.clear(); }),
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 180),
+              child: _showPageInput
+                  ? Container(
+                      key: const ValueKey('input'),
+                      width: 80, height: 34,
+                      decoration: BoxDecoration(
+                        color: cs.onSurface.withOpacity(0.05),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: Theme.of(context).brightness == Brightness.dark ? cs.outline : const Color(0xFFFF6B35),
+                          width: Theme.of(context).brightness == Brightness.dark ? 1 : 1.2,
+                        ),
+                      ),
+                      child: Center(
+                        child: TextField(
+                          controller: _pageInputController,
+                          autofocus: true,
+                          keyboardType: TextInputType.number,
+                          textAlign: TextAlign.center,
+                          textAlignVertical: TextAlignVertical.center,
+                          decoration: InputDecoration(
+                            hintText: '페이지',
+                            hintStyle: GoogleFonts.notoSansKr(fontSize: 12, color: cs.onSurfaceVariant),
+                            border: InputBorder.none,
+                            enabledBorder: InputBorder.none,
+                            focusedBorder: InputBorder.none,
+                            isCollapsed: true,
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                          style: GoogleFonts.notoSansKr(fontSize: 13, color: cs.onSurface),
+                          onSubmitted: (val) {
+                            final n = int.tryParse(val);
+                            if (n != null && n >= 1 && n <= totalPages) setState(() { _currentPage = n - 1; _showPageInput = false; });
+                            else setState(() => _showPageInput = false);
+                          },
+                        ),
+                      ),
+                    )
+                  : Container(
+                      key: const ValueKey('label'),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                      decoration: BoxDecoration(color: cs.onSurface.withOpacity(0.05), borderRadius: BorderRadius.circular(20)),
+                      child: Text('${c + 1} / $totalPages', style: GoogleFonts.notoSansKr(fontSize: 13, fontWeight: FontWeight.w500, color: cs.onSurfaceVariant, letterSpacing: 0.2)),
+                    ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          GestureDetector(
+            onTap: c < totalPages - 1 ? () => setState(() { _currentPage = c + 1; _showPageInput = false; }) : null,
+            child: Padding(padding: const EdgeInsets.all(8), child: Icon(LucideIcons.chevron_right, size: 22, color: c < totalPages - 1 ? cs.onSurface.withOpacity(0.75) : cs.onSurface.withOpacity(0.18))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final list = widget.list;
+    final totalCount = list.length;
+    final totalPages = totalCount == 0 ? 0 : (totalCount / _dramaCardsPerPage).ceil();
+    final effectivePage = totalPages == 0 ? 0 : _currentPage.clamp(0, totalPages - 1);
+    if (effectivePage != _currentPage && mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _currentPage = effectivePage);
+      });
+    }
+    final start = effectivePage * _dramaCardsPerPage;
+    final end = (start + _dramaCardsPerPage).clamp(0, totalCount);
+    final pageList = list.sublist(start, end);
+
+    final cs = Theme.of(context).colorScheme;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Expanded(
+          child: _DramaGridView(
+            list: pageList,
+            country: widget.country,
+            viewCounts: widget.viewCounts,
+            onTapCard: widget.onTapCard,
+            posterPlaceholder: widget.posterPlaceholder,
+          ),
+        ),
+        _buildMinimalPagination(cs, effectivePage, totalPages, totalCount),
+        SizedBox(height: MediaQuery.of(context).padding.bottom + 8),
+      ],
+    );
+  }
+}
+
 class _DramaGridCard extends StatelessWidget {
   const _DramaGridCard({
     required this.displayTitle,
@@ -365,8 +508,8 @@ class _DramaGridCard extends StatelessWidget {
     final greyColor = isDark ? cs.onSurfaceVariant : Colors.grey.shade500;
     final r = _dramaScreenScale(context);
     final titleFontSize = (13 * r).roundToDouble();
-    final metaFontSize = (12 * r).roundToDouble();
-    final starSize = 14 * r;
+    final metaFontSize = (11 * r).roundToDouble();
+    final starSize = 12 * r;
     final genreColor = isDark ? cs.onSurfaceVariant : Colors.grey.shade600;
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -445,17 +588,17 @@ class _DramaGridCard extends StatelessWidget {
                     size: starSize,
                     color: rating > 0 ? Colors.amber : greyColor,
                   ),
-                  SizedBox(width: 4 * r),
+                  SizedBox(width: 2 * r),
                   Text(
-                    rating.toStringAsFixed(1),
+                    rating == 0 ? '0' : rating.toStringAsFixed(1),
                     style: GoogleFonts.notoSansKr(
                       fontSize: metaFontSize,
                       fontWeight: FontWeight.w500,
-                      color: rating > 0 ? textColor : greyColor,
+                      color: isDark ? cs.onSurface : Colors.black,
                     ),
                   ),
                   if (displaySubtitle.isNotEmpty) ...[
-                    SizedBox(width: 8 * r),
+                    SizedBox(width: 4 * r),
                     Expanded(
                       child: Text(
                         displaySubtitle,
