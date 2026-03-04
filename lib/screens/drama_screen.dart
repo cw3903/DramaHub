@@ -156,10 +156,10 @@ class _DramaScreenState extends State<DramaScreen> {
                       indicator: _ShortRoundedIndicator(color: headerFg, width: 28, height: 2.5),
                       indicatorWeight: 3,
                       indicatorSize: TabBarIndicatorSize.label,
-                      indicatorPadding: EdgeInsets.only(top: 0, bottom: 2),
-                      padding: EdgeInsets.only(left: 16 * r, right: 16 * r, bottom: 0),
+                      indicatorPadding: EdgeInsets.only(top: 0, bottom: 6),
+                      padding: EdgeInsets.only(left: 16 * r, right: 16 * r, bottom: 3),
                       tabAlignment: TabAlignment.start,
-                      labelPadding: EdgeInsets.symmetric(horizontal: 6 * r),
+                      labelPadding: EdgeInsets.symmetric(horizontal: 6 * r, vertical: 0),
                       dividerColor: Colors.transparent,
                       overlayColor: WidgetStateProperty.all(Colors.transparent),
                       splashFactory: NoSplash.splashFactory,
@@ -358,12 +358,13 @@ class _DramaGridView extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final r = _dramaScreenScale(context);
+    final horizontalGap = 10 * r;
     return GridView.builder(
-      padding: EdgeInsets.fromLTRB(16 * r, 12 * r, 16 * r, 24 * r),
+      padding: EdgeInsets.fromLTRB(horizontalGap, 12 * r, horizontalGap, 24 * r),
       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
         childAspectRatio: 0.48,
-        crossAxisSpacing: 8 * r,
+        crossAxisSpacing: horizontalGap,
         mainAxisSpacing: 12 * r,
       ),
       itemCount: list.length,
@@ -521,12 +522,12 @@ class _DramaGridWithPaginationState extends State<_DramaGridWithPagination> {
     return CustomScrollView(
       slivers: [
         SliverPadding(
-          padding: EdgeInsets.fromLTRB(16 * r, 12 * r, 16 * r, 8 * r),
+          padding: EdgeInsets.fromLTRB(10 * r, 12 * r, 10 * r, 8 * r),
           sliver: SliverGrid(
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 3,
               childAspectRatio: 0.48,
-              crossAxisSpacing: 8 * r,
+              crossAxisSpacing: 10 * r,
               mainAxisSpacing: 12 * r,
             ),
             delegate: SliverChildBuilderDelegate(
@@ -598,7 +599,7 @@ class _DramaGridCard extends StatelessWidget {
     final textColor = isDark ? cs.onSurface : const Color(0xFF333333);
     final greyColor = isDark ? cs.onSurfaceVariant : Colors.grey.shade500;
     final r = _dramaScreenScale(context);
-    final titleFontSize = (13 * r).roundToDouble();
+    final titleFontSize = (12 * r).roundToDouble();
     final metaFontSize = (11 * r).roundToDouble();
     final starSize = 12 * r;
     final genreColor = isDark ? cs.onSurfaceVariant : Colors.grey.shade600;
