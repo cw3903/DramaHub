@@ -24,24 +24,42 @@ const int _dramaCardsPerPage = 30;
 
 /// 탭 인디케이터: 글자 길이와 관계없이 짧은 고정 길이 + 둥근 끝
 class _ShortRoundedIndicator extends Decoration {
-  const _ShortRoundedIndicator({required this.color, this.width = 28, this.height = 2.5});
+  const _ShortRoundedIndicator({
+    required this.color,
+    this.width = 28,
+    this.height = 2.5,
+    this.offsetDown = 0,
+  });
 
   final Color color;
   final double width;
   final double height;
+  /// 인디케이터를 아래로 밀어낼 픽셀 (양수 = 아래)
+  final double offsetDown;
 
   @override
   BoxPainter createBoxPainter([VoidCallback? onChanged]) {
-    return _ShortRoundedIndicatorPainter(color: color, width: width, height: height);
+    return _ShortRoundedIndicatorPainter(
+      color: color,
+      width: width,
+      height: height,
+      offsetDown: offsetDown,
+    );
   }
 }
 
 class _ShortRoundedIndicatorPainter extends BoxPainter {
-  _ShortRoundedIndicatorPainter({required this.color, this.width = 28, this.height = 2.5});
+  _ShortRoundedIndicatorPainter({
+    required this.color,
+    this.width = 28,
+    this.height = 2.5,
+    this.offsetDown = 0,
+  });
 
   final Color color;
   final double width;
   final double height;
+  final double offsetDown;
 
   @override
   void paint(Canvas canvas, Offset offset, ImageConfiguration configuration) {
@@ -49,7 +67,7 @@ class _ShortRoundedIndicatorPainter extends BoxPainter {
     final w = width.clamp(0.0, rect.width);
     final h = height;
     final left = rect.left + (rect.width - w) / 2;
-    final top = rect.bottom - h;
+    final top = rect.bottom - h + offsetDown;
     final rrect = RRect.fromRectAndRadius(
       Rect.fromLTWH(left, top, w, h),
       Radius.circular(h / 2),
@@ -133,7 +151,7 @@ class _DramaScreenState extends State<DramaScreen> {
     return sorted;
   }
 
-  static const _chipOrange = Color(0xFFFF9800);
+  static const _chipOrange = Color(0xFFFF4500); // 선택된 필터 칩 색상
 
   Widget _buildFilterChip({
     required double r,
@@ -148,10 +166,10 @@ class _DramaScreenState extends State<DramaScreen> {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: EdgeInsets.symmetric(horizontal: 14 * r, vertical: 10 * r),
+        padding: EdgeInsets.symmetric(horizontal: 10 * r, vertical: 6 * r),
         decoration: BoxDecoration(
           color: bg,
-          borderRadius: BorderRadius.circular(20 * r),
+          borderRadius: BorderRadius.circular(14 * r),
           border: Border.all(
             color: isSelected ? _chipOrange : cs.outline.withOpacity(0.3),
             width: isSelected ? 1.2 : 1,
@@ -160,7 +178,7 @@ class _DramaScreenState extends State<DramaScreen> {
         child: Text(
           label,
           style: GoogleFonts.notoSansKr(
-            fontSize: (13 * r).roundToDouble(),
+            fontSize: (11 * r).roundToDouble(),
             fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
             color: fg,
           ),
@@ -214,7 +232,7 @@ class _DramaScreenState extends State<DramaScreen> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         Padding(
-                          padding: EdgeInsets.fromLTRB(16 * r, 12 * r, 16 * r, 10 * r),
+                          padding: EdgeInsets.fromLTRB(16 * r, 12 * r, 16 * r, 4 * r),
                           child: InkWell(
                             onTap: () {
                               Navigator.of(context).push(
@@ -256,10 +274,10 @@ class _DramaScreenState extends State<DramaScreen> {
                           isScrollable: true,
                           labelColor: headerFg,
                           unselectedLabelColor: headerFg.withOpacity(0.85),
-                          indicator: _ShortRoundedIndicator(color: headerFg, width: 28, height: 2.5),
+                          indicator: _ShortRoundedIndicator(color: headerFg, width: 28, height: 2.5, offsetDown: 4),
                           indicatorWeight: 3,
                           indicatorSize: TabBarIndicatorSize.label,
-                          indicatorPadding: EdgeInsets.only(top: 0, bottom: 6),
+                          indicatorPadding: EdgeInsets.only(top: 0, bottom: 10),
                           padding: EdgeInsets.only(left: 16 * r, right: 16 * r, bottom: 3),
                           tabAlignment: TabAlignment.start,
                           labelPadding: EdgeInsets.symmetric(horizontal: 6 * r, vertical: 0),
@@ -284,7 +302,7 @@ class _DramaScreenState extends State<DramaScreen> {
                     ),
                   ),
                 ),
-                // 필터: 카테고리 탭일 때만 — 필터 행 + 칩 행들(장르, 정렬) 인라인 표시
+                // 필터: 카테고리 탭일 때만 — 필터 버튼 행만 (패널은 오버레이로 표시)
                 SliverToBoxAdapter(
                   child: Builder(
                     builder: (ctx) {
@@ -293,103 +311,41 @@ class _DramaScreenState extends State<DramaScreen> {
                       return ListenableBuilder(
                         listenable: controller,
                         builder: (ctx, _) {
-                          if (controller.index != 2) return const SizedBox.shrink();
+                          if (controller.index != 2) {
+                            if (_showFilterPanel) WidgetsBinding.instance.addPostFrameCallback((_) => setState(() => _showFilterPanel = false));
+                            return const SizedBox.shrink();
+                          }
                           final scale = _dramaScreenScale(ctx);
                           final filterFg = isDark ? cs.onSurface : Colors.grey.shade800;
-                          return ValueListenableBuilder<List<DramaItem>>(
-                            valueListenable: DramaListService.instance.listNotifier,
-                            builder: (ctx, _, __) {
-                              final list = DramaListService.instance.getListForCountry(country);
-                              final topGenres = _extractTopGenres(list, country, n: 20);
-                              return Container(
-                                color: theme.scaffoldBackgroundColor,
-                                padding: EdgeInsets.fromLTRB(16 * scale, 10 * scale, 16 * scale, 14 * scale),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
+                          return Container(
+                            color: theme.scaffoldBackgroundColor,
+                            padding: EdgeInsets.fromLTRB(16 * scale, 8 * scale, 16 * scale, 0 * scale),
+                            child: InkWell(
+                              onTap: () => setState(() => _showFilterPanel = !_showFilterPanel),
+                              borderRadius: BorderRadius.circular(6 * scale),
+                              child: Padding(
+                                padding: EdgeInsets.only(left: 6 * scale, top: 2 * scale, bottom: 2 * scale),
+                                child: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    InkWell(
-                                      onTap: () => setState(() => _showFilterPanel = !_showFilterPanel),
-                                      borderRadius: BorderRadius.circular(6 * scale),
-                                      child: Padding(
-                                        padding: EdgeInsets.symmetric(vertical: 2 * scale),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Text(
-                                              s.get('filter'),
-                                              style: GoogleFonts.notoSansKr(
-                                                fontSize: (13 * scale).roundToDouble(),
-                                                fontWeight: FontWeight.w600,
-                                                color: filterFg,
-                                              ),
-                                            ),
-                                            SizedBox(width: 4 * scale),
-                                            Icon(
-                                              _showFilterPanel ? LucideIcons.chevron_up : LucideIcons.chevron_down,
-                                              size: 16 * scale,
-                                              color: filterFg,
-                                            ),
-                                          ],
-                                        ),
+                                    Text(
+                                      s.get('filter'),
+                                      style: GoogleFonts.notoSansKr(
+                                        fontSize: (13 * scale).roundToDouble(),
+                                        fontWeight: FontWeight.w600,
+                                        color: filterFg,
                                       ),
                                     ),
-                                    if (_showFilterPanel) ...[
-                                      SizedBox(height: 12 * scale),
-                                      // 전체 밑에 Female ~ 버튼
-                                      Text(
-                                        '전체',
-                                        style: GoogleFonts.notoSansKr(
-                                          fontSize: (13 * scale).roundToDouble(),
-                                          fontWeight: FontWeight.w600,
-                                          color: filterFg,
-                                        ),
-                                      ),
-                                      SizedBox(height: 6 * scale),
-                                      Wrap(
-                                        spacing: 8 * scale,
-                                        runSpacing: 8 * scale,
-                                        children: [
-                                          ...['Female', 'Male', 'BL', 'GL'].map((target) => _buildFilterChip(
-                                            r: scale,
-                                            cs: cs,
-                                            isDark: isDark,
-                                            label: target,
-                                            isSelected: _categoryTargetFilter == target,
-                                            onTap: () => setState(() => _categoryTargetFilter = _categoryTargetFilter == target ? null : target),
-                                          )),
-                                        ],
-                                      ),
-                                      SizedBox(height: 14 * scale),
-                                      // 전체 밑에 Romance ~ 장르 버튼
-                                      Text(
-                                        '전체',
-                                        style: GoogleFonts.notoSansKr(
-                                          fontSize: (13 * scale).roundToDouble(),
-                                          fontWeight: FontWeight.w600,
-                                          color: filterFg,
-                                        ),
-                                      ),
-                                      SizedBox(height: 6 * scale),
-                                      Wrap(
-                                        spacing: 8 * scale,
-                                        runSpacing: 8 * scale,
-                                        children: [
-                                          ...topGenres.map((genre) => _buildFilterChip(
-                                            r: scale,
-                                            cs: cs,
-                                            isDark: isDark,
-                                            label: genre,
-                                            isSelected: _categoryGenreFilter == genre,
-                                            onTap: () => setState(() => _categoryGenreFilter = _categoryGenreFilter == genre ? null : genre),
-                                          )),
-                                        ],
-                                      ),
-                                    ],
+                                    SizedBox(width: 4 * scale),
+                                    Icon(
+                                      _showFilterPanel ? LucideIcons.chevron_up : LucideIcons.chevron_down,
+                                      size: 16 * scale,
+                                      color: filterFg,
+                                    ),
                                   ],
                                 ),
-                              );
-                            },
+                              ),
+                            ),
                           );
                         },
                       );
@@ -397,7 +353,10 @@ class _DramaScreenState extends State<DramaScreen> {
                   ),
                 ),
               ],
-              body: FutureBuilder<Map<String, int>>(
+              body: Stack(
+                children: [
+                  Positioned.fill(
+                    child: FutureBuilder<Map<String, int>>(
                 future: DramaViewService.instance.getAllViewCounts(),
                 builder: (context, viewSnapshot) {
                   final viewCounts = viewSnapshot.data ?? {};
@@ -454,11 +413,134 @@ class _DramaScreenState extends State<DramaScreen> {
                 },
               ),
             ),
+          Positioned.fill(
+            child: Builder(
+              builder: (ctx) {
+                if (!_showFilterPanel) return const SizedBox.shrink();
+                final controller = DefaultTabController.of(ctx);
+                if (controller == null || controller.index != 2) return const SizedBox.shrink();
+                final scale = _dramaScreenScale(context);
+                final filterFg = isDark ? cs.onSurface : Colors.grey.shade800;
+                final list = DramaListService.instance.getListForCountry(country);
+                final topGenres = _extractTopGenres(list, country, n: 20);
+                // 패널은 body 영역 맨 위 = 필터 버튼 바로 아래
+                const panelTop = 0.0;
+              return Stack(
+                children: [
+                  Positioned.fill(
+                    child: GestureDetector(
+                      onTap: () => setState(() => _showFilterPanel = false),
+                      child: Container(color: Colors.black54),
+                    ),
+                  ),
+                  Positioned(
+                    top: panelTop,
+                    left: 0,
+                    right: 0,
+                    child: Material(
+                      color: theme.scaffoldBackgroundColor,
+                      borderRadius: BorderRadius.only(
+                        bottomLeft: Radius.circular(12 * scale),
+                        bottomRight: Radius.circular(12 * scale),
+                      ),
+                      child: SingleChildScrollView(
+                        child: Padding(
+                          padding: EdgeInsets.fromLTRB(16 * scale, 12 * scale, 16 * scale, 16 * scale),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Padding(
+                                padding: EdgeInsets.only(left: 12 * scale),
+                                child: Text(
+                                  s.get('target'),
+                                  style: GoogleFonts.notoSansKr(
+                                    fontSize: (13 * scale).roundToDouble(),
+                                    fontWeight: FontWeight.w600,
+                                    color: filterFg,
+                                  ),
+                                ),
+                              ),
+                              SizedBox(height: 6 * scale),
+                              Wrap(
+                                spacing: 8 * scale,
+                                runSpacing: 8 * scale,
+                                children: [
+                                  _buildFilterChip(
+                                    r: scale,
+                                    cs: cs,
+                                    isDark: isDark,
+                                    label: s.get('all'),
+                                    isSelected: _categoryTargetFilter == null,
+                                    onTap: () => setState(() => _categoryTargetFilter = null),
+                                  ),
+                                  ...['Female', 'Male', 'BL', 'GL'].map((target) => _buildFilterChip(
+                                    r: scale,
+                                    cs: cs,
+                                    isDark: isDark,
+                                    label: target,
+                                    isSelected: _categoryTargetFilter == target,
+                                    onTap: () => setState(() => _categoryTargetFilter = _categoryTargetFilter == target ? null : target),
+                                  )),
+                                ],
+                              ),
+                              SizedBox(height: 14 * scale),
+                              Padding(
+                                padding: EdgeInsets.only(left: 12 * scale),
+                                child: Text(
+                                  s.get('genre'),
+                                  style: GoogleFonts.notoSansKr(
+                                    fontSize: (13 * scale).roundToDouble(),
+                                    fontWeight: FontWeight.w600,
+                                    color: filterFg,
+                                  ),
+                                ),
+                              ),
+                              SizedBox(height: 6 * scale),
+                              Wrap(
+                                spacing: 8 * scale,
+                                runSpacing: 8 * scale,
+                                children: [
+                                  _buildFilterChip(
+                                    r: scale,
+                                    cs: cs,
+                                    isDark: isDark,
+                                    label: s.get('all'),
+                                    isSelected: _categoryGenreFilter == null,
+                                    onTap: () => setState(() => _categoryGenreFilter = null),
+                                  ),
+                                  ...topGenres
+                                      .where((g) => g != 'Female' && g != 'Male' && g != '여성향' && g != '남성향')
+                                      .map((genre) => _buildFilterChip(
+                                        r: scale,
+                                        cs: cs,
+                                        isDark: isDark,
+                                        label: genre,
+                                        isSelected: _categoryGenreFilter == genre,
+                                        onTap: () => setState(() => _categoryGenreFilter = _categoryGenreFilter == genre ? null : genre),
+                                      )),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
+            ),
+          ),
+        ],
+              ),
+            ),
           ),
         ),
       ),
     );
   }
+
 
   void _openDetail(DramaItem item) async {
     final country = CountryScope.maybeOf(context)?.country;
