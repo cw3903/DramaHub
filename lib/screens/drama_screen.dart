@@ -43,7 +43,11 @@ class _DramaScreenState extends State<DramaScreen> {
 
     const headerBlue = Color(0xFF3399FF);
     final isDark = theme.brightness == Brightness.dark;
-    final headerBg = isDark ? const Color(0xFF1E5F9E) : headerBlue;
+    // 다크모드: 상단바를 화면과 같은 짙은 회색으로 (파란색 제거)
+    final headerBg = isDark ? theme.scaffoldBackgroundColor : headerBlue;
+    final headerFg = isDark ? cs.onSurface : Colors.white;
+    final searchBarBg = isDark ? cs.surfaceContainerHighest : Colors.white;
+    final searchBarFg = isDark ? cs.onSurfaceVariant : Colors.grey.shade600;
 
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
@@ -53,7 +57,7 @@ class _DramaScreenState extends State<DramaScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // 상단 헤더: 밝은 파란 배경 + 흰색 검색창 + 흰색 탭 (반응형)
+              // 상단 헤더: 라이트는 파란 배경, 다크는 짙은 회색(화면과 동일)
               Container(
                 color: headerBg,
                 child: Column(
@@ -75,7 +79,7 @@ class _DramaScreenState extends State<DramaScreen> {
                             vertical: 8 * r,
                           ),
                           decoration: BoxDecoration(
-                            color: Colors.white,
+                            color: searchBarBg,
                             borderRadius: BorderRadius.circular(6 * r),
                           ),
                           child: Row(
@@ -83,14 +87,14 @@ class _DramaScreenState extends State<DramaScreen> {
                               Icon(
                                 LucideIcons.search,
                                 size: 20 * r,
-                                color: Colors.grey.shade600,
+                                color: searchBarFg,
                               ),
                               SizedBox(width: 12 * r),
                               Text(
                                 s.get('dramaSearchHint'),
                                 style: GoogleFonts.notoSansKr(
                                   fontSize: (15 * r).roundToDouble(),
-                                  color: Colors.grey.shade600,
+                                  color: searchBarFg,
                                 ),
                               ),
                             ],
@@ -100,9 +104,9 @@ class _DramaScreenState extends State<DramaScreen> {
                     ),
                     TabBar(
                       isScrollable: true,
-                      labelColor: Colors.white,
-                      unselectedLabelColor: Colors.white.withOpacity(0.85),
-                      indicatorColor: Colors.white,
+                      labelColor: headerFg,
+                      unselectedLabelColor: headerFg.withOpacity(0.85),
+                      indicatorColor: headerFg,
                       indicatorWeight: (3 * r).clamp(2.0, 4.0),
                       indicatorSize: TabBarIndicatorSize.label,
                       indicatorPadding: EdgeInsets.only(top: -8 * r),
@@ -141,14 +145,14 @@ class _DramaScreenState extends State<DramaScreen> {
                                     s.get('filter'),
                                     style: GoogleFonts.notoSansKr(
                                       fontSize: (13 * scale).roundToDouble(),
-                                      color: Colors.white.withOpacity(0.9),
+                                      color: headerFg.withOpacity(0.9),
                                     ),
                                   ),
                                   SizedBox(width: 4 * scale),
                                   Icon(
                                     LucideIcons.chevron_down,
                                     size: 16 * scale,
-                                    color: Colors.white.withOpacity(0.9),
+                                    color: headerFg.withOpacity(0.9),
                                   ),
                                 ],
                               ),
