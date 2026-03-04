@@ -67,8 +67,14 @@ class DramaScreen extends StatefulWidget {
 }
 
 class _DramaScreenState extends State<DramaScreen> {
+  /// 카테고리 탭 타깃 필터. null 또는 '전체'면 전체.
+  String? _categoryTargetFilter;
   /// 카테고리 탭 장르 필터. null 또는 '전체'면 전체 표시.
   String? _categoryGenreFilter;
+  /// 카테고리 탭 정렬: 'popular' = 인기순, 'latest' = 최신순
+  String _categorySortOrder = 'popular';
+  /// 카테고리 탭에서 필터 패널 접기·펼치기. false = 접힘, true = 펼침
+  bool _showFilterPanel = false;
 
   @override
   void initState() {
@@ -76,111 +82,90 @@ class _DramaScreenState extends State<DramaScreen> {
     DramaListService.instance.loadFromAsset();
   }
 
-  List<String> _extractGenres(List<DramaItem> list, String? country) {
-    final set = <String>{};
+  /// 등장 횟수 상위 [n]개 장르만 반환 (한국어 기준).
+  List<String> _extractTopGenres(List<DramaItem> list, String? country, {int n = 20}) {
+    final count = <String, int>{};
     for (final item in list) {
       final sub = DramaListService.instance.getDisplaySubtitle(item.id, country);
       for (final part in sub.split(RegExp(r'[,·]'))) {
         final t = part.trim();
-        if (t.isNotEmpty) set.add(t);
+        if (t.isNotEmpty) count[t] = (count[t] ?? 0) + 1;
       }
     }
-    return set.toList()..sort();
+    final sorted = count.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return sorted.take(n).map((e) => e.key).toList();
   }
 
   List<DramaItem> _getCategoryFilteredList(List<DramaItem> baseList, String? country) {
-    if (_categoryGenreFilter == null || _categoryGenreFilter == '전체') return baseList;
-    final genre = _categoryGenreFilter!;
-    return baseList.where((item) {
-      final sub = DramaListService.instance.getDisplaySubtitle(item.id, country);
-      final tags = sub.split(RegExp(r'[,·]')).map((s) => s.trim()).toList();
-      return tags.contains(genre);
-    }).toList();
+    var list = baseList;
+    // 타깃 필터 (Female/Male은 데이터의 여성향/남성향과도 매칭)
+    if (_categoryTargetFilter != null) {
+      final target = _categoryTargetFilter!;
+      list = list.where((item) {
+        final sub = DramaListService.instance.getDisplaySubtitle(item.id, country);
+        final tags = sub.split(RegExp(r'[,·]')).map((s) => s.trim()).toList();
+        if (target == 'Female') return tags.any((t) => t == 'Female' || t == '여성향');
+        if (target == 'Male') return tags.any((t) => t == 'Male' || t == '남성향');
+        return tags.any((t) => t == target);
+      }).toList();
+    }
+    // 장르 필터
+    if (_categoryGenreFilter != null && _categoryGenreFilter != '전체') {
+      final genre = _categoryGenreFilter!;
+      list = list.where((item) {
+        final sub = DramaListService.instance.getDisplaySubtitle(item.id, country);
+        final tags = sub.split(RegExp(r'[,·]')).map((s) => s.trim()).toList();
+        return tags.contains(genre);
+      }).toList();
+    }
+    return list;
   }
 
-  void _openCategoryFilter(BuildContext context) {
-    final country = CountryScope.maybeOf(context)?.country;
-    final baseList = DramaListService.instance.getListForCountry(country);
-    final genres = _extractGenres(baseList, country);
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-    final r = _dramaScreenScale(context);
-    final s = CountryScope.of(context).strings;
+  List<DramaItem> _getCategorySortedList(List<DramaItem> list, String? country, Map<String, int> viewCounts) {
+    if (_categorySortOrder == 'latest') {
+      final byRelease = DramaListService.instance.getListForCountrySortedByReleaseDate(country);
+      final ids = list.map((e) => e.id).toSet();
+      return byRelease.where((item) => ids.contains(item.id)).toList();
+    }
+    final sorted = [...list]
+      ..sort((a, b) => (viewCounts[b.id] ?? 0).compareTo(viewCounts[a.id] ?? 0));
+    return sorted;
+  }
 
-    showGeneralDialog(
-      context: context,
-      barrierColor: Colors.black54,
-      barrierDismissible: true,
-      transitionBuilder: (context, animation, secondaryAnimation, child) {
-        return SlideTransition(
-          position: Tween<Offset>(begin: const Offset(0, -1), end: Offset.zero).animate(
-            CurvedAnimation(parent: animation, curve: Curves.easeOut),
+  static const _chipOrange = Color(0xFFFF9800);
+
+  Widget _buildFilterChip({
+    required double r,
+    required ColorScheme cs,
+    required bool isDark,
+    required String label,
+    required bool isSelected,
+    required VoidCallback onTap,
+  }) {
+    final bg = isSelected ? _chipOrange : (isDark ? cs.surfaceContainerLowest : cs.surfaceContainerHighest);
+    final fg = isSelected ? Colors.white : cs.onSurfaceVariant;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: 14 * r, vertical: 10 * r),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(20 * r),
+          border: Border.all(
+            color: isSelected ? _chipOrange : cs.outline.withOpacity(0.3),
+            width: isSelected ? 1.2 : 1,
           ),
-          child: child,
-        );
-      },
-      pageBuilder: (context, animation, secondaryAnimation) {
-        return Align(
-          alignment: Alignment.topCenter,
-          child: Material(
-            color: cs.surface,
-            borderRadius: BorderRadius.only(
-              bottomLeft: Radius.circular(16 * r),
-              bottomRight: Radius.circular(16 * r),
-            ),
-            child: Container(
-              width: MediaQuery.sizeOf(context).width,
-              constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.5),
-              child: ListView(
-                shrinkWrap: true,
-                padding: EdgeInsets.fromLTRB(16 * r, 12 * r, 16 * r, 16 * r),
-                children: [
-                  Text(
-                    s.get('filter'),
-                    style: GoogleFonts.notoSansKr(
-                      fontSize: (15 * r).roundToDouble(),
-                      fontWeight: FontWeight.w700,
-                      color: cs.onSurface,
-                    ),
-                  ),
-                  SizedBox(height: 12 * r),
-                  ...['전체', ...genres].map((genre) {
-                    final isSelected = (_categoryGenreFilter == null && genre == '전체') ||
-                        _categoryGenreFilter == genre;
-                    return InkWell(
-                      onTap: () {
-                        setState(() {
-                          _categoryGenreFilter = genre == '전체' ? null : genre;
-                        });
-                        Navigator.of(context).pop();
-                      },
-                      borderRadius: BorderRadius.circular(8 * r),
-                      child: Padding(
-                        padding: EdgeInsets.symmetric(vertical: 12 * r),
-                        child: Row(
-                          children: [
-                            if (isSelected)
-                              Icon(LucideIcons.check, size: 18 * r, color: cs.primary),
-                            if (isSelected) SizedBox(width: 8 * r),
-                            Text(
-                              genre,
-                              style: GoogleFonts.notoSansKr(
-                                fontSize: (14 * r).roundToDouble(),
-                                color: isSelected ? cs.primary : cs.onSurface,
-                                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  }),
-                ],
-              ),
-            ),
+        ),
+        child: Text(
+          label,
+          style: GoogleFonts.notoSansKr(
+            fontSize: (13 * r).roundToDouble(),
+            fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+            color: fg,
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 
@@ -299,7 +284,7 @@ class _DramaScreenState extends State<DramaScreen> {
                     ),
                   ),
                 ),
-                // 필터: 카테고리 탭일 때만 표시
+                // 필터: 카테고리 탭일 때만 — 필터 행 + 칩 행들(장르, 정렬) 인라인 표시
                 SliverToBoxAdapter(
                   child: Builder(
                     builder: (ctx) {
@@ -311,36 +296,100 @@ class _DramaScreenState extends State<DramaScreen> {
                           if (controller.index != 2) return const SizedBox.shrink();
                           final scale = _dramaScreenScale(ctx);
                           final filterFg = isDark ? cs.onSurface : Colors.grey.shade800;
-                          return Container(
-                            color: theme.scaffoldBackgroundColor,
-                            alignment: Alignment.centerLeft,
-                            padding: EdgeInsets.fromLTRB(32 * scale, 4 * scale, 0, 0),
-                            child: InkWell(
-                              onTap: () => _openCategoryFilter(context),
-                              borderRadius: BorderRadius.circular(6 * scale),
-                              child: Padding(
-                                padding: EdgeInsets.symmetric(vertical: 4 * scale),
-                                child: Row(
+                          return ValueListenableBuilder<List<DramaItem>>(
+                            valueListenable: DramaListService.instance.listNotifier,
+                            builder: (ctx, _, __) {
+                              final list = DramaListService.instance.getListForCountry(country);
+                              final topGenres = _extractTopGenres(list, country, n: 20);
+                              return Container(
+                                color: theme.scaffoldBackgroundColor,
+                                padding: EdgeInsets.fromLTRB(16 * scale, 10 * scale, 16 * scale, 14 * scale),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    Text(
-                                      s.get('filter'),
-                                      style: GoogleFonts.notoSansKr(
-                                        fontSize: (12 * scale).roundToDouble(),
-                                        fontWeight: FontWeight.w600,
-                                        color: filterFg,
+                                    InkWell(
+                                      onTap: () => setState(() => _showFilterPanel = !_showFilterPanel),
+                                      borderRadius: BorderRadius.circular(6 * scale),
+                                      child: Padding(
+                                        padding: EdgeInsets.symmetric(vertical: 2 * scale),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Text(
+                                              s.get('filter'),
+                                              style: GoogleFonts.notoSansKr(
+                                                fontSize: (13 * scale).roundToDouble(),
+                                                fontWeight: FontWeight.w600,
+                                                color: filterFg,
+                                              ),
+                                            ),
+                                            SizedBox(width: 4 * scale),
+                                            Icon(
+                                              _showFilterPanel ? LucideIcons.chevron_up : LucideIcons.chevron_down,
+                                              size: 16 * scale,
+                                              color: filterFg,
+                                            ),
+                                          ],
+                                        ),
                                       ),
                                     ),
-                                    SizedBox(width: 4 * scale),
-                                    Icon(
-                                      LucideIcons.chevron_down,
-                                      size: 16 * scale,
-                                      color: filterFg,
-                                    ),
+                                    if (_showFilterPanel) ...[
+                                      SizedBox(height: 12 * scale),
+                                      // 전체 밑에 Female ~ 버튼
+                                      Text(
+                                        '전체',
+                                        style: GoogleFonts.notoSansKr(
+                                          fontSize: (13 * scale).roundToDouble(),
+                                          fontWeight: FontWeight.w600,
+                                          color: filterFg,
+                                        ),
+                                      ),
+                                      SizedBox(height: 6 * scale),
+                                      Wrap(
+                                        spacing: 8 * scale,
+                                        runSpacing: 8 * scale,
+                                        children: [
+                                          ...['Female', 'Male', 'BL', 'GL'].map((target) => _buildFilterChip(
+                                            r: scale,
+                                            cs: cs,
+                                            isDark: isDark,
+                                            label: target,
+                                            isSelected: _categoryTargetFilter == target,
+                                            onTap: () => setState(() => _categoryTargetFilter = _categoryTargetFilter == target ? null : target),
+                                          )),
+                                        ],
+                                      ),
+                                      SizedBox(height: 14 * scale),
+                                      // 전체 밑에 Romance ~ 장르 버튼
+                                      Text(
+                                        '전체',
+                                        style: GoogleFonts.notoSansKr(
+                                          fontSize: (13 * scale).roundToDouble(),
+                                          fontWeight: FontWeight.w600,
+                                          color: filterFg,
+                                        ),
+                                      ),
+                                      SizedBox(height: 6 * scale),
+                                      Wrap(
+                                        spacing: 8 * scale,
+                                        runSpacing: 8 * scale,
+                                        children: [
+                                          ...topGenres.map((genre) => _buildFilterChip(
+                                            r: scale,
+                                            cs: cs,
+                                            isDark: isDark,
+                                            label: genre,
+                                            isSelected: _categoryGenreFilter == genre,
+                                            onTap: () => setState(() => _categoryGenreFilter = _categoryGenreFilter == genre ? null : genre),
+                                          )),
+                                        ],
+                                      ),
+                                    ],
                                   ],
                                 ),
-                              ),
-                            ),
+                              );
+                            },
                           );
                         },
                       );
@@ -388,7 +437,11 @@ class _DramaScreenState extends State<DramaScreen> {
                             posterPlaceholder: _posterPlaceholder,
                           ),
                           _DramaGridWithPagination(
-                            list: _getCategoryFilteredList(baseList, country),
+                            list: _getCategorySortedList(
+                              _getCategoryFilteredList(baseList, country),
+                              country,
+                              viewCounts,
+                            ),
                             country: country,
                             viewCounts: viewCounts,
                             onTapCard: _openDetail,
