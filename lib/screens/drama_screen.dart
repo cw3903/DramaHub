@@ -1,5 +1,6 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../models/drama.dart';
@@ -52,22 +53,29 @@ class _DramaScreenState extends State<DramaScreen> {
     final searchBarBg = isDark ? cs.surfaceContainerHighest : Colors.white;
     final searchBarFg = isDark ? cs.onSurfaceVariant : Colors.grey.shade600;
 
-    return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
-      body: SafeArea(
-        child: DefaultTabController(
-          length: 3,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // 상단 헤더: 라이트는 파란 배경, 다크는 짙은 회색(화면과 동일)
-              Container(
-                color: headerBg,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Padding(
-                      padding: EdgeInsets.fromLTRB(16 * r, 12 * r, 16 * r, 10 * r),
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle(
+        statusBarColor: headerBg,
+        statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
+      ),
+      child: Scaffold(
+        backgroundColor: theme.scaffoldBackgroundColor,
+        body: SafeArea(
+          top: false,
+          child: DefaultTabController(
+            length: 3,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // 상단 헤더: 상태바 영역까지 색 채움 (라이트=파란, 다크=짙은 회색)
+                Container(
+                  color: headerBg,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      SizedBox(height: MediaQuery.of(context).padding.top),
+                      Padding(
+                        padding: EdgeInsets.fromLTRB(16 * r, 12 * r, 16 * r, 10 * r),
                       child: InkWell(
                         onTap: () {
                           Navigator.of(context).push(
@@ -96,7 +104,7 @@ class _DramaScreenState extends State<DramaScreen> {
                               Text(
                                 s.get('dramaSearchHint'),
                                 style: GoogleFonts.notoSansKr(
-                                  fontSize: (15 * r).roundToDouble(),
+                                  fontSize: (13 * r).roundToDouble(),
                                   color: searchBarFg,
                                 ),
                               ),
@@ -118,12 +126,12 @@ class _DramaScreenState extends State<DramaScreen> {
                       labelPadding: EdgeInsets.symmetric(horizontal: 6 * r),
                       dividerColor: Colors.transparent,
                       labelStyle: GoogleFonts.notoSansKr(
-                        fontSize: (14 * r).roundToDouble(),
-                        fontWeight: FontWeight.w600,
+                        fontSize: (15 * r).roundToDouble(),
+                        fontWeight: FontWeight.w800,
                       ),
                       unselectedLabelStyle: GoogleFonts.notoSansKr(
                         fontSize: (14 * r).roundToDouble(),
-                        fontWeight: FontWeight.w500,
+                        fontWeight: FontWeight.w600,
                       ),
                       tabs: [
                         Tab(text: s.get('popularRanking')),
@@ -167,10 +175,10 @@ class _DramaScreenState extends State<DramaScreen> {
                   ],
                 ),
               ),
-            // 탭별 그리드 (조회수 한 번 로드해서 인기/신작/카테고리 공통 사용)
+            // 탭별 그리드 (Firebase 총 조회수 한 번 로드 → 상세 페이지와 동일한 숫자 표시)
             Expanded(
               child: FutureBuilder<Map<String, int>>(
-                future: DramaViewService.instance.getViewCountsLast7Days(),
+                future: DramaViewService.instance.getAllViewCounts(),
                 builder: (context, viewSnapshot) {
                   final viewCounts = viewSnapshot.data ?? {};
                   return ValueListenableBuilder<List<DramaItem>>(
@@ -192,30 +200,38 @@ class _DramaScreenState extends State<DramaScreen> {
                           ),
                         );
                       }
-                      return TabBarView(
-                        children: [
-                          _PopularGrid(
-                            country: country,
-                            baseList: baseList,
-                            viewCounts: viewCounts,
-                            onTapCard: _openDetail,
-                            posterPlaceholder: _posterPlaceholder,
-                          ),
-                          _DramaGridWithPagination(
-                            list: newList,
-                            country: country,
-                            viewCounts: viewCounts,
-                            onTapCard: _openDetail,
-                            posterPlaceholder: _posterPlaceholder,
-                          ),
-                          _DramaGridWithPagination(
-                            list: baseList,
-                            country: country,
-                            viewCounts: viewCounts,
-                            onTapCard: _openDetail,
-                            posterPlaceholder: _posterPlaceholder,
-                          ),
-                        ],
+                      final tabController = DefaultTabController.of(context)!;
+                      return ListenableBuilder(
+                        listenable: tabController,
+                        builder: (context, _) {
+                          final index = tabController.index;
+                          return IndexedStack(
+                            index: index,
+                            children: [
+                              _PopularGrid(
+                                country: country,
+                                baseList: baseList,
+                                viewCounts: viewCounts,
+                                onTapCard: _openDetail,
+                                posterPlaceholder: _posterPlaceholder,
+                              ),
+                              _DramaGridWithPagination(
+                                list: newList,
+                                country: country,
+                                viewCounts: viewCounts,
+                                onTapCard: _openDetail,
+                                posterPlaceholder: _posterPlaceholder,
+                              ),
+                              _DramaGridWithPagination(
+                                list: baseList,
+                                country: country,
+                                viewCounts: viewCounts,
+                                onTapCard: _openDetail,
+                                posterPlaceholder: _posterPlaceholder,
+                              ),
+                            ],
+                          );
+                        },
                       );
                     },
                   );
@@ -226,6 +242,7 @@ class _DramaScreenState extends State<DramaScreen> {
         ),
         ),
       ),
+    ),
     );
   }
 
@@ -252,7 +269,7 @@ class _DramaScreenState extends State<DramaScreen> {
   }
 }
 
-/// 인기 순위 탭: 7일 조회수 기준 정렬 후 그리드 (viewCounts는 상위 FutureBuilder에서 공통 전달)
+/// 인기 순위 탭: Firebase 총 조회수 기준 정렬 후 그리드 (viewCounts는 상세 페이지와 동일 소스)
 class _PopularGrid extends StatelessWidget {
   const _PopularGrid({
     required this.country,
@@ -378,7 +395,7 @@ class _DramaGridWithPaginationState extends State<_DramaGridWithPagination> {
     if (totalCount == 0 || totalPages == 0) return const SizedBox.shrink();
     final c = currentPage;
     return Padding(
-      padding: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.only(top: 2),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
@@ -462,20 +479,56 @@ class _DramaGridWithPaginationState extends State<_DramaGridWithPagination> {
     final pageList = list.sublist(start, end);
 
     final cs = Theme.of(context).colorScheme;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Expanded(
-          child: _DramaGridView(
-            list: pageList,
-            country: widget.country,
-            viewCounts: widget.viewCounts,
-            onTapCard: widget.onTapCard,
-            posterPlaceholder: widget.posterPlaceholder,
+    final r = _dramaScreenScale(context);
+    return CustomScrollView(
+      slivers: [
+        SliverPadding(
+          padding: EdgeInsets.fromLTRB(16 * r, 12 * r, 16 * r, 8 * r),
+          sliver: SliverGrid(
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              childAspectRatio: 0.48,
+              crossAxisSpacing: 8 * r,
+              mainAxisSpacing: 12 * r,
+            ),
+            delegate: SliverChildBuilderDelegate(
+              (context, index) {
+                final item = pageList[index];
+                final displayTitle =
+                    DramaListService.instance.getDisplayTitle(item.id, widget.country);
+                final displaySubtitle =
+                    DramaListService.instance.getDisplaySubtitle(item.id, widget.country);
+                final imageUrl = DramaListService.instance.getDisplayImageUrl(
+                      item.id,
+                      widget.country,
+                    ) ??
+                    item.imageUrl;
+                final rawRating =
+                    ReviewService.instance.getByDramaId(item.id)?.rating ?? item.rating;
+                final rating = rawRating > 0 ? rawRating : 0.0;
+                final viewsDisplay = widget.viewCounts.isNotEmpty && widget.viewCounts.containsKey(item.id)
+                    ? formatCompactCount(widget.viewCounts[item.id]!)
+                    : item.views;
+                return _DramaGridCard(
+                  displayTitle: displayTitle,
+                  displaySubtitle: displaySubtitle,
+                  imageUrl: imageUrl,
+                  viewsDisplay: viewsDisplay,
+                  rating: rating,
+                  onTap: () => widget.onTapCard(item),
+                  posterPlaceholder: widget.posterPlaceholder(context),
+                );
+              },
+              childCount: pageList.length,
+            ),
           ),
         ),
-        _buildMinimalPagination(cs, effectivePage, totalPages, totalCount),
-        SizedBox(height: MediaQuery.of(context).padding.bottom + 8),
+        SliverToBoxAdapter(
+          child: _buildMinimalPagination(cs, effectivePage, totalPages, totalCount),
+        ),
+        SliverToBoxAdapter(
+          child: SizedBox(height: MediaQuery.of(context).padding.bottom + 32),
+        ),
       ],
     );
   }
@@ -579,7 +632,7 @@ class _DramaGridCard extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              SizedBox(height: 8 * r),
+              SizedBox(height: 4 * r),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
