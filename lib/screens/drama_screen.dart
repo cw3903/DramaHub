@@ -67,10 +67,121 @@ class DramaScreen extends StatefulWidget {
 }
 
 class _DramaScreenState extends State<DramaScreen> {
+  /// 카테고리 탭 장르 필터. null 또는 '전체'면 전체 표시.
+  String? _categoryGenreFilter;
+
   @override
   void initState() {
     super.initState();
     DramaListService.instance.loadFromAsset();
+  }
+
+  List<String> _extractGenres(List<DramaItem> list, String? country) {
+    final set = <String>{};
+    for (final item in list) {
+      final sub = DramaListService.instance.getDisplaySubtitle(item.id, country);
+      for (final part in sub.split(RegExp(r'[,·]'))) {
+        final t = part.trim();
+        if (t.isNotEmpty) set.add(t);
+      }
+    }
+    return set.toList()..sort();
+  }
+
+  List<DramaItem> _getCategoryFilteredList(List<DramaItem> baseList, String? country) {
+    if (_categoryGenreFilter == null || _categoryGenreFilter == '전체') return baseList;
+    final genre = _categoryGenreFilter!;
+    return baseList.where((item) {
+      final sub = DramaListService.instance.getDisplaySubtitle(item.id, country);
+      final tags = sub.split(RegExp(r'[,·]')).map((s) => s.trim()).toList();
+      return tags.contains(genre);
+    }).toList();
+  }
+
+  void _openCategoryFilter(BuildContext context) {
+    final country = CountryScope.maybeOf(context)?.country;
+    final baseList = DramaListService.instance.getListForCountry(country);
+    final genres = _extractGenres(baseList, country);
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final r = _dramaScreenScale(context);
+    final s = CountryScope.of(context).strings;
+
+    showGeneralDialog(
+      context: context,
+      barrierColor: Colors.black54,
+      barrierDismissible: true,
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        return SlideTransition(
+          position: Tween<Offset>(begin: const Offset(0, -1), end: Offset.zero).animate(
+            CurvedAnimation(parent: animation, curve: Curves.easeOut),
+          ),
+          child: child,
+        );
+      },
+      pageBuilder: (context, animation, secondaryAnimation) {
+        return Align(
+          alignment: Alignment.topCenter,
+          child: Material(
+            color: cs.surface,
+            borderRadius: BorderRadius.only(
+              bottomLeft: Radius.circular(16 * r),
+              bottomRight: Radius.circular(16 * r),
+            ),
+            child: Container(
+              width: MediaQuery.sizeOf(context).width,
+              constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.5),
+              child: ListView(
+                shrinkWrap: true,
+                padding: EdgeInsets.fromLTRB(16 * r, 12 * r, 16 * r, 16 * r),
+                children: [
+                  Text(
+                    s.get('filter'),
+                    style: GoogleFonts.notoSansKr(
+                      fontSize: (15 * r).roundToDouble(),
+                      fontWeight: FontWeight.w700,
+                      color: cs.onSurface,
+                    ),
+                  ),
+                  SizedBox(height: 12 * r),
+                  ...['전체', ...genres].map((genre) {
+                    final isSelected = (_categoryGenreFilter == null && genre == '전체') ||
+                        _categoryGenreFilter == genre;
+                    return InkWell(
+                      onTap: () {
+                        setState(() {
+                          _categoryGenreFilter = genre == '전체' ? null : genre;
+                        });
+                        Navigator.of(context).pop();
+                      },
+                      borderRadius: BorderRadius.circular(8 * r),
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(vertical: 12 * r),
+                        child: Row(
+                          children: [
+                            if (isSelected)
+                              Icon(LucideIcons.check, size: 18 * r, color: cs.primary),
+                            if (isSelected) SizedBox(width: 8 * r),
+                            Text(
+                              genre,
+                              style: GoogleFonts.notoSansKr(
+                                fontSize: (14 * r).roundToDouble(),
+                                color: isSelected ? cs.primary : cs.onSurface,
+                                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   @override
@@ -89,10 +200,11 @@ class _DramaScreenState extends State<DramaScreen> {
     final searchBarBg = isDark ? cs.surfaceContainerHighest : Colors.white;
     final searchBarFg = isDark ? cs.onSurfaceVariant : Colors.grey.shade600;
 
+    final statusBarBg = isDark ? headerBg : Colors.white;
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle(
-        statusBarColor: headerBg,
-        statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
+        statusBarColor: statusBarBg,
+        statusBarIconBrightness: statusBarBg == Colors.white ? Brightness.dark : Brightness.light,
       ),
       child: Scaffold(
         backgroundColor: theme.scaffoldBackgroundColor,
@@ -103,13 +215,17 @@ class _DramaScreenState extends State<DramaScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // 상단 헤더: 상태바 영역까지 색 채움 (라이트=파란, 다크=짙은 회색)
+                // 상태바 영역만 흰색(라이트) / 헤더색(다크) — 파란 헤더가 상태바까지 침범하지 않도록
+                Container(
+                  height: MediaQuery.of(context).padding.top,
+                  color: statusBarBg,
+                ),
+                // 상단 헤더: 검색창 + 탭 (파란색)
                 Container(
                   color: headerBg,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      SizedBox(height: MediaQuery.of(context).padding.top),
                       Padding(
                         padding: EdgeInsets.fromLTRB(16 * r, 12 * r, 16 * r, 10 * r),
                       child: InkWell(
@@ -177,41 +293,54 @@ class _DramaScreenState extends State<DramaScreen> {
                         Tab(text: s.get('category')),
                       ],
                     ),
-                    Builder(
-                      builder: (context) {
-                        final controller = DefaultTabController.of(context);
-                        if (controller == null) return const SizedBox.shrink();
-                        return ListenableBuilder(
-                          listenable: controller,
-                          builder: (context, _) {
-                            if (controller.index != 2) return const SizedBox.shrink();
-                            final scale = _dramaScreenScale(context);
-                            return Padding(
-                              padding: EdgeInsets.fromLTRB(16 * scale, 4 * scale, 16 * scale, 10 * scale),
-                              child: Row(
-                                children: [
-                                  Text(
-                                    s.get('filter'),
-                                    style: GoogleFonts.notoSansKr(
-                                      fontSize: (13 * scale).roundToDouble(),
-                                      color: headerFg.withOpacity(0.9),
-                                    ),
-                                  ),
-                                  SizedBox(width: 4 * scale),
-                                  Icon(
-                                    LucideIcons.chevron_down,
-                                    size: 16 * scale,
-                                    color: headerFg.withOpacity(0.9),
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
-                        );
-                      },
-                    ),
                   ],
                 ),
+              ),
+              // 필터: 파란 컨테이너 바깥(흰/서페이스 배경)에 배치 — 카테고리 탭일 때만 표시
+              Builder(
+                builder: (context) {
+                  final controller = DefaultTabController.of(context);
+                  if (controller == null) return const SizedBox.shrink();
+                  return ListenableBuilder(
+                    listenable: controller,
+                    builder: (context, _) {
+                      if (controller.index != 2) return const SizedBox.shrink();
+                      final scale = _dramaScreenScale(context);
+                      final filterFg = isDark ? cs.onSurface : Colors.grey.shade800;
+                      return Container(
+                        color: theme.scaffoldBackgroundColor,
+                        alignment: Alignment.centerLeft,
+                        padding: EdgeInsets.fromLTRB(32 * scale, 4* scale, 0 * scale, 0 * scale),
+                        child: InkWell(
+                          onTap: () => _openCategoryFilter(context),
+                          borderRadius: BorderRadius.circular(6 * scale),
+                          child: Padding(
+                            padding: EdgeInsets.symmetric(vertical: 4 * scale),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  s.get('filter'),
+                                  style: GoogleFonts.notoSansKr(
+                                    fontSize: (12 * scale).roundToDouble(),
+                                    fontWeight: FontWeight.w600,
+                                    color: filterFg,
+                                  ),
+                                ),
+                                SizedBox(width: 4 * scale),
+                                Icon(
+                                  LucideIcons.chevron_down,
+                                  size: 16 * scale,
+                                  color: filterFg,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  );
+                },
               ),
             // 탭별 그리드 (Firebase 총 조회수 한 번 로드 → 상세 페이지와 동일한 숫자 표시)
             Expanded(
@@ -255,7 +384,7 @@ class _DramaScreenState extends State<DramaScreen> {
                             posterPlaceholder: _posterPlaceholder,
                           ),
                           _DramaGridWithPagination(
-                            list: baseList,
+                            list: _getCategoryFilteredList(baseList, country),
                             country: country,
                             viewCounts: viewCounts,
                             onTapCard: _openDetail,
