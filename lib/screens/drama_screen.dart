@@ -238,38 +238,30 @@ class _DramaScreenState extends State<DramaScreen> {
                           ),
                         );
                       }
-                      final tabController = DefaultTabController.of(context)!;
-                      return ListenableBuilder(
-                        listenable: tabController,
-                        builder: (context, _) {
-                          final index = tabController.index;
-                          return IndexedStack(
-                            index: index,
-                            children: [
-                              _PopularGrid(
-                                country: country,
-                                baseList: baseList,
-                                viewCounts: viewCounts,
-                                onTapCard: _openDetail,
-                                posterPlaceholder: _posterPlaceholder,
-                              ),
-                              _DramaGridWithPagination(
-                                list: newList,
-                                country: country,
-                                viewCounts: viewCounts,
-                                onTapCard: _openDetail,
-                                posterPlaceholder: _posterPlaceholder,
-                              ),
-                              _DramaGridWithPagination(
-                                list: baseList,
-                                country: country,
-                                viewCounts: viewCounts,
-                                onTapCard: _openDetail,
-                                posterPlaceholder: _posterPlaceholder,
-                              ),
-                            ],
-                          );
-                        },
+                      return TabBarView(
+                        children: [
+                          _PopularGrid(
+                            country: country,
+                            baseList: baseList,
+                            viewCounts: viewCounts,
+                            onTapCard: _openDetail,
+                            posterPlaceholder: _posterPlaceholder,
+                          ),
+                          _DramaGridWithPagination(
+                            list: newList,
+                            country: country,
+                            viewCounts: viewCounts,
+                            onTapCard: _openDetail,
+                            posterPlaceholder: _posterPlaceholder,
+                          ),
+                          _DramaGridWithPagination(
+                            list: baseList,
+                            country: country,
+                            viewCounts: viewCounts,
+                            onTapCard: _openDetail,
+                            posterPlaceholder: _posterPlaceholder,
+                          ),
+                        ],
                       );
                     },
                   );
