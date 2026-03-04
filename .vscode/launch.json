@@ -1,0 +1,16 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "DramaHub (Release)",
+      "request": "launch",
+      "type": "dart",
+      "flutterMode": "release"
+    },
+    {
+      "name": "DramaHub (Debug)",
+      "request": "launch",
+      "type": "dart"
+    }
+  ]
+}

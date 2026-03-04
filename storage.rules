@@ -1,0 +1,20 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // 프로필 사진: 로그인한 사용자만 자신의 파일(profile/{uid}.jpg) 읽기/쓰기
+    match /profile/{fileName} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+    // 게시글 이미지: 누구나 읽기, 로그인 사용자만 업로드
+    match /posts/{fileName} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+    // 댓글 첨부 이미지/GIF: 누구나 읽기, 로그인 사용자만 업로드
+    match /comments/{fileName} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "861453767614",
+    "project_id": "dramahub-22ff2",
+    "storage_bucket": "dramahub-22ff2.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:861453767614:android:263e9f1661d0ffc67c1fef",
+        "android_client_info": {
+          "package_name": "com.dramahub.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC34KSKbz8uxt_X3ijCtB0IA-YqGHyxdUY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

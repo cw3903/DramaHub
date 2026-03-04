@@ -1,0 +1,960 @@
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cross_file/cross_file.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter/foundation.dart';
+import 'package:image/image.dart' as img;
+import '../models/post.dart';
+import '../models/notification_item.dart';
+import '../utils/format_utils.dart';
+import 'auth_service.dart';
+import 'notification_service.dart';
+import 'user_profile_service.dart';
+
+/// 자유게시판 글 Firestore 저장/로드
+class PostService {
+  PostService._();
+  static final PostService instance = PostService._();
+
+  static const String _collection = 'posts';
+
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseStorage _storage = FirebaseStorage.instance;
+
+  static String _contentTypeForExtension(String ext) {
+    switch (ext) {
+      case 'png': return 'image/png';
+      case 'gif': return 'image/gif';
+      case 'webp': return 'image/webp';
+      case 'mp4': return 'video/mp4';
+      case 'mov': return 'video/quicktime';
+      default: return 'image/jpeg';
+    }
+  }
+
+  static const int _maxImageLongEdge = 1280;
+  static const int _jpegQuality = 82;
+
+  /// 한 장 압축: 긴 변 1280 이하, JPEG 품질 82. 실패 시 null (원본 업로드).
+  /// XFile을 받아 content:// URI도 처리.
+  Future<({List<int> bytes, int width, int height})?> _compressImage(XFile xfile) async {
+    try {
+      final bytes = await xfile.readAsBytes();
+      final decoded = img.decodeImage(Uint8List.fromList(bytes));
+      if (decoded == null) return null;
+      final w = decoded.width;
+      final h = decoded.height;
+      final maxEdge = w > h ? w : h;
+      img.Image resized = decoded;
+      if (maxEdge > _maxImageLongEdge) {
+        if (w > h) {
+          resized = img.copyResize(decoded, width: _maxImageLongEdge);
+        } else {
+          resized = img.copyResize(decoded, height: _maxImageLongEdge);
+        }
+      }
+      final out = img.encodeJpg(resized, quality: _jpegQuality);
+      return (bytes: out, width: resized.width, height: resized.height);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Storage 업로드 1회 시도 헬퍼. 실패 시 예외.
+  Future<String> _uploadBytesWithRetry(String storagePath, Uint8List bytes, String contentType) async {
+    const delays = [Duration.zero, Duration(seconds: 1), Duration(seconds: 2), Duration(seconds: 4), Duration(seconds: 8)];
+    Object? lastErr;
+    for (var i = 0; i < delays.length; i++) {
+      if (i > 0) await Future.delayed(delays[i]);
+      try {
+        final ref = _storage.ref().child(storagePath);
+        await ref.putData(bytes, SettableMetadata(contentType: contentType));
+        return await ref.getDownloadURL();
+      } catch (e) {
+        lastErr = e;
+        debugPrint('_uploadBytesWithRetry attempt ${i + 1} fail: $e');
+      }
+    }
+    throw lastErr ?? Exception('upload failed');
+  }
+
+  Future<String> _uploadFileWithRetry(String storagePath, File file, String contentType) async {
+    const delays = [Duration.zero, Duration(seconds: 1), Duration(seconds: 2), Duration(seconds: 4), Duration(seconds: 8)];
+    Object? lastErr;
+    for (var i = 0; i < delays.length; i++) {
+      if (i > 0) await Future.delayed(delays[i]);
+      try {
+        final ref = _storage.ref().child(storagePath);
+        await ref.putFile(file, SettableMetadata(contentType: contentType));
+        return await ref.getDownloadURL();
+      } catch (e) {
+        lastErr = e;
+        debugPrint('_uploadFileWithRetry attempt ${i + 1} fail: $e');
+      }
+    }
+    throw lastErr ?? Exception('upload failed');
+  }
+
+  /// 게시글 이미지 압축 후 병렬 업로드. XFile 목록을 받아 content:// URI도 처리.
+  Future<({List<String> urls, List<List<int>> dimensions})> uploadPostImages(List<XFile> xfiles) async {
+    if (xfiles.isEmpty) return (urls: <String>[], dimensions: <List<int>>[]);
+    final prefix = 'posts/${DateTime.now().millisecondsSinceEpoch}';
+
+    final compressed = await Future.wait(
+      xfiles.map((x) => _compressImage(x)),
+    );
+
+    final uploadFutures = <Future<({String url, List<int> dims})>>[];
+    for (var i = 0; i < xfiles.length; i++) {
+      final idx = i;
+      final c = compressed[i];
+      final xfile = xfiles[i];
+      uploadFutures.add(() async {
+        if (c != null) {
+          final url = await _uploadBytesWithRetry('${prefix}_$idx.jpg', Uint8List.fromList(c.bytes), 'image/jpeg');
+          return (url: url, dims: [c.width, c.height]);
+        } else {
+          // 압축 실패 → XFile.readAsBytes()로 원본 업로드 (content:// URI 처리 가능)
+          final bytes = await xfile.readAsBytes();
+          if (bytes.isEmpty) throw Exception('empty file: ${xfile.path}');
+          final name = xfile.name.isNotEmpty ? xfile.name : xfile.path.split('/').last;
+          final ext = name.contains('.') ? name.split('.').last.toLowerCase() : 'jpg';
+          final url = await _uploadBytesWithRetry('${prefix}_$idx.$ext', Uint8List.fromList(bytes), _contentTypeForExtension(ext));
+          final dims = await _getDimensionsFromBytes(bytes);
+          return (url: url, dims: dims ?? [0, 0]);
+        }
+      }());
+    }
+
+    final results = await Future.wait(uploadFutures);
+    return (
+      urls: results.map((r) => r.url).toList(),
+      dimensions: results.map((r) => r.dims).toList(),
+    );
+  }
+
+  Future<List<int>?> _getDimensionsFromBytes(List<int> bytes) async {
+    try {
+      final decoded = img.decodeImage(Uint8List.fromList(bytes));
+      return decoded != null ? [decoded.width, decoded.height] : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 댓글 첨부 이미지/GIF 한 장 업로드 후 다운로드 URL 반환. 실패 시 null.
+  /// posts/ 경로 사용 (기존 Storage 규칙으로 허용, comment_ 접두사로 구분)
+  Future<String?> uploadCommentImage(String filePath) async {
+    try {
+      final file = File(filePath);
+      if (!await file.exists()) {
+        debugPrint('uploadCommentImage: file not found $filePath');
+        return null;
+      }
+      final ext = filePath.split('.').last.toLowerCase();
+      final contentType = _contentTypeForExtension(ext);
+      final ref = _storage.ref().child('posts/comment_${DateTime.now().millisecondsSinceEpoch}.$ext');
+      // putFile 스트리밍 방식 — putData(bytes)보다 메모리 효율적이고 빠름
+      await ref.putFile(file, SettableMetadata(contentType: contentType));
+      return await ref.getDownloadURL();
+    } catch (e, st) {
+      debugPrint('uploadCommentImage: $e');
+      debugPrint('$st');
+      return null;
+    }
+  }
+
+  /// 게시글 영상 1개 업로드 후 다운로드 URL 반환. 실패 시 예외.
+  Future<String> uploadPostVideo(String filePath) async {
+    final file = File(filePath);
+    if (!await file.exists()) {
+      debugPrint('uploadPostVideo: file not found $filePath');
+      throw Exception('영상 파일을 찾을 수 없습니다. (content URI는 앱에서 임시 파일로 복사 후 사용해 주세요.)');
+    }
+    final ext = filePath.split('.').last.toLowerCase();
+    final contentType = ext == 'gif' ? 'image/gif' : 'video/mp4';
+    return await _uploadFileWithRetry('posts/video_${DateTime.now().millisecondsSinceEpoch}.$ext', file, contentType);
+  }
+
+  /// 게시글 영상 썸네일 이미지 1개 업로드 후 다운로드 URL 반환. 실패 시 예외.
+  Future<String> uploadPostVideoThumbnail(String thumbnailFilePath) async {
+    final file = File(thumbnailFilePath);
+    if (!await file.exists()) {
+      debugPrint('uploadPostVideoThumbnail: file not found $thumbnailFilePath');
+      throw Exception('썸네일 파일을 찾을 수 없습니다: $thumbnailFilePath');
+    }
+    return await _uploadFileWithRetry('posts/thumb_${DateTime.now().millisecondsSinceEpoch}.jpg', file, 'image/jpeg');
+  }
+
+  /// 게시글 GIF 1개 업로드 후 다운로드 URL 반환. 실패 시 예외.
+  Future<String> uploadPostGif(String filePath) async {
+    final file = File(filePath);
+    if (!await file.exists()) {
+      debugPrint('uploadPostGif: file not found $filePath');
+      throw Exception('GIF 파일을 찾을 수 없습니다.');
+    }
+    return await _uploadFileWithRetry('posts/gif_${DateTime.now().millisecondsSinceEpoch}.gif', file, 'image/gif');
+  }
+
+  CollectionReference<Map<String, dynamic>> get _col => _firestore.collection(_collection);
+
+  /// Firestore에 넣을 수 있는 타입만 남기기 (직렬화 오류 방지)
+  static Map<String, dynamic> _sanitizeMap(Map<String, dynamic> map) {
+    final out = <String, dynamic>{};
+    for (final e in map.entries) {
+      final k = e.key;
+      final v = e.value;
+      if (v == null) {
+        out[k] = null;
+      } else if (v is bool || v is String) {
+        out[k] = v;
+      } else if (v is int || v is double) {
+        out[k] = v;
+      } else if (v is Timestamp) {
+        out[k] = v;
+      } else if (v is List) {
+        out[k] = v.map((x) => _sanitizeValue(x)).toList();
+      } else if (v is Map) {
+        out[k] = _sanitizeMap(Map<String, dynamic>.from(v));
+      } else {
+        // 그 외(DateTime 등)는 제외
+        debugPrint('addPost: 필드 "$k" 타입 ${v.runtimeType} 제외');
+      }
+    }
+    return out;
+  }
+
+  static dynamic _sanitizeValue(dynamic x) {
+    if (x == null) return null;
+    if (x is bool || x is String || x is int || x is double || x is Timestamp) return x;
+    if (x is List) return x.map((e) => _sanitizeValue(e)).toList();
+    if (x is Map) return _sanitizeMap(Map<String, dynamic>.from(x));
+    return null;
+  }
+
+  /// 글 저장 (백엔드에 저장 후 반환된 문서 id로 Post 반환). 실패 시 (null, 오류메시지).
+  Future<(Post?, String?)> addPost(Post post) async {
+    final uid = AuthService.instance.currentUser.value?.uid;
+    if (uid == null) {
+      return (null, '로그인이 필요해요.');
+    }
+    var map = post.toMap();
+    map['createdAt'] = FieldValue.serverTimestamp();
+    if (!map.containsKey('likedBy')) map['likedBy'] = [];
+    if (!map.containsKey('dislikedBy')) map['dislikedBy'] = [];
+    map['authorUid'] = uid;
+    map = _sanitizeMap(map);
+    map['createdAt'] = FieldValue.serverTimestamp();
+
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        final docRef = await _col.add(map);
+        return (
+          Post(
+            id: docRef.id,
+            title: post.title,
+            subreddit: post.subreddit,
+            author: post.author,
+            timeAgo: post.timeAgo,
+            votes: post.votes,
+            comments: post.comments,
+            views: post.views,
+            hasImage: post.hasImage,
+            imageUrls: post.imageUrls,
+            imageDimensions: post.imageDimensions,
+            hasVideo: post.hasVideo,
+            videoUrl: post.videoUrl,
+            videoThumbnailUrl: post.videoThumbnailUrl,
+            isGif: post.isGif,
+            body: post.body,
+            linkUrl: post.linkUrl,
+            commentsList: post.commentsList,
+            authorLevel: post.authorLevel,
+            likedBy: post.likedBy,
+            dislikedBy: post.dislikedBy,
+            category: post.category,
+            authorPhotoUrl: post.authorPhotoUrl,
+            authorAvatarColorIndex: post.authorAvatarColorIndex,
+            authorUid: post.authorUid,
+            country: post.country,
+          ),
+          null,
+        );
+      } catch (e, st) {
+        debugPrint('addPost 실패 (attempt ${attempt + 1}): $e');
+        debugPrint('$st');
+        if (attempt == 0) {
+          await Future.delayed(const Duration(milliseconds: 800));
+          continue;
+        }
+        return (null, e.toString());
+      }
+    }
+    return (null, null);
+  }
+
+  /// addPost를 최대 10번 재시도 (즉시, 1초, 2초, 4초, 8초, 8초…). 서버 저장 확실히 시도.
+  Future<(Post?, String?)> addPostWithRetry(Post post) async {
+    const delays = [
+      Duration.zero,
+      Duration(seconds: 1),
+      Duration(seconds: 2),
+      Duration(seconds: 4),
+      Duration(seconds: 8),
+      Duration(seconds: 8),
+      Duration(seconds: 8),
+      Duration(seconds: 8),
+      Duration(seconds: 8),
+      Duration(seconds: 8),
+    ];
+    (Post?, String?) lastResult = (null, null);
+    for (var i = 0; i < delays.length; i++) {
+      if (i > 0) await Future.delayed(delays[i]);
+      lastResult = await addPost(post);
+      final (saved, _) = lastResult;
+      if (saved != null) return lastResult;
+    }
+    return lastResult;
+  }
+
+  /// 글 수정. 수정 가능한 필드(title, body, imageUrls, linkUrl, hasImage)만 업데이트.
+  Future<Post?> updatePost(Post post) async {
+    if (post.id.isEmpty) return null;
+    try {
+      final docRef = _col.doc(post.id);
+      final updateData = <String, dynamic>{
+        'title': post.title,
+        'body': post.body,
+        'imageUrls': post.imageUrls,
+        'linkUrl': post.linkUrl,
+        'hasImage': post.hasImage,
+        'hasVideo': post.hasVideo,
+      };
+      if (post.imageDimensions != null) updateData['imageDimensions'] = post.imageDimensions;
+      if (post.videoUrl != null) updateData['videoUrl'] = post.videoUrl;
+      if (post.videoThumbnailUrl != null) updateData['videoThumbnailUrl'] = post.videoThumbnailUrl;
+      if (post.isGif != null) updateData['isGif'] = post.isGif;
+      await docRef.update(updateData);
+      return post;
+    } catch (e, st) {
+      debugPrint('updatePost 실패: $e');
+      debugPrint('$st');
+      return null;
+    }
+  }
+
+  /// 글 삭제. 성공 시 true, 실패 시 false.
+  Future<bool> deletePost(String postId) async {
+    if (postId.isEmpty) return false;
+    try {
+      await _col.doc(postId).delete();
+      return true;
+    } catch (e, st) {
+      debugPrint('deletePost 실패: $e');
+      debugPrint('$st');
+      return false;
+    }
+  }
+
+  /// 게시판 글 전체 삭제 (Firestore posts 컬렉션). 배치 500건씩 삭제. 삭제된 문서 개수 반환.
+  Future<int> deleteAllPosts() async {
+    try {
+      int total = 0;
+      while (true) {
+        final snapshot = await _col.limit(500).get();
+        if (snapshot.docs.isEmpty) break;
+        final batch = _firestore.batch();
+        for (final doc in snapshot.docs) {
+          batch.delete(doc.reference);
+        }
+        await batch.commit();
+        total += snapshot.docs.length;
+        debugPrint('deleteAllPosts: ${snapshot.docs.length}건 삭제 (누적 $total)');
+      }
+      debugPrint('deleteAllPosts: 총 $total건 삭제 완료');
+      return total;
+    } catch (e, st) {
+      debugPrint('deleteAllPosts 실패: $e');
+      debugPrint('$st');
+      return 0;
+    }
+  }
+
+  /// 댓글에 답글 추가. parentCommentId = 댓글 id. 성공 시 null, 실패 시 에러 메시지 반환.
+  Future<String?> addReply(String postId, String parentCommentId, PostComment newReply) async {
+    if (postId.isEmpty || parentCommentId.isEmpty) return '글 정보를 찾을 수 없어요.';
+    try {
+      final docRef = _col.doc(postId);
+      final docSnap = await docRef.get();
+      if (!docSnap.exists) return '글이 더 이상 없어요.';
+      final data = docSnap.data()!;
+      data['id'] = docSnap.id;
+      final post = Post.fromMap(_normalizePostMap(data));
+      final parent = PostService.findCommentById(post.commentsList, parentCommentId);
+      if (parent == null) return '댓글을 찾을 수 없어요.';
+      final updatedParent = PostComment(
+        id: parent.id,
+        author: parent.author,
+        timeAgo: parent.timeAgo,
+        text: parent.text,
+        votes: parent.votes,
+        replies: [...parent.replies, newReply],
+        likedBy: parent.likedBy,
+        dislikedBy: parent.dislikedBy,
+        authorPhotoUrl: parent.authorPhotoUrl,
+        authorAvatarColorIndex: parent.authorAvatarColorIndex,
+        createdAtDate: parent.createdAtDate,
+        imageUrl: parent.imageUrl,
+      );
+      final newList = PostService.replaceCommentById(post.commentsList, parentCommentId, updatedParent);
+      final newCommentsList = _commentListToMapsWithCreatedAt(newList, addCreatedAtForId: newReply.id);
+      await docRef.update({
+        'commentsList': newCommentsList,
+        'comments': FieldValue.increment(1),
+      });
+      // 원댓글 작성자에게 대댓글 알림
+      final parentAuthorUid = await NotificationService.instance.getUidByNickname(parent.author);
+      if (parentAuthorUid != null) {
+        await NotificationService.instance.send(
+          toUid: parentAuthorUid,
+          type: NotificationType.reply,
+          fromUser: newReply.author,
+          postId: postId,
+          postTitle: post.title,
+          commentText: newReply.text,
+        );
+      }
+      return null;
+    } catch (e, st) {
+      debugPrint('addReply 실패: $e');
+      debugPrint('$st');
+      final msg = e.toString();
+      if (msg.contains('PERMISSION_DENIED') || msg.contains('permission-denied')) return '권한이 없어요.';
+      return '답글 등록 실패.';
+    }
+  }
+
+  /// 글에 댓글 추가. 성공 시 null, 실패 시 에러 메시지 반환.
+  Future<String?> addComment(String postId, Post post, PostComment newComment) async {
+    if (postId.isEmpty) {
+      debugPrint('addComment: postId 비어 있음');
+      return '글 정보를 찾을 수 없어요.';
+    }
+    try {
+      final docRef = _col.doc(postId);
+      final docSnap = await docRef.get();
+      if (!docSnap.exists) {
+        debugPrint('addComment: 문서 없음 postId=$postId');
+        return '글이 더 이상 없어요.';
+      }
+      final commentMap = newComment.toMap();
+      commentMap['createdAt'] = Timestamp.now();
+      await docRef.update({
+        'commentsList': FieldValue.arrayUnion([commentMap]),
+        'comments': FieldValue.increment(1),
+      });
+      // 글 작성자에게 댓글 알림
+      final postData = docSnap.data()!;
+      final postAuthorUid = postData['authorUid'] as String?;
+      if (postAuthorUid != null) {
+        await NotificationService.instance.send(
+          toUid: postAuthorUid,
+          type: NotificationType.comment,
+          fromUser: newComment.author,
+          postId: postId,
+          postTitle: post.title,
+          commentText: newComment.text,
+        );
+      }
+      return null;
+    } catch (e, st) {
+      debugPrint('addComment 실패: $e');
+      debugPrint('$st');
+      final msg = e.toString();
+      if (msg.contains('PERMISSION_DENIED') || msg.contains('permission-denied')) {
+        return '권한이 없어요. (Firebase 규칙 확인)';
+      }
+      if (msg.contains('NOT_FOUND') || msg.contains('not-found')) {
+        return '글이 없어요.';
+      }
+      return '등록 실패: ${msg.length > 50 ? msg.substring(0, 50) : msg}';
+    }
+  }
+
+  /// 글 조회수 1 증가 (상세 진입 시 호출). 선행 read 없이 increment만 수행.
+  Future<void> incrementPostViews(String postId) async {
+    if (postId.isEmpty) return;
+    try {
+      await _col.doc(postId).update(<String, dynamic>{'views': FieldValue.increment(1)});
+    } catch (e, st) {
+      debugPrint('incrementPostViews 실패: $e');
+      debugPrint('$st');
+    }
+  }
+
+  /// 글 하나 불러오기 (최신 데이터). createdAt 있으면 timeAgo 계산. [locale]이 있으면 해당 언어로 timeAgo 표시.
+  Future<Post?> getPost(String postId, [String? locale]) async {
+    if (postId.isEmpty) return null;
+    try {
+      final doc = await _col.doc(postId).get();
+      if (!doc.exists) return null;
+      final data = doc.data()!;
+      data['id'] = doc.id;
+      final createdAt = data['createdAt'];
+      if (createdAt is Timestamp) {
+        data['timeAgo'] = formatTimeAgo(createdAt.toDate(), locale);
+      }
+      return Post.fromMap(_normalizePostMap(data));
+    } catch (e, st) {
+      debugPrint('getPost 실패: $e');
+      debugPrint('$st');
+      return null;
+    }
+  }
+
+  /// 글 좋아요 토글. [currentVoteState] 1=좋아요 중, -1=싫어요 중, 0=없음. 넘기면 get() 없이 write만 수행.
+  /// 성공 시 현재 좋아요 여부(true=좋아요 함, false=취소), 실패 시 null.
+  Future<bool?> togglePostLike(
+    String postId, {
+    int? currentVoteState,
+    String? postAuthorUid,
+    String? postTitle,
+  }) async {
+    final uid = AuthService.instance.currentUser.value?.uid;
+    if (uid == null || postId.isEmpty) return null;
+    try {
+      final docRef = _col.doc(postId);
+      int voteState = currentVoteState ?? -2;
+      if (voteState == -2) {
+        final docSnap = await docRef.get();
+        if (!docSnap.exists) return null;
+        final data = docSnap.data()!;
+        final likedBy = List<String>.from((data['likedBy'] as List<dynamic>?)?.map((e) => e.toString()) ?? []);
+        final dislikedBy = List<String>.from((data['dislikedBy'] as List<dynamic>?)?.map((e) => e.toString()) ?? []);
+        voteState = likedBy.contains(uid) ? 1 : (dislikedBy.contains(uid) ? -1 : 0);
+        if (postAuthorUid == null && postTitle == null) {
+          postAuthorUid = data['authorUid'] as String?;
+          postTitle = data['title'] as String? ?? '';
+        }
+      }
+      final bool nowLiked = voteState != 1;
+      final int voteDelta = nowLiked ? (voteState == -1 ? 2 : 1) : -1;
+      if (nowLiked) {
+        await docRef.update(<String, dynamic>{
+          'dislikedBy': FieldValue.arrayRemove([uid]),
+          'likedBy': FieldValue.arrayUnion([uid]),
+          'votes': FieldValue.increment(voteDelta),
+        });
+        if (postAuthorUid != null) {
+          final myNickname = 'u/${UserProfileService.instance.nicknameNotifier.value ?? uid}';
+          await NotificationService.instance.send(
+            toUid: postAuthorUid,
+            type: NotificationType.postLike,
+            fromUser: myNickname,
+            postId: postId,
+            postTitle: postTitle ?? '',
+          );
+        }
+      } else {
+        await docRef.update(<String, dynamic>{
+          'likedBy': FieldValue.arrayRemove([uid]),
+          'votes': FieldValue.increment(-1),
+        });
+      }
+      return nowLiked;
+    } catch (e, st) {
+      debugPrint('togglePostLike 실패: $e');
+      debugPrint('$st');
+      return null;
+    }
+  }
+
+  /// 글 싫어요 토글. 성공 시 현재 싫어요 여부(true=싫어요 함, false=취소), 실패 시 null.
+  Future<bool?> togglePostDislike(String postId) async {
+    final uid = AuthService.instance.currentUser.value?.uid;
+    if (uid == null || postId.isEmpty) return null;
+    try {
+      final docRef = _col.doc(postId);
+      final docSnap = await docRef.get();
+      if (!docSnap.exists) return null;
+      final data = docSnap.data()!;
+      final likedBy = List<String>.from((data['likedBy'] as List<dynamic>?)?.map((e) => e.toString()) ?? []);
+      final dislikedBy = List<String>.from((data['dislikedBy'] as List<dynamic>?)?.map((e) => e.toString()) ?? []);
+      final nowDisliked = !dislikedBy.contains(uid);
+      int voteDelta = 0;
+      if (nowDisliked) {
+        if (likedBy.contains(uid)) voteDelta -= 1;
+        voteDelta -= 1;
+        await docRef.update({
+          'likedBy': FieldValue.arrayRemove([uid]),
+          'dislikedBy': FieldValue.arrayUnion([uid]),
+          'votes': FieldValue.increment(voteDelta),
+        });
+      } else {
+        voteDelta = 1;
+        await docRef.update({
+          'dislikedBy': FieldValue.arrayRemove([uid]),
+          'votes': FieldValue.increment(voteDelta),
+        });
+      }
+      return nowDisliked;
+    } catch (e, st) {
+      debugPrint('togglePostDislike 실패: $e');
+      debugPrint('$st');
+      return null;
+    }
+  }
+
+  /// 댓글/대댓글 좋아요 토글. 성공 시 갱신된 Post 반환, 실패 시 null.
+  Future<Post?> toggleCommentLike(String postId, String commentId) async {
+    final uid = AuthService.instance.currentUser.value?.uid;
+    if (uid == null || postId.isEmpty || commentId.isEmpty) return null;
+    try {
+      final docRef = _col.doc(postId);
+      final docSnap = await docRef.get();
+      if (!docSnap.exists) return null;
+      final data = docSnap.data()!;
+      data['id'] = docSnap.id;
+      final post = Post.fromMap(data);
+      final list = post.commentsList;
+      final found = findCommentById(list, commentId);
+      if (found == null) return null;
+      final newLiked = !found.likedBy.contains(uid);
+      final newLikedBy = List<String>.from(found.likedBy);
+      final newDislikedBy = List<String>.from(found.dislikedBy);
+      int voteDelta = 0;
+      if (newLiked) {
+        if (!newLikedBy.contains(uid)) newLikedBy.add(uid);
+        voteDelta += 1;
+        if (newDislikedBy.remove(uid)) voteDelta += 1;
+      } else {
+        newLikedBy.remove(uid);
+        voteDelta -= 1;
+      }
+      final newComment = PostComment(
+        id: found.id,
+        author: found.author,
+        timeAgo: found.timeAgo,
+        text: found.text,
+        votes: found.votes + voteDelta,
+        replies: found.replies,
+        likedBy: newLikedBy,
+        dislikedBy: newDislikedBy,
+      );
+      final newList = replaceCommentById(list, commentId, newComment);
+      final newCommentsList = newList.map((c) => c.toMap()).toList();
+      await docRef.update({'commentsList': newCommentsList});
+      // 댓글 작성자에게 좋아요 알림
+      if (newLiked) {
+        final commentAuthorUid = await NotificationService.instance.getUidByNickname(found.author);
+        if (commentAuthorUid != null) {
+          final myNickname = 'u/${UserProfileService.instance.nicknameNotifier.value ?? uid}';
+          await NotificationService.instance.send(
+            toUid: commentAuthorUid,
+            type: NotificationType.commentLike,
+            fromUser: myNickname,
+            postId: postId,
+            postTitle: post.title,
+            commentText: found.text,
+          );
+        }
+      }
+      return Post(
+        id: post.id,
+        title: post.title,
+        subreddit: post.subreddit,
+        author: post.author,
+        timeAgo: post.timeAgo,
+        votes: post.votes,
+        comments: post.comments,
+        views: post.views,
+        hasImage: post.hasImage,
+        imageUrls: post.imageUrls,
+        imageDimensions: post.imageDimensions,
+        hasVideo: post.hasVideo,
+        videoUrl: post.videoUrl,
+        videoThumbnailUrl: post.videoThumbnailUrl,
+        isGif: post.isGif,
+        body: post.body,
+        linkUrl: post.linkUrl,
+        commentsList: newList,
+        authorLevel: post.authorLevel,
+        likedBy: post.likedBy,
+        dislikedBy: post.dislikedBy,
+        country: post.country,
+      );
+    } catch (e, st) {
+      debugPrint('toggleCommentLike 실패: $e');
+      debugPrint('$st');
+      return null;
+    }
+  }
+
+  /// 댓글/대댓글 싫어요 토글. 성공 시 갱신된 Post 반환, 실패 시 null.
+  Future<Post?> toggleCommentDislike(String postId, String commentId) async {
+    final uid = AuthService.instance.currentUser.value?.uid;
+    if (uid == null || postId.isEmpty || commentId.isEmpty) return null;
+    try {
+      final docRef = _col.doc(postId);
+      final docSnap = await docRef.get();
+      if (!docSnap.exists) return null;
+      final data = docSnap.data()!;
+      data['id'] = docSnap.id;
+      final post = Post.fromMap(data);
+      final list = post.commentsList;
+      final found = findCommentById(list, commentId);
+      if (found == null) return null;
+      final newDisliked = !found.dislikedBy.contains(uid);
+      final newDislikedBy = List<String>.from(found.dislikedBy);
+      final newLikedBy = List<String>.from(found.likedBy);
+      int voteDelta = 0;
+      if (newDisliked) {
+        if (!newDislikedBy.contains(uid)) newDislikedBy.add(uid);
+        voteDelta -= 1;
+        if (newLikedBy.remove(uid)) voteDelta -= 1;
+      } else {
+        newDislikedBy.remove(uid);
+        voteDelta += 1;
+      }
+      final newComment = PostComment(
+        id: found.id,
+        author: found.author,
+        timeAgo: found.timeAgo,
+        text: found.text,
+        votes: found.votes + voteDelta,
+        replies: found.replies,
+        likedBy: newLikedBy,
+        dislikedBy: newDislikedBy,
+      );
+      final newList = replaceCommentById(list, commentId, newComment);
+      final newCommentsList = newList.map((c) => c.toMap()).toList();
+      await docRef.update({'commentsList': newCommentsList});
+      return Post(
+        id: post.id,
+        title: post.title,
+        subreddit: post.subreddit,
+        author: post.author,
+        timeAgo: post.timeAgo,
+        votes: post.votes,
+        comments: post.comments,
+        views: post.views,
+        hasImage: post.hasImage,
+        imageUrls: post.imageUrls,
+        imageDimensions: post.imageDimensions,
+        hasVideo: post.hasVideo,
+        videoUrl: post.videoUrl,
+        videoThumbnailUrl: post.videoThumbnailUrl,
+        isGif: post.isGif,
+        body: post.body,
+        linkUrl: post.linkUrl,
+        commentsList: newList,
+        authorLevel: post.authorLevel,
+        likedBy: post.likedBy,
+        dislikedBy: post.dislikedBy,
+        country: post.country,
+      );
+    } catch (e, st) {
+      debugPrint('toggleCommentDislike 실패: $e');
+      debugPrint('$st');
+      return null;
+    }
+  }
+
+  static PostComment? findCommentById(List<PostComment> list, String id) {
+    for (final c in list) {
+      if (c.id == id) return c;
+      final inReplies = findCommentById(c.replies, id);
+      if (inReplies != null) return inReplies;
+    }
+    return null;
+  }
+
+  static List<PostComment> replaceCommentById(List<PostComment> list, String id, PostComment replacement) {
+    return list.map((c) {
+      if (c.id == id) return replacement;
+      return PostComment(
+        id: c.id,
+        author: c.author,
+        timeAgo: c.timeAgo,
+        text: c.text,
+        votes: c.votes,
+        replies: replaceCommentById(c.replies, id, replacement),
+        likedBy: c.likedBy,
+        dislikedBy: c.dislikedBy,
+        authorPhotoUrl: c.authorPhotoUrl,
+        authorAvatarColorIndex: c.authorAvatarColorIndex,
+        createdAtDate: c.createdAtDate,
+        imageUrl: c.imageUrl,
+      );
+    }).toList();
+  }
+
+  /// 댓글 목록을 Map 리스트로 변환. 지정한 id의 댓글에 createdAt(serverTimestamp) 추가.
+  static List<Map<String, dynamic>> _commentListToMapsWithCreatedAt(
+    List<PostComment> list, {
+    String? addCreatedAtForId,
+  }) {
+    return list.map((c) {
+      final m = Map<String, dynamic>.from(c.toMap());
+      m['replies'] = _commentListToMapsWithCreatedAt(c.replies, addCreatedAtForId: addCreatedAtForId);
+      if (c.id == addCreatedAtForId) m['createdAt'] = Timestamp.now();
+      return m;
+    }).toList();
+  }
+
+  /// 특정 작성자의 글만 조회 (닉네임/작성자명 기준)
+  Future<List<Post>> getPostsByAuthor(String author) async {
+    final all = await getPosts();
+    return all.where((p) => p.author == author).toList();
+  }
+
+  /// 특정 작성자의 모든 게시글 authorPhotoUrl을 일괄 업데이트
+  Future<void> updateAuthorPhotoUrl(String author, String? photoUrl) async {
+    try {
+      final snapshot = await _col
+          .where('author', isEqualTo: author)
+          .get();
+      final batch = _firestore.batch();
+      for (final doc in snapshot.docs) {
+        batch.update(doc.reference, {'authorPhotoUrl': photoUrl});
+      }
+      await batch.commit();
+      debugPrint('updateAuthorPhotoUrl: ${snapshot.docs.length}개 게시글 업데이트 완료');
+    } catch (e) {
+      debugPrint('updateAuthorPhotoUrl 실패: $e');
+    }
+  }
+
+  /// 특정 작성자가 쓴 댓글 목록 (글 정보 포함). 댓글·답글 모두 포함.
+  Future<List<({Post post, PostComment comment})>> getCommentsByAuthor(String author) async {
+    final posts = await getPosts();
+    final result = <({Post post, PostComment comment})>[];
+    for (final post in posts) {
+      void collect(List<PostComment> list) {
+        for (final c in list) {
+          if (c.author == author) result.add((post: post, comment: c));
+          collect(c.replies);
+        }
+      }
+      collect(post.commentsList);
+    }
+    return result;
+  }
+
+  /// 자유게시판 글 목록 로드 (최신순, 최대 100건).
+  /// orderBy를 Firestore 서버에서 하지 않고 클라이언트에서 정렬:
+  ///   → createdAt 필드가 없는 문서도 결과에 포함됨 (Firestore orderBy는 해당 필드 없는 문서 제외).
+  /// country 필터도 클라이언트에서 처리 (복합 인덱스 불필요).
+  Future<List<Post>> getPosts({String? country}) async {
+    try {
+      // orderBy 없이 전체 조회 → createdAt 없는 문서도 포함됨
+      final snapshot = await _col.limit(200).get();
+      debugPrint('getPosts: Firestore에서 ${snapshot.docs.length}개 문서 조회됨');
+      final list = <Post>[];
+      for (final doc in snapshot.docs) {
+        try {
+          final data = doc.data();
+          data['id'] = doc.id;
+          final createdAt = data['createdAt'];
+          final sortAt = createdAt is Timestamp
+              ? createdAt.toDate()
+              : (data['id'] != null
+                  ? DateTime.fromMillisecondsSinceEpoch(int.tryParse(data['id'].toString()) ?? 0)
+                  : DateTime.fromMillisecondsSinceEpoch(0));
+          data['_sortAt'] = sortAt.millisecondsSinceEpoch;
+          final normalized = _normalizePostMap(data);
+          normalized['timeAgo'] = formatTimeAgo(sortAt, country);
+          list.add(Post.fromMap(normalized));
+        } catch (e, st) {
+          debugPrint('getPosts: 문서 ${doc.id} 파싱 실패 - $e');
+          debugPrint('$st');
+        }
+      }
+      // 클라이언트에서 최신순 정렬 (id가 밀리초 타임스탬프인 경우 사용, 없으면 0)
+      list.sort((a, b) {
+        final ta = int.tryParse(a.id) ?? 0;
+        final tb = int.tryParse(b.id) ?? 0;
+        return tb.compareTo(ta);
+      });
+      // 최신 100개만 유지
+      final sorted = list.length > 100 ? list.sublist(0, 100) : list;
+      // country 필터: 해당 언어 글만 반환 (없으면 빈 목록, 폴백으로 전체 반환하지 않음)
+      if (country != null && country.isNotEmpty) {
+        final filtered = sorted.where((p) => p.country == country).toList();
+        debugPrint('getPosts: country=$country 필터 → ${filtered.length}개 (전체 ${sorted.length}개)');
+        return filtered;
+      }
+      debugPrint('getPosts: ${sorted.length}개 글 반환');
+      return sorted;
+    } catch (e, st) {
+      debugPrint('getPosts 실패: $e');
+      debugPrint('$st');
+      return [];
+    }
+  }
+
+  /// 댓글 createdAt 마이그레이션: id(밀리초)로 createdAt 없는 댓글을 복원
+  Future<int> migrateCommentCreatedAt() async {
+    int fixed = 0;
+    try {
+      final snapshot = await _col.get();
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
+        final commentsRaw = data['commentsList'];
+        if (commentsRaw is! List) continue;
+        bool changed = false;
+        final newList = commentsRaw.map((e) {
+          if (e is! Map) return e;
+          final m = Map<String, dynamic>.from(e);
+          return _fixCommentCreatedAt(m, changed: (v) => changed = v || changed);
+        }).toList();
+        if (changed) {
+          await _col.doc(doc.id).update({'commentsList': newList});
+          fixed++;
+        }
+      }
+    } catch (e) {
+      debugPrint('migrateCommentCreatedAt 실패: $e');
+    }
+    return fixed;
+  }
+
+  static Map<String, dynamic> _fixCommentCreatedAt(
+    Map<String, dynamic> m, {
+    required void Function(bool) changed,
+  }) {
+    if (m['createdAt'] == null) {
+      final idMs = int.tryParse(m['id']?.toString() ?? '');
+      if (idMs != null) {
+        m['createdAt'] = Timestamp.fromMillisecondsSinceEpoch(idMs);
+        changed(true);
+      }
+    }
+    final repliesRaw = m['replies'];
+    if (repliesRaw is List && repliesRaw.isNotEmpty) {
+      m['replies'] = repliesRaw.map((r) {
+        if (r is! Map) return r;
+        return _fixCommentCreatedAt(Map<String, dynamic>.from(r), changed: changed);
+      }).toList();
+    }
+    return m;
+  }
+
+  /// Firestore가 Map으로 내려준 배열 필드를 List로 변환 (호환)
+  static Map<String, dynamic> _normalizePostMap(Map<String, dynamic> map) {
+    final m = Map<String, dynamic>.from(map);
+    if (m['commentsList'] != null && m['commentsList'] is! List) {
+      final raw = m['commentsList'] as Map;
+      final keys = raw.keys.toList();
+      keys.sort((a, b) => (int.tryParse(a.toString()) ?? 0).compareTo(int.tryParse(b.toString()) ?? 0));
+      m['commentsList'] = keys.map((k) => raw[k]).toList();
+    }
+    if (m['likedBy'] != null && m['likedBy'] is! List) {
+      final raw = m['likedBy'] as Map;
+      m['likedBy'] = raw.values.map((e) => e.toString()).toList();
+    }
+    return m;
+  }
+}

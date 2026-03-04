@@ -1,0 +1,5 @@
+# 릴리즈데이트 크롤러 (dramas.json용)
+requests>=2.28.0
+beautifulsoup4>=4.12.0
+# JS 렌더링이 필요하면 주석 해제 후: pip install playwright && playwright install chromium
+# playwright>=1.40.0
