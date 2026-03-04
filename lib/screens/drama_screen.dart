@@ -22,6 +22,42 @@ double _dramaScreenScale(BuildContext context) {
 /// 1페이지당 드라마 카드 개수 (홈탭 페이지네이션과 동일 디자인)
 const int _dramaCardsPerPage = 30;
 
+/// 탭 인디케이터: 글자 길이와 관계없이 짧은 고정 길이 + 둥근 끝
+class _ShortRoundedIndicator extends Decoration {
+  const _ShortRoundedIndicator({required this.color, this.width = 28, this.height = 2.5});
+
+  final Color color;
+  final double width;
+  final double height;
+
+  @override
+  BoxPainter createBoxPainter([VoidCallback? onChanged]) {
+    return _ShortRoundedIndicatorPainter(color: color, width: width, height: height);
+  }
+}
+
+class _ShortRoundedIndicatorPainter extends BoxPainter {
+  _ShortRoundedIndicatorPainter({required this.color, this.width = 28, this.height = 2.5});
+
+  final Color color;
+  final double width;
+  final double height;
+
+  @override
+  void paint(Canvas canvas, Offset offset, ImageConfiguration configuration) {
+    final rect = offset & configuration.size!;
+    final w = width.clamp(0.0, rect.width);
+    final h = height;
+    final left = rect.left + (rect.width - w) / 2;
+    final top = rect.bottom - h;
+    final rrect = RRect.fromRectAndRadius(
+      Rect.fromLTWH(left, top, w, h),
+      Radius.circular(h / 2),
+    );
+    canvas.drawRRect(rrect, Paint()..color = color);
+  }
+}
+
 /// 리뷰 탭 - 검색창 + 인기 순위 / 신작 / 카테고리 탭 + 그리드 드라마 카드
 class DramaScreen extends StatefulWidget {
   const DramaScreen({super.key});
@@ -117,21 +153,23 @@ class _DramaScreenState extends State<DramaScreen> {
                       isScrollable: true,
                       labelColor: headerFg,
                       unselectedLabelColor: headerFg.withOpacity(0.85),
-                      indicatorColor: headerFg,
-                      indicatorWeight: (3 * r).clamp(2.0, 4.0),
+                      indicator: _ShortRoundedIndicator(color: headerFg, width: 28, height: 2.5),
+                      indicatorWeight: 3,
                       indicatorSize: TabBarIndicatorSize.label,
-                      indicatorPadding: EdgeInsets.only(top: -8 * r),
+                      indicatorPadding: EdgeInsets.only(top: 0, bottom: 2),
                       padding: EdgeInsets.only(left: 16 * r, right: 16 * r, bottom: 0),
                       tabAlignment: TabAlignment.start,
                       labelPadding: EdgeInsets.symmetric(horizontal: 6 * r),
                       dividerColor: Colors.transparent,
+                      overlayColor: WidgetStateProperty.all(Colors.transparent),
+                      splashFactory: NoSplash.splashFactory,
                       labelStyle: GoogleFonts.notoSansKr(
-                        fontSize: (15 * r).roundToDouble(),
-                        fontWeight: FontWeight.w800,
+                        fontSize: (17 * r).roundToDouble(),
+                        fontWeight: FontWeight.w900,
                       ),
                       unselectedLabelStyle: GoogleFonts.notoSansKr(
                         fontSize: (14 * r).roundToDouble(),
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w800,
                       ),
                       tabs: [
                         Tab(text: s.get('popularRanking')),
