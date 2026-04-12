@@ -124,7 +124,9 @@ class _FeedPostCardState extends State<FeedPostCard> {
     if (oldWidget.post.id == widget.post.id &&
         (oldWidget.post.likedBy != widget.post.likedBy ||
             oldWidget.post.dislikedBy != widget.post.dislikedBy ||
-            oldWidget.post.votes != widget.post.votes)) {
+            oldWidget.post.votes != widget.post.votes ||
+            oldWidget.post.likeCount != widget.post.likeCount ||
+            oldWidget.post.dislikeCount != widget.post.dislikeCount)) {
       _displayCount = widget.post.votes;
       _syncVoteStateFromPost();
     }
@@ -160,7 +162,7 @@ class _FeedPostCardState extends State<FeedPostCard> {
     });
     PostService.instance.togglePostLike(
       widget.post.id,
-      currentVoteState: _voteState,
+      currentVoteState: prevState,
       postAuthorUid: widget.post.authorUid,
       postTitle: widget.post.title,
     ).then((result) {
@@ -396,6 +398,8 @@ class _FeedPostCardState extends State<FeedPostCard> {
     final post = widget.post;
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
+    final boardKind = postDisplayType(post);
+    final compactTalkAskBar = boardKind == 'talk' || boardKind == 'ask';
 
     return RepaintBoundary(
       child: GestureDetector(
@@ -602,9 +606,10 @@ class _FeedPostCardState extends State<FeedPostCard> {
                         onUp: _onUpTap,
                         onDown: _onDownTap,
                         primaryColor: cs.primary,
+                        compact: compactTalkAskBar,
                       ),
                     ),
-                    // 댓글 + 조회수 (투표박스 0일 때와 같은 색)
+                    // 댓글 (+ TALK/ASK는 조회수 숨김)
                     Transform.translate(
                       offset: const Offset(-10, 0),
                       child: Row(
@@ -613,26 +618,36 @@ class _FeedPostCardState extends State<FeedPostCard> {
                           Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(LucideIcons.message_circle, size: 18, color: _feedMetaGray),
-                              const SizedBox(width: 4),
+                              Icon(
+                                LucideIcons.message_circle,
+                                size: compactTalkAskBar ? 15 : 18,
+                                color: _feedMetaGray,
+                              ),
+                              SizedBox(width: compactTalkAskBar ? 3 : 4),
                               Text(
                                 formatCompactCount(post.comments),
-                                style: GoogleFonts.notoSansKr(color: _feedMetaGray, fontSize: 13, fontWeight: FontWeight.w500),
+                                style: GoogleFonts.notoSansKr(
+                                  color: _feedMetaGray,
+                                  fontSize: compactTalkAskBar ? 12 : 13,
+                                  fontWeight: FontWeight.w500,
+                                ),
                               ),
                             ],
                           ),
-                          const SizedBox(width: 10),
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(LucideIcons.eye, size: 18, color: _feedMetaGray),
-                              const SizedBox(width: 4),
-                              Text(
-                                formatCompactCount(post.views),
-                                style: GoogleFonts.notoSansKr(color: _feedMetaGray, fontSize: 13, fontWeight: FontWeight.w500),
-                              ),
-                            ],
-                          ),
+                          if (!compactTalkAskBar) ...[
+                            const SizedBox(width: 10),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(LucideIcons.eye, size: 18, color: _feedMetaGray),
+                                const SizedBox(width: 4),
+                                Text(
+                                  formatCompactCount(post.views),
+                                  style: GoogleFonts.notoSansKr(color: _feedMetaGray, fontSize: 13, fontWeight: FontWeight.w500),
+                                ),
+                              ],
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -711,6 +726,7 @@ class _VoteBox extends StatelessWidget {
     required this.onUp,
     required this.onDown,
     required this.primaryColor,
+    this.compact = false,
   });
 
   final int voteState;
@@ -718,6 +734,8 @@ class _VoteBox extends StatelessWidget {
   final VoidCallback onUp;
   final VoidCallback onDown;
   final Color primaryColor;
+  /// TALK/ASK 피드: 화살표·숫자만 약간 축소
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -731,6 +749,9 @@ class _VoteBox extends StatelessWidget {
         : voteState == -1
             ? dislikeActiveColor
             : baseColor;
+    final iconSize = compact ? 22.0 : 26.0;
+    final countFontSize = compact ? 12.0 : 13.0;
+    final padV = compact ? 5.0 : 7.0;
 
     return Material(
       color: Colors.transparent,
@@ -742,16 +763,16 @@ class _VoteBox extends StatelessWidget {
               splashColor: primaryColor.withOpacity(0.2),
               highlightColor: primaryColor.withOpacity(0.1),
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(0, 7, 1, 7),
-                child: Icon(Icons.arrow_drop_up_rounded, size: 26, color: upColor),
+                padding: EdgeInsets.fromLTRB(0, padV, 1, padV),
+                child: Icon(Icons.arrow_drop_up_rounded, size: iconSize, color: upColor),
               ),
             ),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 7),
+              padding: EdgeInsets.symmetric(horizontal: 0, vertical: padV),
               child: Text(
                 formatCompactCount(count),
                 style: GoogleFonts.notoSansKr(
-                  fontSize: 13,
+                  fontSize: countFontSize,
                   fontWeight: FontWeight.w700,
                   color: countColor,
                 ),
@@ -762,8 +783,8 @@ class _VoteBox extends StatelessWidget {
               splashColor: dislikeActiveColor.withOpacity(0.2),
               highlightColor: dislikeActiveColor.withOpacity(0.1),
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(1, 7, 8, 7),
-                child: Icon(Icons.arrow_drop_down_rounded, size: 26, color: downColor),
+                padding: EdgeInsets.fromLTRB(1, padV, 8, padV),
+                child: Icon(Icons.arrow_drop_down_rounded, size: iconSize, color: downColor),
               ),
             ),
           ],

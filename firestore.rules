@@ -1,14 +1,19 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
     match /nicknames/{nickId} {
       allow read: if true;
       allow create: if request.auth != null;
       allow update, delete: if false;
     }
-    match /users/{uid} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
+
+    // 프로필: 공개 읽기, 본인 문서만 쓰기
+    match /users/{userId} {
+      allow read: if true;
+      allow write: if request.auth != null && request.auth.uid == userId;
     }
+
     match /users/{uid}/saved/{docId} {
       allow read, write: if request.auth != null && request.auth.uid == uid;
     }
@@ -18,41 +23,47 @@ service cloud.firestore {
     match /users/{uid}/conversations/{docId} {
       allow read, write: if request.auth != null && request.auth.uid == uid;
     }
+
     match /conversations/{convId}/messages/{docId} {
       allow read, write: if request.auth != null;
     }
-    match /posts/{docId} {
+
+    match /posts/{postId} {
       allow read: if true;
       allow write: if request.auth != null;
+
+      match /likes/{uid} {
+        allow read: if true;
+        allow write: if request.auth != null && request.auth.uid == uid;
+      }
+
+      match /dislikes/{uid} {
+        allow read: if true;
+        allow write: if request.auth != null && request.auth.uid == uid;
+      }
     }
-    // 드라마 평점 리뷰: 전체 읽기(상세 페이지 평균/목록), 쓰기는 로그인 사용자만
+
     match /drama_reviews/{docId} {
       allow read: if true;
       allow create: if request.auth != null && request.resource.data.uid == request.auth.uid;
       allow update, delete: if request.auth != null && resource.data.uid == request.auth.uid;
     }
-    // 드라마 조회수: 카드 클릭 시 +1, 목록/상세에서 조회수 표시
     match /drama_views/{dramaId} {
       allow read, write: if true;
     }
-    // 드라마 조회수 일별 (리뷰 탭 인기=지난 7일 순용)
     match /drama_view_daily/{date} {
       allow read, write: if true;
     }
-    // 검색 페이지 일별 검색·클릭 집계 (1~10위 순위용)
     match /drama_search_daily_clicks/{date} {
       allow read, write: if true;
     }
-    // 인기 검색 순위: 하루/일주일/한달/1년 기간별 검색+클릭 복합
     match /drama_search_stats/{docId} {
       allow read, write: if true;
     }
-    // 에피소드 평점: 로그인 사용자 읽기/쓰기
     match /episode_ratings/{docId} {
       allow read: if true;
       allow create, update, delete: if request.auth != null;
     }
-    // 에피소드 리뷰: 로그인 사용자 읽기/쓰기
     match /episode_reviews/{docId} {
       allow read: if true;
       allow create, update, delete: if request.auth != null;

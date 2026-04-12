@@ -25,6 +25,8 @@ class Post {
     this.authorLevel = 1,
     this.likedBy = const [],
     this.dislikedBy = const [],
+    this.likeCount = 0,
+    this.dislikeCount = 0,
     this.category = 'free',
     this.authorPhotoUrl,
     this.authorAvatarColorIndex,
@@ -70,6 +72,10 @@ class Post {
   final List<String> likedBy;
   /// 싫어요 누른 사용자 uid 목록
   final List<String> dislikedBy;
+  /// 좋아요 수 (posts/{id}/likes 서브컬렉션과 동기화)
+  final int likeCount;
+  /// 싫어요 수 (posts/{id}/dislikes 서브컬렉션과 동기화)
+  final int dislikeCount;
   /// 게시판 구분: 'free' = 자유게시판, 'question' = 질문게시판
   final String category;
   /// 작성자 프로필 사진 URL (없으면 null)
@@ -121,6 +127,8 @@ class Post {
     int? authorLevel,
     List<String>? likedBy,
     List<String>? dislikedBy,
+    int? likeCount,
+    int? dislikeCount,
     String? category,
     String? authorPhotoUrl,
     int? authorAvatarColorIndex,
@@ -160,6 +168,8 @@ class Post {
       authorLevel: authorLevel ?? this.authorLevel,
       likedBy: likedBy ?? this.likedBy,
       dislikedBy: dislikedBy ?? this.dislikedBy,
+      likeCount: likeCount ?? this.likeCount,
+      dislikeCount: dislikeCount ?? this.dislikeCount,
       category: category ?? this.category,
       authorPhotoUrl: authorPhotoUrl ?? this.authorPhotoUrl,
       authorAvatarColorIndex: authorAvatarColorIndex ?? this.authorAvatarColorIndex,
@@ -204,6 +214,8 @@ class Post {
       'commentsList': commentsList.map((c) => c.toMap()).toList(),
       'likedBy': likedBy,
       'dislikedBy': dislikedBy,
+      'likeCount': likeCount,
+      'dislikeCount': dislikeCount,
       'category': category,
       if (authorPhotoUrl != null) 'authorPhotoUrl': authorPhotoUrl,
       if (authorAvatarColorIndex != null) 'authorAvatarColorIndex': authorAvatarColorIndex,
@@ -220,6 +232,16 @@ class Post {
       'tags': tags,
       'allowReply': allowReply,
     };
+  }
+
+  static String _categoryFromMap(dynamic raw) {
+    if (raw == null) return 'free';
+    if (raw is String) {
+      final s = raw.trim();
+      return s.isEmpty ? 'free' : s;
+    }
+    final s = raw.toString().trim();
+    return s.isEmpty ? 'free' : s;
   }
 
   /// Firestore에서 로드한 Map → Post (createdAt은 toMap 시 사용)
@@ -243,6 +265,9 @@ class Post {
     final dislikedBy = (dislikedByRaw != null && dislikedByRaw is List<dynamic>)
         ? List<String>.from(dislikedByRaw.map((e) => e.toString()))
         : (dislikedByRaw is Map ? dislikedByRaw.values.map((e) => e.toString()).toList() : <String>[]);
+
+    final likeCount = (map['likeCount'] as num?)?.toInt() ?? likedBy.length;
+    final dislikeCount = (map['dislikeCount'] as num?)?.toInt() ?? dislikedBy.length;
 
     final imageUrlsRaw = map['imageUrls'];
     final imageUrls = (imageUrlsRaw is List<dynamic>)
@@ -270,7 +295,7 @@ class Post {
       subreddit: map['subreddit'] as String? ?? '',
       author: map['author'] as String? ?? '',
       timeAgo: map['timeAgo'] as String? ?? '',
-      votes: (map['votes'] as num?)?.toInt() ?? 0,
+      votes: (map['votes'] as num?)?.toInt() ?? (likeCount - dislikeCount),
       comments: (map['comments'] as num?)?.toInt() ?? 0,
       views: (map['views'] as num?)?.toInt() ?? 0,
       hasImage: map['hasImage'] as bool? ?? false,
@@ -286,7 +311,9 @@ class Post {
       authorLevel: (map['authorLevel'] as num?)?.toInt() ?? 1,
       likedBy: likedBy,
       dislikedBy: dislikedBy,
-      category: map['category'] as String? ?? 'free',
+      likeCount: likeCount,
+      dislikeCount: dislikeCount,
+      category: _categoryFromMap(map['category']),
       authorPhotoUrl: map['authorPhotoUrl'] as String?,
       authorAvatarColorIndex: (map['authorAvatarColorIndex'] as num?)?.toInt(),
       popularAt: (map['popularAt'] is Timestamp) ? (map['popularAt'] as Timestamp).toDate() : null,
@@ -321,6 +348,18 @@ class Post {
     final c = v.toLowerCase();
     if (c == 'kr' || c == 'jp' || c == 'cn') return c;
     return 'us';
+  }
+
+  /// Firestore 원본 [data]가 지역 피드([viewerCountry])에 포함돼야 하는지.
+  /// `country`가 없거나 빈 문자열이면 레거시 문서로 보고 모든 지역에서 표시
+  /// (서버 `where('country', …)`에선 잡히지 않던 글을 피드에서 복구).
+  static bool documentVisibleInCountryFeed(Map<String, dynamic> data, String? viewerCountry) {
+    final eq = viewerCountry?.trim();
+    if (eq == null || eq.isEmpty) return true;
+    final raw = data['country'];
+    if (raw == null) return true;
+    if (raw is String && raw.trim().isEmpty) return true;
+    return _normalizeCountry(raw as String?) == eq;
   }
 }
 

@@ -9,6 +9,7 @@ import '../services/post_service.dart';
 import '../services/user_profile_service.dart';
 import 'country_scope.dart';
 import 'optimized_network_image.dart';
+import 'review_arrow_tag_chip.dart';
 
 /// DramaFeed Reviews 탭용 — 카드 없이 구분선 스타일 리스트 아이템
 class FeedReviewLetterboxdTile extends StatelessWidget {
@@ -98,6 +99,8 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final s = CountryScope.of(context).strings;
+    final bool isMyReview =
+        currentUserAuthor != null && post.author == currentUserAuthor;
     final thumb = post.dramaThumbnail?.trim();
     final hasHttpThumb = thumb != null && thumb.startsWith('http');
     final dramaTitle =
@@ -146,11 +149,39 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
       );
     }
 
+    Widget bodyForTap = bodyText;
+    if (isMyReview) {
+      bodyForTap = Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 1, right: 8),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: cs.secondary,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                s.get('myPostBadge'),
+                style: GoogleFonts.notoSansKr(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: cs.onSecondary,
+                ),
+              ),
+            ),
+          ),
+          Expanded(child: bodyText),
+        ],
+      );
+    }
+
     final titleStyle = GoogleFonts.notoSansKr(
       fontSize: 15,
       fontWeight: FontWeight.w700,
       color: cs.onSurface,
-      height: 1.2,
+      height: 1.08,
     );
 
     /// 제목은 글자 너비만 드라마 탭 (Expanded로 가로 꽉 차지 않게).
@@ -244,113 +275,117 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
       ],
     );
 
-    final bool isMyReview =
-        currentUserAuthor != null && post.author == currentUserAuthor;
     final bool showOwnerActions =
         isMyReview && (onPostUpdated != null || onPostDeleted != null);
+    final ownerActionGray = cs.onSurfaceVariant;
     final linkStyle = GoogleFonts.notoSansKr(
       fontSize: 11,
       fontWeight: FontWeight.w600,
+      color: ownerActionGray,
     );
-    final Widget? ownerActionRow = showOwnerActions
-        ? Padding(
-            padding: const EdgeInsets.only(top: 2),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (onPostUpdated != null)
-                  TextButton(
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      foregroundColor: cs.primary,
-                    ),
-                    onPressed: () async {
-                      final updated = await Navigator.push<Post>(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => WritePostPage(
-                            initialPost: post,
-                            initialBoard: 'review',
-                          ),
-                        ),
-                      );
-                      if (!context.mounted) return;
-                      if (updated != null) onPostUpdated!(updated);
-                    },
-                    child: Text(s.get('edit'), style: linkStyle),
-                  ),
-                if (onPostUpdated != null && onPostDeleted != null)
-                  Text(
-                    '·',
-                    style: linkStyle.copyWith(
-                      color: cs.onSurfaceVariant.withValues(alpha: 0.45),
+    /// 수정·삭제 (인라인 피드에서는 댓글 아이콘 오른쪽에 붙임)
+    Widget? ownerEditDeleteRow;
+    if (showOwnerActions) {
+      ownerEditDeleteRow = Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (onPostUpdated != null)
+            TextButton(
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                foregroundColor: ownerActionGray,
+              ),
+              onPressed: () async {
+                final updated = await Navigator.push<Post>(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => WritePostPage(
+                      initialPost: post,
+                      initialBoard: 'review',
                     ),
                   ),
-                if (onPostDeleted != null)
-                  TextButton(
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      foregroundColor: cs.error,
-                    ),
-                    onPressed: () async {
-                      final confirmed = await showDialog<bool>(
-                        context: context,
-                        builder: (ctx) => AlertDialog(
-                          title: Text(s.get('delete'), style: GoogleFonts.notoSansKr()),
-                          content: Text(s.get('deletePostConfirm'), style: GoogleFonts.notoSansKr()),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.pop(ctx, false),
-                              child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr()),
-                            ),
-                            TextButton(
-                              onPressed: () => Navigator.pop(ctx, true),
-                              child: Text(
-                                s.get('delete'),
-                                style: GoogleFonts.notoSansKr(color: Theme.of(ctx).colorScheme.error),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                      if (confirmed != true || !context.mounted) return;
-                      final ok = await PostService.instance.deletePost(post.id);
-                      if (!context.mounted) return;
-                      if (ok) onPostDeleted!(post);
-                    },
-                    child: Text(s.get('delete'), style: linkStyle.copyWith(color: cs.error)),
-                  ),
-              ],
+                );
+                if (!context.mounted) return;
+                if (updated != null) onPostUpdated!(updated);
+              },
+              child: Text(s.get('edit'), style: linkStyle),
             ),
-          )
-        : null;
+          if (onPostUpdated != null && onPostDeleted != null)
+            Text(
+              '·',
+              style: linkStyle.copyWith(
+                color: cs.onSurfaceVariant.withValues(alpha: 0.45),
+              ),
+            ),
+          if (onPostDeleted != null)
+            TextButton(
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                foregroundColor: Colors.redAccent,
+              ),
+              onPressed: () async {
+                final confirmed = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: Text(s.get('delete'), style: GoogleFonts.notoSansKr()),
+                    content: Text(s.get('deletePostConfirm'), style: GoogleFonts.notoSansKr()),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr()),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx, true),
+                        child: Text(
+                          s.get('delete'),
+                          style: GoogleFonts.notoSansKr(color: Theme.of(ctx).colorScheme.error),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirmed != true || !context.mounted) return;
+                final ok = await PostService.instance.deletePost(post.id);
+                if (!context.mounted) return;
+                if (ok) onPostDeleted!(post);
+              },
+              child: Text(
+                s.get('delete'),
+                style: linkStyle.copyWith(color: Colors.redAccent, fontWeight: FontWeight.w700),
+              ),
+            ),
+        ],
+      );
+    }
 
-    final Widget authorBlock = showOwnerActions && ownerActionRow != null
+    final Widget authorBlock = ownerEditDeleteRow != null && thumbTrailingActions == null
         ? Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               authorRow,
-              ownerActionRow,
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: ownerEditDeleteRow,
+                ),
+              ),
             ],
           )
         : authorRow;
 
-    /// 본문 탭은 카드 전역 `InkWell`(투명 스플래시)에서 처리. 여기서는 텍스트만 둔다.
-    final Widget bodyForTap = bodyText;
-
-    // 제목은 1줄만. Expanded + Align(가로 꽉 참)으로 닉네임 영역까지의 최대 폭을 주고, 넘치면 … 처리.
-    // widthFactor:1 이었을 때는 자식 내재 폭만 쓰면서 긴 제목이 닉네임을 침범할 수 있었다.
+    // 제목은 1줄만. Expanded + topLeft: 오른쪽 작성자 블록이 더 높아도 제목을 위에 붙여 별점과의 빈 간격을 없앰.
     final Widget headerRow = Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Expanded(
           child: Align(
-            alignment: Alignment.centerLeft,
+            alignment: Alignment.topLeft,
             child: dramaTitleWidget,
           ),
         ),
@@ -369,7 +404,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
               highlightColor: _reviewTapHighlight(cs),
               borderRadius: BorderRadius.circular(6),
               child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 2),
+                padding: EdgeInsets.zero,
                 child: _starRow(r, _thumbW),
               ),
             ),
@@ -393,7 +428,39 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
                     child: bodyForTap,
                   ),
                 ),
-                thumbTrailingActions!,
+                Align(
+                  alignment: Alignment.bottomLeft,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      thumbTrailingActions!,
+                      if (post.tags.isNotEmpty) ...[
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: Row(
+                              children: [
+                                for (var i = 0; i < post.tags.length; i++) ...[
+                                  if (i > 0) const SizedBox(width: 6),
+                                  ReviewArrowTagChip(
+                                    label: post.tags[i],
+                                    compact: true,
+                                    maxLabelWidth: 100,
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                      if (ownerEditDeleteRow != null) ...[
+                        const SizedBox(width: 8),
+                        ownerEditDeleteRow,
+                      ],
+                    ],
+                  ),
+                ),
               ],
             ),
           )
@@ -405,10 +472,8 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           headerRow,
-          const SizedBox(height: 2),
           ratingRow,
-          // 구분선~제목 간격(12)을 기준으로, 별~썸네일 사이를 그 2배로 벌려 구분선에서 썸네일까지 여유 확보
-          SizedBox(height: _gapDividerToTitleRow * 2),
+          const SizedBox(height: 6),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [

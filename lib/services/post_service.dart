@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' show min;
 import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -202,6 +203,50 @@ class PostService {
 
   CollectionReference<Map<String, dynamic>> get _col => _firestore.collection(_collection);
 
+  DocumentReference<Map<String, dynamic>> _postLikeDoc(String postId, String uid) =>
+      _col.doc(postId).collection('likes').doc(uid);
+
+  DocumentReference<Map<String, dynamic>> _postDislikeDoc(String postId, String uid) =>
+      _col.doc(postId).collection('dislikes').doc(uid);
+
+  /// posts/{postId}/likes|dislikes/{uid} 존재 여부로 현재 사용자 투표 상태를 [Post.likedBy]/[Post.dislikedBy]에 반영.
+  Future<List<Post>> hydratePostsViewerVotes(List<Post> posts) async {
+    final uid = AuthService.instance.currentUser.value?.uid;
+    if (uid == null || posts.isEmpty) return posts;
+    const chunk = 24;
+    final out = <Post>[];
+    for (var i = 0; i < posts.length; i += chunk) {
+      final end = min(i + chunk, posts.length);
+      final slice = posts.sublist(i, end);
+      final merged = await Future.wait(slice.map((p) => _mergePostWithViewerVoteDocs(p, uid)));
+      out.addAll(merged);
+    }
+    return out;
+  }
+
+  Future<Post> _mergePostWithViewerVoteDocs(Post post, String uid) async {
+    final likeSnap = await _postLikeDoc(post.id, uid).get();
+    final dislikeSnap = await _postDislikeDoc(post.id, uid).get();
+    final likeDoc = likeSnap.exists;
+    final dislikeDoc = dislikeSnap.exists;
+    var hasLike = likeDoc || post.likedBy.contains(uid);
+    var hasDislike = dislikeDoc || post.dislikedBy.contains(uid);
+    if (hasLike && hasDislike) {
+      if (likeDoc && !dislikeDoc) {
+        hasDislike = false;
+      } else if (!likeDoc && dislikeDoc) {
+        hasLike = false;
+      } else if (likeDoc && dislikeDoc) {
+        hasDislike = false;
+      }
+    }
+    var lb = post.likedBy.where((u) => u != uid).toList();
+    var db = post.dislikedBy.where((u) => u != uid).toList();
+    if (hasLike) lb = [...lb, uid];
+    if (hasDislike) db = [...db, uid];
+    return post.copyWith(likedBy: lb, dislikedBy: db);
+  }
+
   /// Firestore에 넣을 수 있는 타입만 남기기 (직렬화 오류 방지)
   static Map<String, dynamic> _sanitizeMap(Map<String, dynamic> map) {
     final out = <String, dynamic>{};
@@ -243,9 +288,12 @@ class PostService {
       return (null, '로그인이 필요해요.');
     }
     var map = post.toMap();
+    map['type'] = (post.type != null && post.type!.trim().isNotEmpty) ? post.type!.trim() : 'talk';
     map['createdAt'] = FieldValue.serverTimestamp();
     if (!map.containsKey('likedBy')) map['likedBy'] = [];
     if (!map.containsKey('dislikedBy')) map['dislikedBy'] = [];
+    if (!map.containsKey('likeCount')) map['likeCount'] = 0;
+    if (!map.containsKey('dislikeCount')) map['dislikeCount'] = 0;
     map['authorUid'] = uid;
     map = _sanitizeMap(map);
     map['createdAt'] = FieldValue.serverTimestamp();
@@ -502,7 +550,9 @@ class PostService {
       if (createdAt is Timestamp) {
         data['timeAgo'] = formatTimeAgo(createdAt.toDate(), locale);
       }
-      return Post.fromMap(_normalizePostMap(data));
+      final post = Post.fromMap(_normalizePostMap(data));
+      final hydrated = await hydratePostsViewerVotes([post]);
+      return hydrated.isEmpty ? post : hydrated.first;
     } catch (e, st) {
       debugPrint('getPost 실패: $e');
       debugPrint('$st');
@@ -510,8 +560,8 @@ class PostService {
     }
   }
 
-  /// 글 좋아요 토글. [currentVoteState] 1=좋아요 중, -1=싫어요 중, 0=없음. 넘기면 get() 없이 write만 수행.
-  /// 성공 시 현재 좋아요 여부(true=좋아요 함, false=취소), 실패 시 null.
+  /// 글 좋아요 토글 (posts/{id}/likes/{uid} 서브컬렉션 + likeCount, 트랜잭션).
+  /// [currentVoteState]는 호환용(무시). 성공 시 true=좋아요 적용됨, false=좋아요 취소, 실패 시 null.
   Future<bool?> togglePostLike(
     String postId, {
     int? currentVoteState,
@@ -520,46 +570,75 @@ class PostService {
   }) async {
     final uid = AuthService.instance.currentUser.value?.uid;
     if (uid == null || postId.isEmpty) return null;
+    bool? nowLiked;
+    String? notifyUid = postAuthorUid;
+    String? notifyTitle = postTitle;
     try {
-      final docRef = _col.doc(postId);
-      int voteState = currentVoteState ?? -2;
-      if (voteState == -2) {
-        final docSnap = await docRef.get();
-        if (!docSnap.exists) return null;
-        final data = docSnap.data()!;
+      await _firestore.runTransaction((transaction) async {
+        final postRef = _col.doc(postId);
+        final likeRef = _postLikeDoc(postId, uid);
+        final dislikeRef = _postDislikeDoc(postId, uid);
+        final postSnap = await transaction.get(postRef);
+        if (!postSnap.exists) {
+          nowLiked = null;
+          return;
+        }
+        final likeSnap = await transaction.get(likeRef);
+        final dislikeSnap = await transaction.get(dislikeRef);
+        final data = postSnap.data()!;
+        notifyUid ??= data['authorUid'] as String?;
+        notifyTitle ??= (data['title'] as String?) ?? '';
         final likedBy = List<String>.from((data['likedBy'] as List<dynamic>?)?.map((e) => e.toString()) ?? []);
         final dislikedBy = List<String>.from((data['dislikedBy'] as List<dynamic>?)?.map((e) => e.toString()) ?? []);
-        voteState = likedBy.contains(uid) ? 1 : (dislikedBy.contains(uid) ? -1 : 0);
-        if (postAuthorUid == null && postTitle == null) {
-          postAuthorUid = data['authorUid'] as String?;
-          postTitle = data['title'] as String? ?? '';
+        var inLikes = likeSnap.exists || likedBy.contains(uid);
+        var inDislikes = dislikeSnap.exists || dislikedBy.contains(uid);
+        if (inLikes && inDislikes) {
+          if (likeSnap.exists && !dislikeSnap.exists) {
+            inDislikes = false;
+          } else if (!likeSnap.exists && dislikeSnap.exists) {
+            inLikes = false;
+          } else if (likeSnap.exists && dislikeSnap.exists) {
+            inDislikes = false;
+          }
         }
-      }
-      final bool nowLiked = voteState != 1;
-      final int voteDelta = nowLiked ? (voteState == -1 ? 2 : 1) : -1;
-      if (nowLiked) {
-        await docRef.update(<String, dynamic>{
-          'dislikedBy': FieldValue.arrayRemove([uid]),
-          'likedBy': FieldValue.arrayUnion([uid]),
-          'votes': FieldValue.increment(voteDelta),
-          'likeCount': FieldValue.increment(1),
-        });
-        if (postAuthorUid != null) {
-          final myNickname = 'u/${UserProfileService.instance.nicknameNotifier.value ?? uid}';
-          await NotificationService.instance.send(
-            toUid: postAuthorUid,
-            type: NotificationType.postLike,
-            fromUser: myNickname,
-            postId: postId,
-            postTitle: postTitle ?? '',
-          );
+
+        if (inLikes) {
+          if (likeSnap.exists) transaction.delete(likeRef);
+          transaction.update(postRef, <String, dynamic>{
+            'likedBy': FieldValue.arrayRemove([uid]),
+            'likeCount': FieldValue.increment(-1),
+            'votes': FieldValue.increment(-1),
+          });
+          nowLiked = false;
+        } else {
+          transaction.set(likeRef, <String, dynamic>{
+            'uid': uid,
+            'createdAt': FieldValue.serverTimestamp(),
+          });
+          final updates = <String, dynamic>{
+            'likedBy': FieldValue.arrayUnion([uid]),
+            'likeCount': FieldValue.increment(1),
+            'votes': FieldValue.increment(inDislikes ? 2 : 1),
+          };
+          if (inDislikes) {
+            if (dislikeSnap.exists) transaction.delete(dislikeRef);
+            updates['dislikedBy'] = FieldValue.arrayRemove([uid]);
+            updates['dislikeCount'] = FieldValue.increment(-1);
+          }
+          transaction.update(postRef, updates);
+          nowLiked = true;
         }
-      } else {
-        await docRef.update(<String, dynamic>{
-          'likedBy': FieldValue.arrayRemove([uid]),
-          'votes': FieldValue.increment(-1),
-          'likeCount': FieldValue.increment(-1),
-        });
+      });
+      final notifyTargetUid = notifyUid;
+      if (nowLiked == true && notifyTargetUid != null && notifyTargetUid.isNotEmpty) {
+        final myNickname = 'u/${UserProfileService.instance.nicknameNotifier.value ?? uid}';
+        await NotificationService.instance.send(
+          toUid: notifyTargetUid,
+          type: NotificationType.postLike,
+          fromUser: myNickname,
+          postId: postId,
+          postTitle: notifyTitle ?? '',
+        );
       }
       return nowLiked;
     } catch (e, st) {
@@ -569,34 +648,66 @@ class PostService {
     }
   }
 
-  /// 글 싫어요 토글. 성공 시 현재 싫어요 여부(true=싫어요 함, false=취소), 실패 시 null.
+  /// 글 싫어요 토글 (posts/{id}/dislikes/{uid} + dislikeCount, 트랜잭션).
+  /// 성공 시 true=싫어요 적용, false=싫어요 취소, 실패 시 null.
   Future<bool?> togglePostDislike(String postId) async {
     final uid = AuthService.instance.currentUser.value?.uid;
     if (uid == null || postId.isEmpty) return null;
+    bool? nowDisliked;
     try {
-      final docRef = _col.doc(postId);
-      final docSnap = await docRef.get();
-      if (!docSnap.exists) return null;
-      final data = docSnap.data()!;
-      final likedBy = List<String>.from((data['likedBy'] as List<dynamic>?)?.map((e) => e.toString()) ?? []);
-      final dislikedBy = List<String>.from((data['dislikedBy'] as List<dynamic>?)?.map((e) => e.toString()) ?? []);
-      final nowDisliked = !dislikedBy.contains(uid);
-      int voteDelta = 0;
-      if (nowDisliked) {
-        if (likedBy.contains(uid)) voteDelta -= 1;
-        voteDelta -= 1;
-        await docRef.update({
-          'likedBy': FieldValue.arrayRemove([uid]),
-          'dislikedBy': FieldValue.arrayUnion([uid]),
-          'votes': FieldValue.increment(voteDelta),
-        });
-      } else {
-        voteDelta = 1;
-        await docRef.update({
-          'dislikedBy': FieldValue.arrayRemove([uid]),
-          'votes': FieldValue.increment(voteDelta),
-        });
-      }
+      await _firestore.runTransaction((transaction) async {
+        final postRef = _col.doc(postId);
+        final likeRef = _postLikeDoc(postId, uid);
+        final dislikeRef = _postDislikeDoc(postId, uid);
+        final postSnap = await transaction.get(postRef);
+        if (!postSnap.exists) {
+          nowDisliked = null;
+          return;
+        }
+        final likeSnap = await transaction.get(likeRef);
+        final dislikeSnap = await transaction.get(dislikeRef);
+        final data = postSnap.data()!;
+        final likedBy = List<String>.from((data['likedBy'] as List<dynamic>?)?.map((e) => e.toString()) ?? []);
+        final dislikedBy = List<String>.from((data['dislikedBy'] as List<dynamic>?)?.map((e) => e.toString()) ?? []);
+        var inLikes = likeSnap.exists || likedBy.contains(uid);
+        var inDislikes = dislikeSnap.exists || dislikedBy.contains(uid);
+        if (inLikes && inDislikes) {
+          if (likeSnap.exists && !dislikeSnap.exists) {
+            inDislikes = false;
+          } else if (!likeSnap.exists && dislikeSnap.exists) {
+            inLikes = false;
+          } else if (likeSnap.exists && dislikeSnap.exists) {
+            inDislikes = false;
+          }
+        }
+
+        if (inDislikes) {
+          if (dislikeSnap.exists) transaction.delete(dislikeRef);
+          transaction.update(postRef, <String, dynamic>{
+            'dislikedBy': FieldValue.arrayRemove([uid]),
+            'dislikeCount': FieldValue.increment(-1),
+            'votes': FieldValue.increment(1),
+          });
+          nowDisliked = false;
+        } else {
+          transaction.set(dislikeRef, <String, dynamic>{
+            'uid': uid,
+            'createdAt': FieldValue.serverTimestamp(),
+          });
+          final updates = <String, dynamic>{
+            'dislikedBy': FieldValue.arrayUnion([uid]),
+            'dislikeCount': FieldValue.increment(1),
+            'votes': FieldValue.increment(inLikes ? -2 : -1),
+          };
+          if (inLikes) {
+            if (likeSnap.exists) transaction.delete(likeRef);
+            updates['likedBy'] = FieldValue.arrayRemove([uid]);
+            updates['likeCount'] = FieldValue.increment(-1);
+          }
+          transaction.update(postRef, updates);
+          nowDisliked = true;
+        }
+      });
       return nowDisliked;
     } catch (e, st) {
       debugPrint('togglePostDislike 실패: $e');
@@ -797,7 +908,9 @@ class PostService {
 
   /// Firestore 페이지 단위 로드 (createdAt 내림차순).
   /// [type]이 있으면 클라이언트에서 [postMatchesFeedFilter] 적용 (기존과 동일).
-  /// [country]가 있으면 해당 국가만 반환 (매칭 없으면 빈 목록).
+  /// [country]가 null이거나 빈 문자열이면 국가 필터를 적용하지 않음.
+  /// 값이 있으면 클라이언트에서 [Post.documentVisibleInCountryFeed]로 필터.
+  /// 문서에 `country`가 없거나 비면 레거시로 간주해 해당 필터에서는 통과.
   /// createdAt 없는 문서는 이 쿼리에서 제외됨.
   Future<({List<Post> posts, DocumentSnapshot<Map<String, dynamic>>? lastDocument, bool hasMore})> getPosts({
     String? country,
@@ -807,15 +920,9 @@ class PostService {
   }) async {
     try {
       final countryEq = country?.trim();
-      final Query<Map<String, dynamic>> q;
-      if (countryEq != null && countryEq.isNotEmpty) {
-        q = _col
-            .where('country', isEqualTo: countryEq)
-            .orderBy('createdAt', descending: true)
-            .limit(limit);
-      } else {
-        q = _col.orderBy('createdAt', descending: true).limit(limit);
-      }
+      // 국가는 클라이언트 필터만 사용. 서버 where(country)는 필드 없는 문서를 완전히 누락시킴.
+      final Query<Map<String, dynamic>> q =
+          _col.orderBy('createdAt', descending: true).limit(limit);
       final snapshot = await (lastDocument != null ? q.startAfterDocument(lastDocument) : q).get();
       debugPrint('getPosts: page ${snapshot.docs.length} docs (limit $limit)');
       final board = type?.trim().toLowerCase();
@@ -825,6 +932,11 @@ class PostService {
         pageLast = doc;
         try {
           final data = doc.data();
+          if (countryEq != null &&
+              countryEq.isNotEmpty &&
+              !Post.documentVisibleInCountryFeed(data, countryEq)) {
+            continue;
+          }
           data['id'] = doc.id;
           final createdAt = data['createdAt'];
           final sortAt = createdAt is Timestamp
@@ -836,9 +948,6 @@ class PostService {
           if (board != null && board.isNotEmpty) {
             if (!postMatchesFeedFilter(post, board)) continue;
           }
-          if (countryEq != null && countryEq.isNotEmpty) {
-            if (post.country != countryEq) continue;
-          }
           out.add(post);
         } catch (e, st) {
           debugPrint('getPosts: 문서 ${doc.id} 파싱 실패 - $e');
@@ -846,7 +955,8 @@ class PostService {
         }
       }
       final hasMore = snapshot.docs.length >= limit;
-      return (posts: out, lastDocument: pageLast, hasMore: hasMore);
+      final hydrated = await hydratePostsViewerVotes(out);
+      return (posts: hydrated, lastDocument: pageLast, hasMore: hasMore);
     } catch (e, st) {
       debugPrint('getPosts 실패: $e');
       debugPrint('$st');

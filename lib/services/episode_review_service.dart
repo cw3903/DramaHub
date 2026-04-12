@@ -42,6 +42,12 @@ class EpisodeReviewService {
 
   static const _collection = 'episode_reviews';
 
+  /// [add] 중복 시 UI에서 `strings.get(duplicateReviewMessageKey)` 로 표시
+  static const duplicateReviewMessageKey = 'episodeReviewAlreadyExists';
+
+  /// Firestore 저장 실패 시
+  static const saveFailedMessageKey = 'episodeReviewSaveFailed';
+
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   /// key: '${dramaId}_$episodeNumber' -> 리뷰 목록 갱신용
@@ -76,39 +82,45 @@ class EpisodeReviewService {
     countNotifier.value = currentCount;
   }
 
-  /// 해당 회차 리뷰 목록 로드 (Firestore)
+  /// 해당 회차 리뷰 목록 로드 (Firestore). `createdAt` 오름차순(오래된 것이 위).
   Future<List<EpisodeReviewItem>> loadReviews(String dramaId, int episodeNumber) async {
     if (dramaId.isEmpty) return [];
     try {
       final snapshot = await _firestore
           .collection(_collection)
           .where('dramaId', isEqualTo: dramaId)
+          .where('episodeNumber', isEqualTo: episodeNumber)
+          .orderBy('createdAt', descending: false)
           .get();
-      var list = snapshot.docs
+      final list = snapshot.docs
           .map((d) => _itemFromFirestore(d.id, d.data()))
           .whereType<EpisodeReviewItem>()
-          .where((e) => e.episodeNumber == episodeNumber)
           .toList();
-      // 회원당 회차당 1개만: 같은 uid면 최신 1건만 유지
-      final byUid = <String, EpisodeReviewItem>{};
-      for (final e in list) {
-        if (e.uid.isEmpty) {
-          byUid['__no_uid_${e.id}'] = e;
-          continue;
-        }
-        final prev = byUid[e.uid];
-        if (prev == null || e.createdAt.isAfter(prev.createdAt)) byUid[e.uid] = e;
-      }
-      list = byUid.values.toList();
-      list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
       getNotifierForEpisode(dramaId, episodeNumber).value = list;
       _syncAverage(dramaId, episodeNumber, list);
       return list;
     } catch (e) {
       debugPrint('EpisodeReviewService loadReviews: $e');
-      final existing = getNotifierForEpisode(dramaId, episodeNumber).value;
-      _syncAverage(dramaId, episodeNumber, existing);
-      return existing;
+      try {
+        final snapshot = await _firestore
+            .collection(_collection)
+            .where('dramaId', isEqualTo: dramaId)
+            .get();
+        var list = snapshot.docs
+            .map((d) => _itemFromFirestore(d.id, d.data()))
+            .whereType<EpisodeReviewItem>()
+            .where((e) => e.episodeNumber == episodeNumber)
+            .toList();
+        list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+        getNotifierForEpisode(dramaId, episodeNumber).value = list;
+        _syncAverage(dramaId, episodeNumber, list);
+        return list;
+      } catch (e2) {
+        debugPrint('EpisodeReviewService loadReviews fallback: $e2');
+        final existing = getNotifierForEpisode(dramaId, episodeNumber).value;
+        _syncAverage(dramaId, episodeNumber, existing);
+        return existing;
+      }
     }
   }
 
@@ -132,30 +144,35 @@ class EpisodeReviewService {
     );
   }
 
-  /// 새 댓글 등록. 한 회원이 각 화당 1개만 가능 → 이미 있으면 수정으로 처리.
-  Future<void> add({
+  /// 새 리뷰 등록. 문서 id는 자동 생성, `uid`는 필드로만 저장.
+  /// 같은 회차에 동일 `uid` 문서가 이미 있으면 [duplicateReviewMessageKey] 반환 (덮어쓰기 없음).
+  /// 성공 시 null 반환.
+  Future<String?> add({
     required String dramaId,
     required int episodeNumber,
     required String comment,
     double? rating,
   }) async {
-    if (dramaId.isEmpty || comment.trim().isEmpty) return;
+    if (dramaId.isEmpty || comment.trim().isEmpty) return null;
     final uid = _uid;
     final notifier = getNotifierForEpisode(dramaId, episodeNumber);
+    final trimmed = comment.trim();
 
-    // 로그인 회원: 해당 회차에 이미 내 리뷰가 있으면 수정
     if (uid != null) {
-      final existingList = notifier.value.where((e) => e.uid == uid).toList();
-      final existing = existingList.isEmpty ? null : existingList.first;
-      if (existing != null) {
-        await update(
-          id: existing.id,
-          dramaId: dramaId,
-          episodeNumber: episodeNumber,
-          comment: comment.trim(),
-          rating: rating,
-        );
-        return;
+      try {
+        final dup = await _firestore
+            .collection(_collection)
+            .where('dramaId', isEqualTo: dramaId)
+            .where('episodeNumber', isEqualTo: episodeNumber)
+            .where('uid', isEqualTo: uid)
+            .limit(1)
+            .get();
+        if (dup.docs.isNotEmpty) {
+          return duplicateReviewMessageKey;
+        }
+      } catch (e) {
+        debugPrint('EpisodeReviewService add duplicate check: $e');
+        // 인덱스 미배포 등으로 쿼리 실패 시에는 저장 단계까지 진행
       }
     }
 
@@ -165,51 +182,51 @@ class EpisodeReviewService {
     final authorPhotoUrl = UserProfileService.instance.profileImageUrlNotifier.value;
     final authorAvatarColorIndex = UserProfileService.instance.avatarColorNotifier.value;
     final now = DateTime.now();
-    final trimmed = comment.trim();
-    final docId = uid != null
-        ? '${uid}_${dramaId}_${episodeNumber}_${now.millisecondsSinceEpoch}'
-        : 'local_${dramaId}_${episodeNumber}_${now.millisecondsSinceEpoch}';
 
-    final newItem = EpisodeReviewItem(
-      id: docId,
-      dramaId: dramaId,
-      episodeNumber: episodeNumber,
-      uid: uid ?? '',
-      authorName: authorName,
-      comment: trimmed,
-      createdAt: now,
-      rating: rating,
-      authorPhotoUrl: authorPhotoUrl,
-      authorAvatarColorIndex: authorAvatarColorIndex,
-    );
-    notifier.value = [newItem, ...notifier.value];
-    _syncAverage(dramaId, episodeNumber, notifier.value);
+    if (uid == null) {
+      final docId = 'local_${dramaId}_${episodeNumber}_${now.millisecondsSinceEpoch}';
+      final newItem = EpisodeReviewItem(
+        id: docId,
+        dramaId: dramaId,
+        episodeNumber: episodeNumber,
+        uid: '',
+        authorName: authorName,
+        comment: trimmed,
+        createdAt: now,
+        rating: rating,
+        authorPhotoUrl: authorPhotoUrl,
+        authorAvatarColorIndex: authorAvatarColorIndex,
+      );
+      notifier.value = [...notifier.value, newItem];
+      _syncAverage(dramaId, episodeNumber, notifier.value);
+      return null;
+    }
 
-    if (uid != null) {
-      try {
-        await _firestore.collection(_collection).doc(docId).set({
-          'uid': uid,
-          'dramaId': dramaId,
-          'episodeNumber': episodeNumber,
-          'authorName': authorName,
-          'comment': trimmed,
-          'rating': rating,
-          'createdAt': Timestamp.fromDate(now),
-          'authorPhotoUrl': authorPhotoUrl,
-          'authorAvatarColorIndex': authorAvatarColorIndex,
-        });
-        await loadReviews(dramaId, episodeNumber);
-        if (rating != null && rating > 0) {
-          await EpisodeRatingService.instance.setRating(
-            dramaId: dramaId,
-            episodeNumber: episodeNumber,
-            rating: rating.toDouble(),
-          );
-          await EpisodeRatingService.instance.loadEpisodeAverageRatings(dramaId);
-        }
-      } catch (e) {
-        debugPrint('EpisodeReviewService add: $e');
+    try {
+      await _firestore.collection(_collection).add({
+        'uid': uid,
+        'dramaId': dramaId,
+        'episodeNumber': episodeNumber,
+        'authorName': authorName,
+        'comment': trimmed,
+        'rating': rating,
+        'createdAt': FieldValue.serverTimestamp(),
+        'authorPhotoUrl': authorPhotoUrl,
+        'authorAvatarColorIndex': authorAvatarColorIndex,
+      });
+      await loadReviews(dramaId, episodeNumber);
+      if (rating != null && rating > 0) {
+        await EpisodeRatingService.instance.setRating(
+          dramaId: dramaId,
+          episodeNumber: episodeNumber,
+          rating: rating.toDouble(),
+        );
+        await EpisodeRatingService.instance.loadEpisodeAverageRatings(dramaId);
       }
+      return null;
+    } catch (e) {
+      debugPrint('EpisodeReviewService add: $e');
+      return saveFailedMessageKey;
     }
   }
 
@@ -228,7 +245,6 @@ class EpisodeReviewService {
         : (UserProfileService.instance.nicknameNotifier.value?.trim() ?? '회원');
     final authorPhotoUrl = UserProfileService.instance.profileImageUrlNotifier.value;
     final authorAvatarColorIndex = UserProfileService.instance.avatarColorNotifier.value;
-    final now = DateTime.now();
     final trimmed = comment.trim();
     if (uid != null) {
       try {
@@ -239,9 +255,9 @@ class EpisodeReviewService {
           'authorName': authorName,
           'comment': trimmed,
           'rating': rating,
-          'createdAt': FieldValue.serverTimestamp(),
           'authorPhotoUrl': authorPhotoUrl,
           'authorAvatarColorIndex': authorAvatarColorIndex,
+          'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
         await loadReviews(dramaId, episodeNumber);
         if (rating != null && rating > 0) {

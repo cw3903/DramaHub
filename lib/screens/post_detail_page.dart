@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/cupertino.dart';
 import '../widgets/browser_nav_bar.dart';
 import 'package:flutter/material.dart';
@@ -12,6 +13,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../services/auth_service.dart';
+import '../services/home_tab_visibility.dart';
 import '../services/block_service.dart';
 import '../services/level_service.dart';
 import '../services/message_service.dart';
@@ -451,6 +453,18 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
       newLikedBy.remove(uid);
     }
     final likeVoteDelta = nowLiked ? (_isDisliked ? 2 : 1) : -1;
+    var nextLikeCount = _post.likeCount;
+    var nextDislikeCount = _post.dislikeCount;
+    if (nowLiked) {
+      if (_isDisliked) {
+        nextDislikeCount = (nextDislikeCount - 1).clamp(0, 999999);
+        nextLikeCount += 1;
+      } else {
+        nextLikeCount += 1;
+      }
+    } else {
+      nextLikeCount = (nextLikeCount - 1).clamp(0, 999999);
+    }
     setState(() {
       _votePending = true;
       _isLiked = nowLiked;
@@ -459,12 +473,12 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
         votes: _post.votes + likeVoteDelta,
         likedBy: newLikedBy,
         dislikedBy: nowLiked ? _post.dislikedBy.where((u) => u != uid).toList() : _post.dislikedBy,
+        likeCount: nextLikeCount,
+        dislikeCount: nextDislikeCount,
       );
     });
-    final voteState = _isLiked ? 1 : (_isDisliked ? -1 : 0);
     PostService.instance.togglePostLike(
       widget.post.id,
-      currentVoteState: voteState,
       postAuthorUid: _post.authorUid,
       postTitle: _post.title,
     ).then((result) {
@@ -497,6 +511,18 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
     }
     final newLikedBy = nowDisliked ? _post.likedBy.where((u) => u != uid).toList() : _post.likedBy;
     final voteDelta = nowDisliked ? (_isLiked ? -2 : -1) : 1;
+    var nextLikeCountD = _post.likeCount;
+    var nextDislikeCountD = _post.dislikeCount;
+    if (nowDisliked) {
+      if (_isLiked) {
+        nextLikeCountD = (nextLikeCountD - 1).clamp(0, 999999);
+        nextDislikeCountD += 1;
+      } else {
+        nextDislikeCountD += 1;
+      }
+    } else {
+      nextDislikeCountD = (nextDislikeCountD - 1).clamp(0, 999999);
+    }
     setState(() {
       _votePending = true;
       _isDisliked = nowDisliked;
@@ -505,6 +531,8 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
         votes: _post.votes + voteDelta,
         likedBy: newLikedBy,
         dislikedBy: newDislikedBy,
+        likeCount: nextLikeCountD,
+        dislikeCount: nextDislikeCountD,
       );
     });
     PostService.instance.togglePostDislike(widget.post.id).then((result) {
@@ -1648,9 +1676,36 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
         else if (bodyRaw.isNotEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-            child: Text(
-              bodyRaw,
-              style: GoogleFonts.notoSansKr(fontSize: 16, color: cs.onSurface, height: 1.65),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (_isMine) ...[
+                  Padding(
+                    padding: const EdgeInsets.only(top: 3, right: 10),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: cs.secondary,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        s.get('myPostBadge'),
+                        style: GoogleFonts.notoSansKr(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: cs.onSecondary,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+                Expanded(
+                  child: Text(
+                    bodyRaw,
+                    style: GoogleFonts.notoSansKr(fontSize: 16, color: cs.onSurface, height: 1.65),
+                  ),
+                ),
+              ],
             ),
           ),
         Padding(
@@ -1680,7 +1735,7 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
                   ),
                   const SizedBox(width: 10),
                   Text(
-                    '${post.likedBy.length}',
+                    '${post.likeCount}',
                     style: GoogleFonts.notoSansKr(fontSize: 15, fontWeight: FontWeight.w600, color: cs.onSurfaceVariant),
                   ),
                 ],
@@ -1717,11 +1772,29 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final isTypedReview = postDisplayType(post) == 'review';
+    final boardKind = postDisplayType(post);
+    final hideViewsInTalkAskDetail = boardKind == 'talk' || boardKind == 'ask';
+    final deleteLabelColor =
+        (boardKind == 'talk' || boardKind == 'ask') ? Colors.redAccent : cs.error;
     _letterboxdEnsureSpoilerStateForPost(post.id);
-    return Scaffold(
-      resizeToAvoidBottomInset: true,
-      backgroundColor: theme.scaffoldBackgroundColor,
-      body: Stack(
+    return PopScope(
+      canPop: _backStack.isEmpty,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && _backStack.isNotEmpty) {
+          _goBack();
+        }
+      },
+      child: Scaffold(
+        resizeToAvoidBottomInset: true,
+        backgroundColor: theme.scaffoldBackgroundColor,
+        body: ValueListenableBuilder<bool>(
+          valueListenable: HomeTabVisibility.isHomeMainTabSelected,
+          builder: (context, isHomeMainTab, _) {
+          final hideBottomBrowserBar = isHomeMainTab;
+          final bottomScrollPad = hideBottomBrowserBar
+              ? (MediaQuery.paddingOf(context).bottom + 16)
+              : (_kBrowserNavBarHeight + MediaQuery.paddingOf(context).bottom);
+          return Stack(
         children: [
         Column(
         children: [
@@ -1779,15 +1852,8 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
                       children: [
                     if (isTypedReview) _buildLetterboxdReviewSection(context, theme, cs, post),
                     if (!isTypedReview) ...[
-                    // 본문 카드 (왼쪽 끝으로 붙임)
-                    Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 5),
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: cs.surface,
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: cs.outline.withOpacity(0.12), width: 1),
-                      ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(15, 8, 15, 8),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -1852,7 +1918,7 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
                                   );
                                 },
                               ),
-                              // ··· 버튼 (카드 오른쪽 상단)
+                              // ··· 버튼 (오른쪽 상단)
                               GestureDetector(
                                 onTapDown: (details) async {
                                   final value = await showMenu<String>(
@@ -2049,19 +2115,20 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
                               ],
                             ),
                           ),
-                          const SizedBox(width: 14),
-                          // 조회수
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(LucideIcons.eye, size: 16, color: cs.onSurfaceVariant),
-                              const SizedBox(width: 4),
-                              Text(
-                                formatCompactCount(post.views),
-                                style: GoogleFonts.notoSansKr(fontSize: 12, fontWeight: FontWeight.w500, color: cs.onSurfaceVariant),
-                              ),
-                            ],
-                          ),
+                          if (!hideViewsInTalkAskDetail) ...[
+                            const SizedBox(width: 14),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(LucideIcons.eye, size: 16, color: cs.onSurfaceVariant),
+                                const SizedBox(width: 4),
+                                Text(
+                                  formatCompactCount(post.views),
+                                  style: GoogleFonts.notoSansKr(fontSize: 12, fontWeight: FontWeight.w500, color: cs.onSurfaceVariant),
+                                ),
+                              ],
+                            ),
+                          ],
                           if (_isMine) ...[
                             const Spacer(),
                             GestureDetector(
@@ -2100,7 +2167,14 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
                               },
                               child: Padding(
                                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                                child: Text(s.get('delete'), style: GoogleFonts.notoSansKr(fontSize: 13, color: cs.error)),
+                                child: Text(
+                                  s.get('delete'),
+                                  style: GoogleFonts.notoSansKr(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: deleteLabelColor,
+                                  ),
+                                ),
                               ),
                             ),
                           ],
@@ -2121,7 +2195,9 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
                             children: [
                               Container(
                                 width: double.infinity,
-                                color: theme.cardTheme.color ?? cs.surface,
+                                color: theme.brightness == Brightness.light
+                                    ? cs.surfaceContainerHighest
+                                    : (theme.cardTheme.color ?? cs.surface),
                                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                                 child: Row(
                                   children: [
@@ -2168,49 +2244,8 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
                                   ],
                                 ),
                               ),
-                              Divider(height: 8, thickness: 8, color: cs.outline.withOpacity(0.2)),
-                              const SizedBox(height: 12),
-                              // 페이지네이션 적용된 댓글 목록
-                              if (post.commentsList.isEmpty)
-                                Padding(
-                                  padding: const EdgeInsets.symmetric(vertical: 40),
-                                  child: Center(
-                                    child: Column(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Container(
-                                          width: 80,
-                                          height: 80,
-                                          decoration: BoxDecoration(
-                                            color: const Color(0xFFEEF2FF),
-                                            shape: BoxShape.circle,
-                                          ),
-                                          child: const Icon(Icons.edit_note_rounded, size: 44, color: Color(0xFF5C7CFA)),
-                                        ),
-                                        const SizedBox(height: 16),
-                                        Text(
-                                          s.get('commentBeFirst'),
-                                          style: GoogleFonts.notoSansKr(fontSize: 14, color: cs.onSurfaceVariant, fontWeight: FontWeight.w500),
-                                        ),
-                                        const SizedBox(height: 14),
-                                        GestureDetector(
-                                          onTap: () => _commentFocusNode.requestFocus(),
-                                          child: Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                                            decoration: BoxDecoration(
-                                              color: const Color(0xFF3B82F6),
-                                              borderRadius: BorderRadius.circular(8),
-                                            ),
-                                            child: Text(
-                                              s.get('commentWrite'),
-                                              style: GoogleFonts.notoSansKr(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white),
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
+                              const SizedBox(height: 8),
+                              // 페이지네이션 적용된 댓글 목록 (빈 목록일 때는 플레이스홀더 없이 아래 입력칸만 사용)
                               ValueListenableBuilder<bool>(
                                 valueListenable: _commentSortByTop,
                                 builder: (context, sortByTop, _) {
@@ -2286,7 +2321,7 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
                     // 댓글 페이지네이션
                     Builder(builder: (context) {
                       final allComments = post.commentsList;
-                      if (allComments.isEmpty) return const SizedBox(height: 16);
+                      if (allComments.isEmpty) return const SizedBox.shrink();
                       final totalPages = (allComments.length / _commentsPerPage).ceil().clamp(1, 9999);
                       final safePage = _commentPage.clamp(0, totalPages - 1);
                       return Padding(
@@ -2418,8 +2453,8 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
                         onPostTap: (post) => _navigateToPost(post, tabIndex: _morePostsTabIndex),
                       ),
                     ),
-                    // 제일 아래 글 아래 영역: 네비 바 높이만큼 고정 → 글이 몇 개든 동일하게 보임
-                    SizedBox(height: _kBrowserNavBarHeight + MediaQuery.of(context).padding.bottom),
+                    // 제일 아래: 홈 메인 탭일 때는 브라우저 바 없음 → 패딩만
+                    SizedBox(height: bottomScrollPad),
                       ],
                     ),
                   ),
@@ -2429,20 +2464,32 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
           ),
         ],
         ),
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: BrowserNavBar(
-              canGoBack: true,
-              canGoForward: _forwardStack.isNotEmpty,
-              isRefreshing: _isRefreshing,
-              onBack: _goBack,
-              onForward: _goForward,
-              onRefresh: _loadLatestPost,
-            ),
-          ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: Visibility(
+                    visible: !hideBottomBrowserBar,
+                    maintainState: true,
+                    maintainAnimation: true,
+                    maintainSize: false,
+                    child: IgnorePointer(
+                      ignoring: hideBottomBrowserBar,
+                      child: BrowserNavBar(
+                        canGoBack: true,
+                        canGoForward: _forwardStack.isNotEmpty,
+                        isRefreshing: _isRefreshing,
+                        onBack: _goBack,
+                        onForward: _goForward,
+                        onRefresh: _loadLatestPost,
+                      ),
+                    ),
+                  ),
+                ),
         ],
+      );
+          },
+        ),
       ),
     );
   }
@@ -2473,10 +2520,16 @@ class _MorePostsSection extends StatefulWidget {
 }
 
 class _MorePostsSectionState extends State<_MorePostsSection> with SingleTickerProviderStateMixin {
+  static const List<String> _feedBoards = ['review', 'talk', 'ask'];
+
   late TabController _tabController;
-  List<Post> _posts = [];
-  bool _loading = true;
-  String? _error;
+  final List<List<Post>> _tabFeedPosts = List.generate(3, (_) => []);
+  final List<DocumentSnapshot<Map<String, dynamic>>?> _tabLastDoc = List.generate(3, (_) => null);
+  final List<bool> _tabHasMore = List.generate(3, (_) => true);
+  final List<bool> _tabLoadingMore = List.generate(3, (_) => false);
+  final List<bool> _tabInitialLoading = List.generate(3, (_) => true);
+  late final List<ScrollController> _feedScrollControllers;
+  String? _postsError;
 
   @override
   void initState() {
@@ -2486,51 +2539,148 @@ class _MorePostsSectionState extends State<_MorePostsSection> with SingleTickerP
       vsync: this,
       initialIndex: widget.initialTabIndex.clamp(0, 2),
     );
+    _feedScrollControllers = List.generate(3, (i) {
+      final c = ScrollController();
+      c.addListener(() => _onFeedScrollNearEnd(i));
+      return c;
+    });
     _tabController.addListener(() {
       if (!_tabController.indexIsChanging) {
         setState(() {});
         widget.onTabChanged?.call(_tabController.index);
+        _ensureFeedTabBootstrapped(_tabController.index);
       }
     });
-    // 홈탭에서 넘긴 목록이 있으면 즉시 사용(같은 피드 표시), 백그라운드에서 새로고침
+    // 홈에서 넘긴 캐시가 있으면 탭별로 나눠 채움(즉시 표시)
     final initial = widget.initialPosts;
     if (initial != null && initial.isNotEmpty) {
-      _posts = List.of(initial);
-      _loading = false;
+      for (final p in initial) {
+        if (BlockService.instance.isBlocked(p.author) || BlockService.instance.isPostBlocked(p.id)) continue;
+        if (p.id == widget.excludePostId) continue;
+        for (var t = 0; t < 3; t++) {
+          if (postMatchesFeedFilter(p, _feedBoards[t])) {
+            if (!_tabFeedPosts[t].any((e) => e.id == p.id)) {
+              _tabFeedPosts[t].add(p);
+            }
+          }
+        }
+      }
+      for (var t = 0; t < 3; t++) {
+        _tabInitialLoading[t] = _tabFeedPosts[t].isEmpty;
+      }
     }
-    _loadPosts();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _ensureFeedTabBootstrapped(widget.initialTabIndex.clamp(0, 2));
+    });
   }
 
   @override
   void dispose() {
+    for (final c in _feedScrollControllers) {
+      c.dispose();
+    }
     _tabController.dispose();
     super.dispose();
   }
 
   /// 글 상세 하단 DramaFeed: 홈과 동일한 국가 기준(us/kr/jp/cn).
-  String _currentCountryForRelatedPosts() {
+  String _viewerLanguageForFeed() {
     return AuthService.instance.isLoggedIn.value
         ? (UserProfileService.instance.signupCountryNotifier.value ?? LocaleService.instance.locale)
         : LocaleService.instance.locale;
   }
 
-  Future<void> _loadPosts() async {
-    if (mounted) setState(() { _loading = true; _error = null; });
-    try {
-      final list = await PostService.instance.getPostsAllPages(country: _currentCountryForRelatedPosts());
-      if (mounted) setState(() { _posts = list; _loading = false; });
-    } catch (e) {
-      if (mounted) setState(() { _loading = false; _error = e.toString(); });
+  void _onFeedScrollNearEnd(int tabIndex) {
+    if (_tabController.index != tabIndex) return;
+    final c = _feedScrollControllers[tabIndex];
+    if (!c.hasClients) return;
+    if (_tabLoadingMore[tabIndex] || !_tabHasMore[tabIndex]) return;
+    if (c.position.extentAfter > 200) return;
+    _loadFeedTabPage(tabIndex, reset: false);
+  }
+
+  void _ensureFeedTabBootstrapped(int tabIndex) {
+    if (tabIndex < 0 || tabIndex > 2) return;
+    if (_tabFeedPosts[tabIndex].isEmpty && !_tabLoadingMore[tabIndex]) {
+      _loadFeedTabPage(tabIndex, reset: false);
     }
   }
 
-  /// 홈탭과 동일한 피드 표시(현재 글도 목록에 포함)
-  List<Post> _reviewPosts() =>
-      _posts.where((p) => postMatchesFeedFilter(p, 'review')).toList();
-  List<Post> _talkPosts() =>
-      _posts.where((p) => postMatchesFeedFilter(p, 'talk')).toList();
-  List<Post> _askPosts() =>
-      _posts.where((p) => postMatchesFeedFilter(p, 'ask')).toList();
+  Future<void> _loadFeedTabPage(int tabIndex, {required bool reset}) async {
+    if (tabIndex < 0 || tabIndex > 2) return;
+    if (_tabLoadingMore[tabIndex]) return;
+    if (!reset && !_tabHasMore[tabIndex]) return;
+
+    if (reset) {
+      setState(() {
+        _tabFeedPosts[tabIndex].clear();
+        _tabLastDoc[tabIndex] = null;
+        _tabHasMore[tabIndex] = true;
+        _postsError = null;
+      });
+    }
+
+    if (_tabFeedPosts[tabIndex].isEmpty) {
+      setState(() => _tabInitialLoading[tabIndex] = true);
+    }
+    setState(() => _tabLoadingMore[tabIndex] = true);
+
+    try {
+      final viewerLanguage = _viewerLanguageForFeed();
+      final accumulated = <Post>[];
+      DocumentSnapshot<Map<String, dynamic>>? cursor = _tabLastDoc[tabIndex];
+      var pageHasMore = _tabHasMore[tabIndex];
+
+      for (var attempt = 0; attempt < 24; attempt++) {
+        final page = await PostService.instance.getPosts(
+          country: viewerLanguage,
+          type: _feedBoards[tabIndex],
+          lastDocument: cursor,
+          limit: 20,
+        );
+        pageHasMore = page.hasMore;
+        cursor = page.lastDocument;
+        for (final p in page.posts) {
+          if (p.id == widget.excludePostId) continue;
+          if (!BlockService.instance.isBlocked(p.author) && !BlockService.instance.isPostBlocked(p.id)) {
+            accumulated.add(p);
+          }
+        }
+        if (accumulated.isNotEmpty || !pageHasMore || page.lastDocument == null) {
+          break;
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        final ids = _tabFeedPosts[tabIndex].map((e) => e.id).toSet();
+        for (final p in accumulated) {
+          if (ids.add(p.id)) {
+            _tabFeedPosts[tabIndex].add(p);
+          }
+        }
+        _tabLastDoc[tabIndex] = cursor;
+        _tabHasMore[tabIndex] = pageHasMore;
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() => _postsError = e.toString());
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _tabLoadingMore[tabIndex] = false;
+          _tabInitialLoading[tabIndex] = false;
+        });
+      }
+    }
+  }
+
+  List<Post> _postsForTab(int tabIndex) {
+    final ex = widget.excludePostId;
+    return _tabFeedPosts[tabIndex].where((p) => p.id != ex).toList();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2629,25 +2779,48 @@ class _MorePostsSectionState extends State<_MorePostsSection> with SingleTickerP
           final idx = _tabController.index;
           void onUpdated(Post updated) {
             setState(() {
-              final i = _posts.indexWhere((p) => p.id == updated.id);
-              if (i >= 0) _posts[i] = updated;
+              for (var t = 0; t < 3; t++) {
+                final j = _tabFeedPosts[t].indexWhere((p) => p.id == updated.id);
+                if (j >= 0) {
+                  if (postMatchesFeedFilter(updated, _feedBoards[t])) {
+                    _tabFeedPosts[t][j] = updated;
+                  } else {
+                    _tabFeedPosts[t].removeAt(j);
+                  }
+                } else if (postMatchesFeedFilter(updated, _feedBoards[t]) &&
+                    updated.id != widget.excludePostId &&
+                    !BlockService.instance.isBlocked(updated.author) &&
+                    !BlockService.instance.isPostBlocked(updated.id)) {
+                  _tabFeedPosts[t].insert(0, updated);
+                }
+              }
             });
           }
 
           void onDeleted(Post deleted) {
-            setState(() => _posts.removeWhere((p) => p.id == deleted.id));
+            setState(() {
+              for (var t = 0; t < 3; t++) {
+                _tabFeedPosts[t].removeWhere((p) => p.id == deleted.id);
+              }
+            });
           }
 
           if (idx == 0) {
             return PopularPostsTab(
-              posts: _reviewPosts(),
-              isLoading: _loading,
-              error: _error,
+              posts: _postsForTab(0),
+              isLoading: _tabFeedPosts[0].isEmpty && _tabInitialLoading[0],
+              error: _postsError,
               currentUserAuthor: widget.currentUserAuthor,
-              onRefresh: _loadPosts,
+              onRefresh: () => _loadFeedTabPage(0, reset: true),
               enablePullToRefresh: false,
               shrinkWrap: true,
               useReviewLayout: true,
+              useLetterboxdReviewLayout: true,
+              useSimpleFeedLayout: true,
+              reviewLetterboxdInlineFeed: true,
+              feedScrollController: _feedScrollControllers[0],
+              feedLoadingMore: _tabLoadingMore[0],
+              feedHasMore: _tabHasMore[0],
               onPostUpdated: onUpdated,
               onPostDeleted: onDeleted,
               onPostTap: widget.onPostTap,
@@ -2655,26 +2828,34 @@ class _MorePostsSectionState extends State<_MorePostsSection> with SingleTickerP
           }
           if (idx == 1) {
             return FreeBoardTab(
-              posts: _talkPosts(),
-              isLoading: _loading,
-              error: _error,
+              posts: _postsForTab(1),
+              isLoading: _tabFeedPosts[1].isEmpty && _tabInitialLoading[1],
+              error: _postsError,
               currentUserAuthor: widget.currentUserAuthor,
-              onRefresh: _loadPosts,
+              onRefresh: () => _loadFeedTabPage(1, reset: true),
               enablePullToRefresh: false,
               shrinkWrap: true,
+              useSimpleFeedLayout: true,
+              feedScrollController: _feedScrollControllers[1],
+              feedLoadingMore: _tabLoadingMore[1],
+              feedHasMore: _tabHasMore[1],
               onPostUpdated: onUpdated,
               onPostDeleted: onDeleted,
               onPostTap: widget.onPostTap,
             );
           }
           return QuestionBoardTab(
-            posts: _askPosts(),
-            isLoading: _loading,
-            error: _error,
+            posts: _postsForTab(2),
+            isLoading: _tabFeedPosts[2].isEmpty && _tabInitialLoading[2],
+            error: _postsError,
             currentUserAuthor: widget.currentUserAuthor,
-            onRefresh: _loadPosts,
+            onRefresh: () => _loadFeedTabPage(2, reset: true),
             enablePullToRefresh: false,
             shrinkWrap: true,
+            useSimpleFeedLayout: true,
+            feedScrollController: _feedScrollControllers[2],
+            feedLoadingMore: _tabLoadingMore[2],
+            feedHasMore: _tabHasMore[2],
             onPostUpdated: onUpdated,
             onPostDeleted: onDeleted,
             onPostTap: widget.onPostTap,
@@ -2929,7 +3110,8 @@ class _CommentTileState extends State<_CommentTile> {
   Widget build(BuildContext context) {
     final comment = widget.comment;
     final s = widget.strings;
-    final cs = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
     final useAlignedButtons = widget.contentWidth != null;
     final contentWidth = widget.contentWidth ?? double.infinity;
 
@@ -3076,7 +3258,9 @@ class _CommentTileState extends State<_CommentTile> {
     // depth 0: 풀 width 카드 (레딧 스타일 - 좌우 여백 없음)
     if (widget.depth == 0) {
       return Container(
-        color: cs.surface,
+        color: theme.brightness == Brightness.light
+            ? cs.surfaceContainerHighest
+            : cs.surface,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
@@ -3096,7 +3280,6 @@ class _CommentTileState extends State<_CommentTile> {
                       onReplyTap: widget.onReplyTap,
                     )).toList(),
               ),
-            Divider(height: 8, thickness: 8, color: cs.outline.withOpacity(0.2)),
           ],
         ),
       );

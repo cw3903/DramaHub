@@ -20,6 +20,7 @@ import '../models/drama.dart';
 import '../services/drama_list_service.dart';
 import 'video_select_page.dart';
 import '../widgets/optimized_network_image.dart';
+import '../widgets/review_arrow_tag_chip.dart';
 
 const int _maxTitleLength = 80;
 const int _maxPhotos = 4;
@@ -60,6 +61,8 @@ class _WritePostPageState extends State<WritePostPage> {
   final _linkController = TextEditingController();
   final _reviewBodyController = TextEditingController();
   final _tagsController = TextEditingController();
+  /// 리뷰 태그(엔터로 추가). 입력칸 아래 미리보기 후 피드에 표시.
+  final List<String> _reviewTags = [];
   final _dramaSearchController = TextEditingController();
   final _titleFocus = FocusNode();
   final _bodyFocus = FocusNode();
@@ -120,7 +123,10 @@ class _WritePostPageState extends State<WritePostPage> {
         _isFirstWatch = p.isFirstWatch;
         _allowReply = p.allowReply;
         _reviewBodyController.text = p.body ?? '';
-        _tagsController.text = p.tags.join(', ');
+        _reviewTags
+          ..clear()
+          ..addAll(p.tags);
+        _tagsController.clear();
       }
     } else {
       _boardKind = widget.initialBoard ??
@@ -128,7 +134,6 @@ class _WritePostPageState extends State<WritePostPage> {
       _selectedCategory = _boardKind == 'ask' ? 'question' : 'free';
     }
     _reviewBodyController.addListener(_onReviewFieldChanged);
-    _tagsController.addListener(_onReviewFieldChanged);
     _dramaSearchController.addListener(_onReviewFieldChanged);
   }
 
@@ -154,7 +159,6 @@ class _WritePostPageState extends State<WritePostPage> {
       try { File(_videoThumbPath!).deleteSync(); } catch (_) {}
     }
     _reviewBodyController.removeListener(_onReviewFieldChanged);
-    _tagsController.removeListener(_onReviewFieldChanged);
     _dramaSearchController.removeListener(_onReviewFieldChanged);
     _titleController.dispose();
     _bodyController.dispose();
@@ -331,14 +335,42 @@ class _WritePostPageState extends State<WritePostPage> {
     return 'talk';
   }
 
-  List<String> _parseTagsInput() {
+  bool _reviewTagsContains(String tag) {
+    final lower = tag.toLowerCase();
+    return _reviewTags.any((e) => e.toLowerCase() == lower);
+  }
+
+  /// 입력칸에 남긴 글자를 태그로 합친 뒤 비움 (작성 버튼 직전 등).
+  void _flushPendingTagInput() {
     final raw = _tagsController.text.trim();
-    if (raw.isEmpty) return const [];
-    return raw
+    if (raw.isEmpty) return;
+    final parts = raw
         .split(RegExp(r'[,#\s]+'))
         .map((s) => s.trim())
         .where((s) => s.isNotEmpty)
         .toList();
+    if (parts.isEmpty) return;
+    setState(() {
+      for (final t in parts) {
+        if (!_reviewTagsContains(t)) _reviewTags.add(t);
+      }
+      _tagsController.clear();
+    });
+  }
+
+  void _onReviewTagFieldSubmitted(String _) {
+    final t = _tagsController.text.trim();
+    if (t.isEmpty) return;
+    setState(() {
+      if (!_reviewTagsContains(t)) _reviewTags.add(t);
+      _tagsController.clear();
+    });
+  }
+
+  List<String> _reviewTagsForPost() => List<String>.from(_reviewTags);
+
+  void _removeReviewTag(String tag) {
+    setState(() => _reviewTags.remove(tag));
   }
 
   List<DramaItem> _dramasForSearchGrid(String? country) {
@@ -429,6 +461,7 @@ class _WritePostPageState extends State<WritePostPage> {
         );
         return;
       }
+      _flushPendingTagInput();
     }
 
     setState(() => _isSubmitting = true);
@@ -675,7 +708,7 @@ class _WritePostPageState extends State<WritePostPage> {
         hasSpoiler: _boardKind == 'review' ? !_noSpoilers : false,
         isLiked: _boardKind == 'review' ? _reviewDramaLiked : base.isLiked,
         isFirstWatch: _boardKind == 'review' ? _isFirstWatch : base.isFirstWatch,
-        tags: _boardKind == 'review' ? _parseTagsInput() : base.tags,
+        tags: _boardKind == 'review' ? _reviewTagsForPost() : base.tags,
         allowReply: _boardKind == 'review' ? _allowReply : base.allowReply,
       );
       final result = await PostService.instance.updatePost(updated);
@@ -717,7 +750,7 @@ class _WritePostPageState extends State<WritePostPage> {
       hasSpoiler: _boardKind == 'review' ? !_noSpoilers : false,
       isLiked: _boardKind == 'review' ? _reviewDramaLiked : false,
       isFirstWatch: _boardKind == 'review' ? _isFirstWatch : true,
-      tags: _boardKind == 'review' ? _parseTagsInput() : const [],
+      tags: _boardKind == 'review' ? _reviewTagsForPost() : const [],
       allowReply: _boardKind == 'review' ? _allowReply : true,
       authorPhotoUrl: UserProfileService.instance.profileImageUrlNotifier.value,
       authorAvatarColorIndex: UserProfileService.instance.avatarColorNotifier.value,
@@ -1150,37 +1183,8 @@ class _WritePostPageState extends State<WritePostPage> {
     );
   }
 
-  Widget _reviewOptionChip({
-    required Widget icon,
-    required bool selected,
-    required VoidCallback onTap,
-    required ColorScheme cs,
-  }) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(14),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          decoration: BoxDecoration(
-            color: selected ? cs.primaryContainer : cs.surfaceContainerHighest.withOpacity(0.45),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: cs.outline.withOpacity(0.25)),
-          ),
-          child: IconTheme(
-            data: IconThemeData(
-              color: selected ? cs.onPrimaryContainer : cs.onSurfaceVariant,
-              size: 22,
-            ),
-            child: icon,
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _buildReviewLayout(ColorScheme cs, ThemeData theme) {
+    final s = CountryScope.of(context).strings;
     final country = CountryScope.maybeOf(context)?.country;
     final thumbUrl = _pickDramaThumb?.trim();
     final showHttpThumb = thumbUrl != null && thumbUrl.startsWith('http');
@@ -1261,89 +1265,75 @@ class _WritePostPageState extends State<WritePostPage> {
             ),
             style: GoogleFonts.notoSansKr(fontSize: 15, color: cs.onSurface),
           ),
-          AnimatedSize(
-            duration: const Duration(milliseconds: 260),
-            curve: Curves.easeOutCubic,
-            alignment: Alignment.topCenter,
-            child: _dramaSearchExpanded
-                ? Padding(
-                    padding: const EdgeInsets.only(top: 12),
-                    child: ValueListenableBuilder<List<DramaItem>>(
-                      valueListenable: DramaListService.instance.listNotifier,
-                      builder: (context, _, __) {
-                        final grid = _dramasForSearchGrid(country);
-                        return ConstrainedBox(
-                          constraints: const BoxConstraints(maxHeight: 300),
-                          child: GridView.builder(
-                            shrinkWrap: true,
-                            physics: const ClampingScrollPhysics(),
-                            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: 3,
-                              childAspectRatio: 0.68,
-                              crossAxisSpacing: 8,
-                              mainAxisSpacing: 8,
-                            ),
-                            itemCount: grid.length,
-                            itemBuilder: (context, i) {
-                              final item = grid[i];
-                              final url = DramaListService.instance.getDisplayImageUrl(item.id, country) ?? item.imageUrl;
-                              final title = DramaListService.instance.getDisplayTitle(item.id, country);
-                              final ok = url != null && url.startsWith('http');
-                              return Material(
-                                color: cs.surfaceContainerLow,
-                                borderRadius: BorderRadius.circular(10),
-                                clipBehavior: Clip.antiAlias,
-                                child: InkWell(
-                                  onTap: () => _selectDramaForReview(item, country),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                                    children: [
-                                      Expanded(
-                                        child: ok
-                                            ? OptimizedNetworkImage(imageUrl: url, fit: BoxFit.cover)
-                                            : Container(
-                                                color: cs.surfaceContainerHighest,
-                                                alignment: Alignment.center,
-                                                child: Icon(Icons.movie_outlined, color: cs.onSurfaceVariant),
-                                              ),
-                                      ),
-                                      Padding(
-                                        padding: const EdgeInsets.fromLTRB(6, 4, 6, 6),
-                                        child: Text(
-                                          title,
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: GoogleFonts.notoSansKr(fontSize: 11, fontWeight: FontWeight.w600),
+          // AnimatedSize + GridView in ListView는 SliverMultiBoxAdaptor assertion을 유발할 수 있어
+          // 조건부 표시만 사용 (애니메이션 생략).
+          if (_dramaSearchExpanded)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: ValueListenableBuilder<List<DramaItem>>(
+                valueListenable: DramaListService.instance.listNotifier,
+                builder: (context, _, __) {
+                  final grid = _dramasForSearchGrid(country);
+                  return ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 300),
+                    child: GridView.builder(
+                      key: const ValueKey('drama_search_grid'),
+                      shrinkWrap: true,
+                      physics: const ClampingScrollPhysics(),
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 3,
+                        childAspectRatio: 0.68,
+                        crossAxisSpacing: 8,
+                        mainAxisSpacing: 8,
+                      ),
+                      itemCount: grid.length,
+                      itemBuilder: (context, i) {
+                        final item = grid[i];
+                        final url = DramaListService.instance.getDisplayImageUrl(item.id, country) ?? item.imageUrl;
+                        final title = DramaListService.instance.getDisplayTitle(item.id, country);
+                        final ok = url != null && url.startsWith('http');
+                        return Material(
+                          key: ValueKey('drama_pick_${item.id}'),
+                          color: cs.surfaceContainerLow,
+                          borderRadius: BorderRadius.circular(10),
+                          clipBehavior: Clip.antiAlias,
+                          child: InkWell(
+                            onTap: () => _selectDramaForReview(item, country),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Expanded(
+                                  child: ok
+                                      ? OptimizedNetworkImage(imageUrl: url, fit: BoxFit.cover)
+                                      : Container(
+                                          color: cs.surfaceContainerHighest,
+                                          alignment: Alignment.center,
+                                          child: Icon(Icons.movie_outlined, color: cs.onSurfaceVariant),
                                         ),
-                                      ),
-                                    ],
+                                ),
+                                Padding(
+                                  padding: const EdgeInsets.fromLTRB(6, 4, 6, 6),
+                                  child: Text(
+                                    title,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: GoogleFonts.notoSansKr(fontSize: 11, fontWeight: FontWeight.w600),
                                   ),
                                 ),
-                              );
-                            },
+                              ],
+                            ),
                           ),
                         );
                       },
                     ),
-                  )
-                : const SizedBox.shrink(),
-          ),
-          const SizedBox(height: 18),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              _buildHalfStarRating(cs),
-              const Spacer(),
-              IconButton(
-                tooltip: 'Like',
-                onPressed: () => setState(() => _reviewDramaLiked = !_reviewDramaLiked),
-                icon: Icon(
-                  _reviewDramaLiked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-                  size: 30,
-                  color: _reviewDramaLiked ? const Color(0xFFE53935) : cs.onSurfaceVariant,
-                ),
+                  );
+                },
               ),
-            ],
+            ),
+          const SizedBox(height: 18),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: _buildHalfStarRating(cs),
           ),
           const SizedBox(height: 16),
           TextField(
@@ -1351,39 +1341,34 @@ class _WritePostPageState extends State<WritePostPage> {
             minLines: 5,
             maxLines: 12,
             textCapitalization: TextCapitalization.sentences,
-            decoration: deco('Add review...'),
+            decoration: deco(s.get('reviewPlaceholder')),
             style: GoogleFonts.notoSansKr(fontSize: 16, height: 1.45, color: cs.onSurface),
           ),
           const SizedBox(height: 12),
           TextField(
             controller: _tagsController,
-            decoration: deco('Add tags...'),
+            maxLines: 1,
+            textInputAction: TextInputAction.done,
+            onSubmitted: _onReviewTagFieldSubmitted,
+            decoration: deco(s.get('reviewTagInputHint')),
             style: GoogleFonts.notoSansKr(fontSize: 15, color: cs.onSurface),
           ),
-          const SizedBox(height: 18),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              _reviewOptionChip(
-                icon: Icon(LucideIcons.eye),
-                selected: _isFirstWatch,
-                onTap: () => setState(() => _isFirstWatch = !_isFirstWatch),
-                cs: cs,
-              ),
-              _reviewOptionChip(
-                icon: const Icon(Icons.masks_rounded),
-                selected: _noSpoilers,
-                onTap: () => setState(() => _noSpoilers = !_noSpoilers),
-                cs: cs,
-              ),
-              _reviewOptionChip(
-                icon: Icon(LucideIcons.message_circle),
-                selected: _allowReply,
-                onTap: () => setState(() => _allowReply = !_allowReply),
-                cs: cs,
-              ),
-            ],
-          ),
+          if (_reviewTags.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final t in _reviewTags)
+                  ReviewArrowTagChip(
+                    key: ValueKey('review_tag_$t'),
+                    label: t,
+                    compact: false,
+                    onRemove: () => _removeReviewTag(t),
+                  ),
+              ],
+            ),
+          ],
         ],
       ),
     );

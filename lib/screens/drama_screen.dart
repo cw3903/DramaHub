@@ -7,7 +7,6 @@ import '../models/drama.dart';
 import '../services/drama_list_service.dart';
 import '../services/drama_view_service.dart';
 import '../services/review_service.dart';
-import '../utils/format_utils.dart';
 import '../widgets/country_scope.dart';
 import '../widgets/optimized_network_image.dart';
 import 'drama_detail_page.dart';
@@ -654,7 +653,6 @@ class _DramaGridView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final r = _dramaScreenScale(context);
     final horizontalGap = 10 * r;
     return GridView.builder(
@@ -680,14 +678,10 @@ class _DramaGridView extends StatelessWidget {
         final rawRating =
             ReviewService.instance.getByDramaId(item.id)?.rating ?? item.rating;
         final rating = rawRating > 0 ? rawRating : 0.0;
-        final viewsDisplay = viewCounts.isNotEmpty && viewCounts.containsKey(item.id)
-            ? formatCompactCount(viewCounts[item.id]!)
-            : item.views;
         return _DramaGridCard(
           displayTitle: displayTitle,
           displaySubtitle: displaySubtitle,
           imageUrl: imageUrl,
-          viewsDisplay: viewsDisplay,
           rating: rating,
           onTap: () => onTapCard(item),
           posterPlaceholder: posterPlaceholder(context),
@@ -849,14 +843,10 @@ class _DramaGridWithPaginationState extends State<_DramaGridWithPagination> {
                 if (widget.ratingOverrides != null && widget.ratingOverrides!.containsKey(item.id)) {
                   rating = widget.ratingOverrides![item.id]!;
                 }
-                final viewsDisplay = widget.viewCounts.isNotEmpty && widget.viewCounts.containsKey(item.id)
-                    ? formatCompactCount(widget.viewCounts[item.id]!)
-                    : item.views;
                 return _DramaGridCard(
                   displayTitle: displayTitle,
                   displaySubtitle: displaySubtitle,
                   imageUrl: imageUrl,
-                  viewsDisplay: viewsDisplay,
                   rating: rating,
                   onTap: () => widget.onTapCard(item),
                   posterPlaceholder: widget.posterPlaceholder(context),
@@ -882,7 +872,6 @@ class _DramaGridCard extends StatelessWidget {
     required this.displayTitle,
     required this.displaySubtitle,
     required this.imageUrl,
-    required this.viewsDisplay,
     required this.rating,
     required this.onTap,
     required this.posterPlaceholder,
@@ -891,7 +880,6 @@ class _DramaGridCard extends StatelessWidget {
   final String displayTitle;
   final String displaySubtitle;
   final String? imageUrl;
-  final String viewsDisplay;
   final double rating;
   final VoidCallback onTap;
   final Widget posterPlaceholder;
@@ -920,47 +908,18 @@ class _DramaGridCard extends StatelessWidget {
               SizedBox(
                 width: w,
                 height: posterHeight,
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(8 * r),
-                      child: imageUrl != null && imageUrl!.isNotEmpty
-                          ? OptimizedNetworkImage(
-                              imageUrl: imageUrl!,
-                              fit: BoxFit.cover,
-                              memCacheWidth: 320,
-                              memCacheHeight: 448,
-                              placeholder: posterPlaceholder,
-                              errorWidget: posterPlaceholder,
-                            )
-                          : posterPlaceholder,
-                    ),
-                    Positioned(
-                      right: 6 * r,
-                      bottom: 6 * r,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            LucideIcons.play,
-                            size: 12 * r,
-                            color: Colors.white,
-                          ),
-                          SizedBox(width: 4 * r),
-                          Text(
-                            viewsDisplay,
-                            style: GoogleFonts.notoSansKr(
-                              fontSize: (11 * r).roundToDouble(),
-                              color: Colors.white,
-                              fontWeight: FontWeight.w500,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8 * r),
+                  child: imageUrl != null && imageUrl!.isNotEmpty
+                      ? OptimizedNetworkImage(
+                          imageUrl: imageUrl!,
+                          fit: BoxFit.cover,
+                          memCacheWidth: 320,
+                          memCacheHeight: 448,
+                          placeholder: posterPlaceholder,
+                          errorWidget: posterPlaceholder,
+                        )
+                      : posterPlaceholder,
                 ),
               ),
               SizedBox(height: 5 * r),

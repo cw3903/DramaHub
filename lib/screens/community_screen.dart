@@ -30,6 +30,7 @@ import 'community_search_page.dart';
 import '../widgets/blind_refresh_indicator.dart';
 import '../widgets/community_board_tabs.dart';
 import '../utils/post_board_utils.dart';
+import '../services/home_tab_visibility.dart';
 
 /// 홈 탭 - 인기글 / 자유게시판 (모던 스타일)
 class CommunityScreen extends StatefulWidget {
@@ -86,7 +87,11 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
     BlockService.instance.addListener(_onBlockListChanged);
     LocaleService.instance.localeNotifier.addListener(_onLocaleForFeedReload);
     ReviewService.instance.reviewFeedPostsDeletedTick.addListener(_onReviewFeedPostsDeletedTick);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      if (AuthService.instance.isLoggedIn.value) {
+        await UserProfileService.instance.loadUserProfile();
+      }
       if (!mounted) return;
       _feedTabListenerArmed = true;
       _loadFeedTabPage(0, reset: true);
@@ -94,8 +99,17 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
   }
 
   void _onFeedTabControllerTick() {
-    if (!_feedTabListenerArmed || _tabController.indexIsChanging) return;
+    if (!_feedTabListenerArmed) return;
     final idx = _tabController.index;
+    // 애니메이션 중에도 목적 탭이 비어 있으면 곧바로 로딩 표시(빈 화면 문구 깜빡임 방지)
+    if (_tabController.indexIsChanging) {
+      if (_tabFeedPosts[idx].isEmpty &&
+          !_tabLoadingMore[idx] &&
+          !_tabInitialLoading[idx]) {
+        setState(() => _tabInitialLoading[idx] = true);
+      }
+      return;
+    }
     if (idx != _feedPrevTabIndex) {
       _resetFeedTab(_feedPrevTabIndex);
       _feedPrevTabIndex = idx;
@@ -116,7 +130,8 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
       _tabLastDoc[tabIndex] = null;
       _tabHasMore[tabIndex] = true;
       _tabLoadingMore[tabIndex] = false;
-      _tabInitialLoading[tabIndex] = false;
+      // 다시 들어올 때까지 빈 목록이면 로딩으로 간주(빈 화면 문구 깜빡임 방지)
+      _tabInitialLoading[tabIndex] = true;
       _postsError = null;
     });
   }
@@ -137,9 +152,16 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
   }
 
   String _viewerLanguageForFeed() {
-    return AuthService.instance.isLoggedIn.value
-        ? (UserProfileService.instance.signupCountryNotifier.value ?? LocaleService.instance.locale)
-        : LocaleService.instance.locale;
+    if (!AuthService.instance.isLoggedIn.value) {
+      final loc = LocaleService.instance.locale;
+      return loc.isNotEmpty ? loc : 'us';
+    }
+    final signupCountry = UserProfileService.instance.signupCountryNotifier.value;
+    if (signupCountry != null && signupCountry.isNotEmpty) {
+      return signupCountry;
+    }
+    final locale = LocaleService.instance.locale;
+    return locale.isNotEmpty ? locale : 'us';
   }
 
   void _mergeIntoMasterFeeds(List<Post> incoming) {
@@ -311,8 +333,16 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
   void _onExternalWriteTap() => _openWritePost();
 
   void _onAuthChanged() {
-    if (AuthService.instance.isLoggedIn.value) _loadCurrentUserAuthor();
-    else if (mounted) setState(() => _currentUserAuthor = null);
+    if (AuthService.instance.isLoggedIn.value) {
+      _loadCurrentUserAuthor();
+      // 로그인 직후 프로필·가입 국가 로드 후 피드 재조회 (signupCountry null 레이스 방지)
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        await UserProfileService.instance.loadUserProfile();
+        if (mounted) _refreshActiveFeedTab();
+      });
+    } else if (mounted) {
+      setState(() => _currentUserAuthor = null);
+    }
   }
 
   Future<void> _loadCurrentUserAuthor() async {
@@ -461,38 +491,23 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
         automaticallyImplyLeading: false,
         centerTitle: false,
         toolbarHeight: 52 * r,
-        leadingWidth: 54 * r,
-        leading: Builder(
-          builder: (context) => GestureDetector(
-            onTap: () => Scaffold.of(context).openDrawer(),
-            child: Center(
-              child: Padding(
-                padding: EdgeInsets.only(left: 10 * r),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Container(width: 16 * r, height: 1.8 * r, decoration: BoxDecoration(color: cs.onSurface, borderRadius: BorderRadius.circular(2 * r))),
-                    SizedBox(height: 4 * r),
-                    Container(width: 16 * r, height: 1.8 * r, decoration: BoxDecoration(color: cs.onSurface, borderRadius: BorderRadius.circular(2 * r))),
-                    SizedBox(height: 4 * r),
-                    Container(width: 16 * r, height: 1.8 * r, decoration: BoxDecoration(color: cs.onSurface, borderRadius: BorderRadius.circular(2 * r))),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-        titleSpacing: 4 * r,
+        leadingWidth: 0,
+        titleSpacing: 0,
         title: Transform.translate(
           offset: Offset(0, -3 * r),
-          child: Text(
-            'DramaFeed',
-            style: GoogleFonts.notoSansKr(
-              fontSize: 22 * r,
-              fontWeight: FontWeight.w900,
-              color: cs.onSurface,
-              letterSpacing: -0.5,
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Padding(
+              padding: EdgeInsets.only(left: 14 * r),
+              child: Text(
+                'DramaFeed',
+                style: GoogleFonts.notoSansKr(
+                  fontSize: 22 * r,
+                  fontWeight: FontWeight.w900,
+                  color: cs.onSurface,
+                  letterSpacing: -0.5,
+                ),
+              ),
             ),
           ),
         ),
@@ -509,7 +524,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
                   ),
                   child: Padding(
                     padding: EdgeInsets.only(left: 4 * r, right: 6 * r),
-                    child: Icon(LucideIcons.search, size: 26 * r, color: cs.onSurface),
+                    child: Icon(LucideIcons.search, size: 20 * r, color: cs.onSurface),
                   ),
                 ),
                 ValueListenableBuilder<int>(
@@ -530,23 +545,23 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
                           children: [
                       Icon(
                         unread > 0 ? LucideIcons.bell_dot : LucideIcons.bell,
-                        size: 26 * r,
+                        size: 20 * r,
                         color: unread > 0 ? cs.primary : cs.onSurface,
                       ),
                       if (unread > 0)
                         Positioned(
-                          top: -4 * r,
-                          right: -4 * r,
+                          top: -3 * r,
+                          right: -3 * r,
                           child: Container(
-                            padding: EdgeInsets.all(3 * r),
+                            padding: EdgeInsets.all(2.5 * r),
                             decoration: BoxDecoration(
                               color: cs.primary,
                               shape: BoxShape.circle,
                             ),
-                            constraints: BoxConstraints(minWidth: 16 * r, minHeight: 16 * r),
+                            constraints: BoxConstraints(minWidth: 14 * r, minHeight: 14 * r),
                             child: Text(
                               unread > 99 ? '99+' : '$unread',
-                              style: TextStyle(color: cs.onPrimary, fontSize: 9 * r, fontWeight: FontWeight.w700),
+                              style: TextStyle(color: cs.onPrimary, fontSize: 8 * r, fontWeight: FontWeight.w700),
                               textAlign: TextAlign.center,
                             ),
                           ),
@@ -603,7 +618,14 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
                                   left: leftPad + (tabW + tabGap) * i,
                                   top: 0,
                                   child: GestureDetector(
-                                    onTap: () => _tabController.animateTo(i),
+                                    onTap: () {
+                                      if (_tabFeedPosts[i].isEmpty &&
+                                          !_tabLoadingMore[i] &&
+                                          !_tabInitialLoading[i]) {
+                                        setState(() => _tabInitialLoading[i] = true);
+                                      }
+                                      _tabController.animateTo(i);
+                                    },
                                     behavior: HitTestBehavior.opaque,
                                     child: SizedBox(
                                       width: tabW,
@@ -658,7 +680,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
             children: [
               PopularPostsTab(
                 posts: _tabFeedPosts[0],
-                isLoading: _tabFeedPosts[0].isEmpty && _tabInitialLoading[0],
+                isLoading: _tabFeedPosts[0].isEmpty && (_tabInitialLoading[0] || _tabLoadingMore[0]),
                 error: _postsError,
                 currentUserAuthor: _currentUserAuthor,
                 onRefresh: _refreshActiveFeedTab,
@@ -675,7 +697,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
               ),
               FreeBoardTab(
                 posts: _tabFeedPosts[1],
-                isLoading: _tabFeedPosts[1].isEmpty && _tabInitialLoading[1],
+                isLoading: _tabFeedPosts[1].isEmpty && (_tabInitialLoading[1] || _tabLoadingMore[1]),
                 error: _postsError,
                 currentUserAuthor: _currentUserAuthor,
                 onRefresh: _refreshActiveFeedTab,
@@ -690,7 +712,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
               ),
               QuestionBoardTab(
                 posts: _tabFeedPosts[2],
-                isLoading: _tabFeedPosts[2].isEmpty && _tabInitialLoading[2],
+                isLoading: _tabFeedPosts[2].isEmpty && (_tabInitialLoading[2] || _tabLoadingMore[2]),
                 error: _postsError,
                 currentUserAuthor: _currentUserAuthor,
                 onRefresh: _refreshActiveFeedTab,
@@ -705,18 +727,39 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
               ),
             ],
           ),
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: BrowserNavBar(
-              canGoBack: _navBackStack.isNotEmpty,
-              canGoForward: _navForwardStack.isNotEmpty,
-              isRefreshing: _tabLoadingMore[_tabController.index],
-              onRefresh: _refreshActiveFeedTab,
-              onBack: _navBack,
-              onForward: _navForward,
-            ),
+          // 하단 메인에서 '홈'일 때 < · 새로고침 · > 는 보이지 않게(트리·상태는 유지)
+          ValueListenableBuilder<bool>(
+            valueListenable: HomeTabVisibility.isHomeMainTabSelected,
+            builder: (context, isHomeMainTab, _) {
+              return AnimatedBuilder(
+                animation: _tabController,
+                builder: (context, _) {
+                  final showBar = !isHomeMainTab;
+                  return Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: Visibility(
+                      visible: showBar,
+                      maintainState: true,
+                      maintainAnimation: true,
+                      maintainSize: false,
+                      child: IgnorePointer(
+                        ignoring: !showBar,
+                        child: BrowserNavBar(
+                          canGoBack: _navBackStack.isNotEmpty,
+                          canGoForward: _navForwardStack.isNotEmpty,
+                          isRefreshing: _tabLoadingMore[_tabController.index],
+                          onRefresh: _refreshActiveFeedTab,
+                          onBack: _navBack,
+                          onForward: _navForward,
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              );
+            },
           ),
         ],
         ),

@@ -15,6 +15,24 @@
         { "fieldPath": "authorUid", "order": "ASCENDING" },
         { "fieldPath": "dramaId", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "episode_reviews",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "dramaId", "order": "ASCENDING" },
+        { "fieldPath": "episodeNumber", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "episode_reviews",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "dramaId", "order": "ASCENDING" },
+        { "fieldPath": "episodeNumber", "order": "ASCENDING" },
+        { "fieldPath": "uid", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

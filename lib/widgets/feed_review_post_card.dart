@@ -68,6 +68,7 @@ class FeedReviewPostCard extends StatelessWidget {
     final dramaTitle = post.dramaTitle?.trim().isNotEmpty == true ? post.dramaTitle! : post.title;
     final body = (post.body ?? '').replaceAll(RegExp(r'\s+'), ' ').trim();
     final r = (post.rating ?? 0).clamp(0.0, 5.0);
+    final isMyReview = currentUserAuthor != null && post.author == currentUserAuthor;
 
     Widget previewCore = Text(
       body.isEmpty ? ' ' : body,
@@ -111,6 +112,34 @@ class FeedReviewPostCard extends StatelessWidget {
             ],
           )
         : previewCore;
+
+    Widget previewBlock = preview;
+    if (isMyReview) {
+      previewBlock = Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 1, right: 8),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: cs.secondary,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                s.get('myPostBadge'),
+                style: GoogleFonts.notoSansKr(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: cs.onSecondary,
+                ),
+              ),
+            ),
+          ),
+          Expanded(child: preview),
+        ],
+      );
+    }
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
@@ -170,7 +199,7 @@ class FeedReviewPostCard extends StatelessWidget {
                             ],
                           ),
                           const SizedBox(height: 6),
-                          preview,
+                          previewBlock,
                         ],
                       ),
                     ),

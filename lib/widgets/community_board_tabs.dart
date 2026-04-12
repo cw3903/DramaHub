@@ -190,10 +190,20 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
       newLikedBy.remove(uid);
     }
     final likeVoteDelta = !liked ? (p.dislikedBy.contains(uid) ? 2 : 1) : -1;
+    var nextLikeCount = p.likeCount;
+    var nextDislikeCount = p.dislikeCount;
+    if (!liked) {
+      if (p.dislikedBy.contains(uid)) nextDislikeCount = (nextDislikeCount - 1).clamp(0, 999999);
+      nextLikeCount += 1;
+    } else {
+      nextLikeCount = (nextLikeCount - 1).clamp(0, 999999);
+    }
     final optimistic = p.copyWith(
       votes: p.votes + likeVoteDelta,
       likedBy: newLikedBy,
       dislikedBy: !liked ? p.dislikedBy.where((u) => u != uid).toList() : p.dislikedBy,
+      likeCount: nextLikeCount,
+      dislikeCount: nextDislikeCount,
     );
     widget.onPostUpdated?.call(optimistic);
     final ok = await PostService.instance.togglePostLike(
@@ -437,7 +447,7 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
                   ),
                   const SizedBox(width: 4),
                   Text(
-                    formatCompactCount(p.likedBy.length),
+                    formatCompactCount(p.likeCount),
                     style: GoogleFonts.notoSansKr(fontSize: 10, fontWeight: FontWeight.w600, color: cs.onSurfaceVariant),
                   ),
                 ],
@@ -768,7 +778,7 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
           if (useLb && isTypedReview(post)) {
             final inline = widget.reviewLetterboxdInlineFeed;
             return RepaintBoundary(
-              key: ValueKey('lb_${post.id}'),
+              key: ValueKey('lb_${post.id}_${inline && _expandedReviewComments.contains(post.id)}'),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -790,7 +800,10 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
                     onPostDeleted: onPostDeleted,
                   ),
                   if (inline && _expandedReviewComments.contains(post.id))
-                    _buildReviewInlineCommentsListPanel(post, cs),
+                    KeyedSubtree(
+                      key: ValueKey('rv_inline_comments_${post.id}'),
+                      child: _buildReviewInlineCommentsListPanel(post, cs),
+                    ),
                 ],
               ),
             );
@@ -930,7 +943,7 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
           if (useLb && isTypedReview(post)) {
             final inline = widget.reviewLetterboxdInlineFeed;
             return RepaintBoundary(
-              key: ValueKey('lb_${post.id}'),
+              key: ValueKey('lb_${post.id}_${inline && _expandedReviewComments.contains(post.id)}'),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -952,7 +965,10 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
                     onPostDeleted: onPostDeleted,
                   ),
                   if (inline && _expandedReviewComments.contains(post.id))
-                    _buildReviewInlineCommentsListPanel(post, cs),
+                    KeyedSubtree(
+                      key: ValueKey('rv_inline_comments_${post.id}'),
+                      child: _buildReviewInlineCommentsListPanel(post, cs),
+                    ),
                 ],
               ),
             );

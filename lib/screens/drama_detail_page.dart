@@ -147,6 +147,7 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
       child: Scaffold(
         backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         body: CustomScrollView(
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         slivers: [
           // 상단: 포스터 + 제목 + 조회수 한 덩어리 (로드 전에는 아이템 기본 조회수 표시, 로드 후 서버 값)
           SliverToBoxAdapter(
@@ -308,6 +309,7 @@ class _HeaderSection extends StatelessWidget {
     }();
     final displayImageUrl = DramaListService.instance.getDisplayImageUrl(detail.item.id, country)
         ?? detail.item.imageUrl;
+    final viewsLine = viewsDisplay ?? detail.item.views;
 
     return Stack(
       children: [
@@ -405,7 +407,7 @@ class _HeaderSection extends StatelessWidget {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      '${viewsDisplay ?? detail.item.views} 조회수',
+                      strings.get('dramaViewCount').replaceAll('%s', viewsLine),
                       style: GoogleFonts.notoSansKr(
                         fontSize: 14,
                         color: cs.onSurfaceVariant,
@@ -688,7 +690,7 @@ class _EpisodeReviewPanelState extends State<_EpisodeReviewPanel> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                        '${widget.episodeNumber}화',
+                        widget.strings.get('episodeLabel').replaceAll('%d', '${widget.episodeNumber}'),
                         style: GoogleFonts.notoSansKr(
                           fontSize: 16,
                           fontWeight: FontWeight.w700,
@@ -714,7 +716,7 @@ class _EpisodeReviewPanelState extends State<_EpisodeReviewPanel> {
                       ),
                       const SizedBox(width: 6),
                       Text(
-                        '(${count}명 참여)',
+                        widget.strings.get('episodeReviewRaterCount').replaceAll('%d', '$count'),
                         style: GoogleFonts.notoSansKr(
                           fontSize: 13,
                           color: cs.onSurfaceVariant,
@@ -726,7 +728,10 @@ class _EpisodeReviewPanelState extends State<_EpisodeReviewPanel> {
               ),
               IconButton(
                 icon: Icon(LucideIcons.x, size: 20, color: cs.onSurfaceVariant),
-                onPressed: widget.onClose,
+                onPressed: () {
+                  FocusManager.instance.primaryFocus?.unfocus();
+                  widget.onClose();
+                },
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
               ),
@@ -1071,9 +1076,12 @@ class _EpisodeReviewInput extends StatefulWidget {
 }
 
 class _EpisodeReviewInputState extends State<_EpisodeReviewInput> {
+  late final FocusNode _focusNode;
+
   @override
   void initState() {
     super.initState();
+    _focusNode = FocusNode();
     widget.controller.addListener(_onTextChanged);
   }
 
@@ -1090,6 +1098,7 @@ class _EpisodeReviewInputState extends State<_EpisodeReviewInput> {
 
   @override
   void dispose() {
+    _focusNode.dispose();
     widget.controller.removeListener(_onTextChanged);
     super.dispose();
   }
@@ -1100,19 +1109,27 @@ class _EpisodeReviewInputState extends State<_EpisodeReviewInput> {
     final hasText = widget.controller.text.trim().isNotEmpty;
     final hasRating = widget.rating != null && widget.rating! > 0;
     final canSubmit = hasText && hasRating;
+    final borderColor = cs.outline.withValues(alpha: 0.4);
+    final radius = BorderRadius.circular(8);
     return SizedBox(
       height: 72,
       child: Stack(
         alignment: Alignment.centerRight,
         children: [
           TextField(
+            focusNode: _focusNode,
+            onTapOutside: (_) => _focusNode.unfocus(),
             controller: widget.controller,
             decoration: InputDecoration(
-              hintText: '리뷰를 입력하세요',
+              hintText: widget.strings.get('reviewPlaceholder'),
               hintStyle: GoogleFonts.notoSansKr(fontSize: 13, color: cs.onSurfaceVariant),
-              border: InputBorder.none,
+              filled: true,
+              fillColor: cs.surface,
               isDense: true,
               contentPadding: const EdgeInsets.fromLTRB(8, 12, 44, 12),
+              border: OutlineInputBorder(borderRadius: radius, borderSide: BorderSide(color: borderColor)),
+              enabledBorder: OutlineInputBorder(borderRadius: radius, borderSide: BorderSide(color: borderColor)),
+              focusedBorder: OutlineInputBorder(borderRadius: radius, borderSide: BorderSide(color: borderColor)),
             ),
             style: GoogleFonts.notoSansKr(fontSize: 13, color: cs.onSurface),
             maxLines: 3,
@@ -1137,13 +1154,24 @@ class _EpisodeReviewInputState extends State<_EpisodeReviewInput> {
                           rating: rating,
                         );
                       } else {
-                        await EpisodeReviewService.instance.add(
+                        final err = await EpisodeReviewService.instance.add(
                           dramaId: widget.dramaId,
                           episodeNumber: widget.episodeNumber,
                           comment: text,
                           rating: rating,
                         );
+                        if (!context.mounted) return;
+                        if (err != null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(widget.strings.get(err), style: GoogleFonts.notoSansKr()),
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                          return;
+                        }
                       }
+                      if (!context.mounted) return;
                       widget.controller.clear();
                       widget.onSubmitted();
                     }
@@ -1312,6 +1340,7 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
                   final myRating = EpisodeRatingService.instance.getMyRating(widget.dramaId, ep.number);
                   return GestureDetector(
                     onTap: () {
+                      FocusManager.instance.primaryFocus?.unfocus();
                       if (_selectedEpisodeNumber == ep.number) {
                         setState(() => _selectedEpisodeNumber = null);
                       } else if (_selectedEpisodeNumber != null) {

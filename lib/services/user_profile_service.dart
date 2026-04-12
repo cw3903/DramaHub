@@ -140,6 +140,9 @@ class UserProfileService {
     _loaded = true;
   }
 
+  /// 커뮤니티 피드 등에서 가입 국가·프로필을 먼저 채운 뒤 호출할 때 사용. [loadIfNeeded]와 동일.
+  Future<void> loadUserProfile() => loadIfNeeded();
+
   Future<void> setNickname(String nickname) async {
     final uid = AuthService.instance.currentUser.value?.uid;
     if (uid == null) return;
