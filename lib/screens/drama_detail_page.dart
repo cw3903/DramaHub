@@ -194,7 +194,12 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
                   ),
                   const SizedBox(height: 24),
                   // 비슷한 작품
-                  _SimilarSection(similar: detail.similar, strings: s),
+                  _SimilarSection(
+                    dramaId: detail.item.id,
+                    genreDisplay: detail.genre,
+                    preloadedSimilar: detail.similar,
+                    strings: s,
+                  ),
                   const SizedBox(height: 100),
                 ],
               ),
@@ -1216,8 +1221,11 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
   @override
   void initState() {
     super.initState();
-    EpisodeRatingService.instance.getMyRatingsForDrama(widget.dramaId);
-    EpisodeRatingService.instance.loadEpisodeAverageRatings(widget.dramaId);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      EpisodeRatingService.instance.getMyRatingsForDrama(widget.dramaId);
+      EpisodeRatingService.instance.loadEpisodeAverageRatings(widget.dramaId);
+    });
   }
 
   @override
@@ -2884,18 +2892,64 @@ class _ReviewCardState extends State<_ReviewCard> {
   }
 }
 
-class _SimilarSection extends StatelessWidget {
-  const _SimilarSection({required this.similar, required this.strings});
+class _SimilarSection extends StatefulWidget {
+  const _SimilarSection({
+    required this.dramaId,
+    required this.genreDisplay,
+    this.preloadedSimilar = const [],
+    required this.strings,
+  });
 
-  final List<DramaItem> similar;
+  final String dramaId;
+  final String genreDisplay;
+  final List<DramaItem> preloadedSimilar;
   final dynamic strings;
 
   @override
+  State<_SimilarSection> createState() => _SimilarSectionState();
+}
+
+class _SimilarSectionState extends State<_SimilarSection> {
+  List<DramaItem> _similar = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.preloadedSimilar.isNotEmpty) {
+      _similar = widget.preloadedSimilar;
+      _loading = false;
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        // 한 프레임 그린 뒤 + microtask로 무거운 장르 스캔을 조금 미뤄 전환 애니메이션이 끊기지 않게 함
+        Future<void>.microtask(() {
+          if (!mounted) return;
+          final country = CountryScope.maybeOf(context)?.country
+              ?? UserProfileService.instance.signupCountryNotifier.value;
+          final list = DramaListService.instance.getSimilarByGenre(
+            widget.dramaId,
+            widget.genreDisplay,
+            country,
+            limit: 8,
+            maxScan: 700,
+          );
+          if (!mounted) return;
+          setState(() {
+            _similar = list;
+            _loading = false;
+          });
+        });
+      });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    // 설정 언어 기준으로 비슷한 작품 제목·장르·이미지 표시
     final country = CountryScope.maybeOf(context)?.country
         ?? UserProfileService.instance.signupCountryNotifier.value;
     final colorScheme = Theme.of(context).colorScheme;
+    final strings = widget.strings;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2910,12 +2964,23 @@ class _SimilarSection extends StatelessWidget {
         const SizedBox(height: 12),
         SizedBox(
           height: 208,
-          child: ListView.separated(
+          child: _loading && _similar.isEmpty
+              ? Center(
+                  child: SizedBox(
+                    width: 28,
+                    height: 28,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.5,
+                      color: colorScheme.primary,
+                    ),
+                  ),
+                )
+              : ListView.separated(
             scrollDirection: Axis.horizontal,
-            itemCount: similar.length,
+            itemCount: _similar.length,
             separatorBuilder: (_, __) => const SizedBox(width: 12),
             itemBuilder: (context, i) {
-              final item = similar[i];
+              final item = _similar[i];
               final imageUrl = DramaListService.instance.getDisplayImageUrl(item.id, country);
               final genre = DramaListService.instance.getDisplaySubtitle(item.id, country);
               final rating = item.rating;

@@ -12,6 +12,7 @@ import '../services/user_profile_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/format_utils.dart';
 import '../utils/post_board_utils.dart';
+import '../config/app_moderators.dart';
 import '../widgets/country_scope.dart';
 import '../widgets/optimized_network_image.dart';
 import '../widgets/share_sheet.dart';
@@ -266,6 +267,7 @@ class _FeedPostCardState extends State<FeedPostCard> {
     final cs = Theme.of(context).colorScheme;
     final s = CountryScope.of(context).strings;
     final isMyPost = widget.currentUserAuthor != null && post.author == widget.currentUserAuthor;
+    final canModerateDelete = isAppModerator() && !isMyPost;
 
     final selected = await showModalBottomSheet<String>(
       context: context,
@@ -292,6 +294,12 @@ class _FeedPostCardState extends State<FeedPostCard> {
                 title: Text(s.get('edit'), style: GoogleFonts.notoSansKr(fontSize: 15)),
                 onTap: () => Navigator.pop(context, 'edit'),
               ),
+              ListTile(
+                leading: Icon(LucideIcons.trash_2, color: cs.error),
+                title: Text(s.get('delete'), style: GoogleFonts.notoSansKr(fontSize: 15, color: cs.error)),
+                onTap: () => Navigator.pop(context, 'delete'),
+              ),
+            ] else if (canModerateDelete) ...[
               ListTile(
                 leading: Icon(LucideIcons.trash_2, color: cs.error),
                 title: Text(s.get('delete'), style: GoogleFonts.notoSansKr(fontSize: 15, color: cs.error)),

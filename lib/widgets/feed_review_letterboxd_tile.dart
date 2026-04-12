@@ -5,6 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../models/post.dart';
 import '../screens/write_post_page.dart';
+import '../config/app_moderators.dart';
 import '../services/post_service.dart';
 import '../services/user_profile_service.dart';
 import 'country_scope.dart';
@@ -275,8 +276,14 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
       ],
     );
 
-    final bool showOwnerActions =
-        isMyReview && (onPostUpdated != null || onPostDeleted != null);
+    final bool canModeratorDelete =
+        isAppModerator() && onPostDeleted != null && !isMyReview;
+    final bool showOwnerActions = (isMyReview &&
+            (onPostUpdated != null || onPostDeleted != null)) ||
+        canModeratorDelete;
+    final bool showEditInRow = isMyReview && onPostUpdated != null;
+    final bool showDeleteInRow =
+        onPostDeleted != null && (isMyReview || isAppModerator());
     final ownerActionGray = cs.onSurfaceVariant;
     final linkStyle = GoogleFonts.notoSansKr(
       fontSize: 11,
@@ -289,7 +296,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
       ownerEditDeleteRow = Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (onPostUpdated != null)
+          if (showEditInRow)
             TextButton(
               style: TextButton.styleFrom(
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
@@ -312,14 +319,14 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
               },
               child: Text(s.get('edit'), style: linkStyle),
             ),
-          if (onPostUpdated != null && onPostDeleted != null)
+          if (showEditInRow && showDeleteInRow)
             Text(
               '·',
               style: linkStyle.copyWith(
                 color: cs.onSurfaceVariant.withValues(alpha: 0.45),
               ),
             ),
-          if (onPostDeleted != null)
+          if (showDeleteInRow)
             TextButton(
               style: TextButton.styleFrom(
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),

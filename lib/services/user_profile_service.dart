@@ -6,6 +6,7 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'auth_service.dart';
+import 'follow_service.dart';
 import 'post_service.dart';
 
 /// 프로필(닉네임, 프로필 사진) Firestore users/{uid} + Storage profile/{uid}
@@ -107,6 +108,7 @@ class UserProfileService {
       nicknameNotifier.value = null;
       profileImageUrlNotifier.value = null;
       signupCountryNotifier.value = null;
+      FollowService.instance.stopFollowingCountListener();
       _loaded = true;
       return;
     }
@@ -137,6 +139,7 @@ class UserProfileService {
       profileImageUrlNotifier.value = null;
       avatarColorNotifier.value = null;
     }
+    FollowService.instance.startFollowingCountListener(uid);
     _loaded = true;
   }
 
@@ -156,6 +159,7 @@ class UserProfileService {
     nicknameNotifier.value = null;
     profileImageUrlNotifier.value = null;
     avatarColorNotifier.value = null;
+    FollowService.instance.stopFollowingCountListener();
     _loaded = false;
     _lastLoadedUid = null;
   }

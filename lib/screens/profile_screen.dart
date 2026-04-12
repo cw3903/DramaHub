@@ -9,19 +9,17 @@ import '../theme/app_theme.dart';
 import '../widgets/country_scope.dart';
 import '../services/auth_service.dart';
 import '../services/level_service.dart';
-import '../models/message.dart';
 import '../services/message_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/saved_service.dart';
 import '../services/watch_history_service.dart';
 import '../services/review_service.dart';
 import '../services/share_service.dart';
-import '../services/user_level_service.dart';
 import '../services/user_profile_service.dart';
 import '../services/theme_service.dart';
 import '../services/post_service.dart';
-import 'level_info_page.dart';
-import 'messages_screen.dart';
+import '../services/follow_service.dart';
+import 'follow_screen.dart';
 import 'profile_photo_preview_page.dart';
 import 'saved_screen.dart';
 import 'share_settings_page.dart';
@@ -105,11 +103,7 @@ class ProfileScreen extends StatelessWidget {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
 
-    return ValueListenableBuilder<int>(
-      valueListenable: LevelService.instance.totalPointsNotifier,
-      builder: (context, totalPoints, _) {
-        final level = LevelService.instance.getLevel(totalPoints);
-        return Scaffold(
+    return Scaffold(
           backgroundColor: theme.scaffoldBackgroundColor,
           body: SafeArea(
             child: RefreshIndicator(
@@ -253,57 +247,6 @@ class ProfileScreen extends StatelessWidget {
                             );
                           },
                         ),
-                        const SizedBox(height: 6),
-                        // 레벨 · 활동지수
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(
-                              '${s.get('level')} $level  ·  ',
-                              style: GoogleFonts.notoSansKr(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                                color: cs.onSurfaceVariant,
-                              ),
-                            ),
-                            ShaderMask(
-                              blendMode: BlendMode.srcIn,
-                              shaderCallback: (bounds) => const LinearGradient(
-                                colors: [Color(0xFFFF6B35), Color(0xFFE63946)],
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
-                              ).createShader(bounds),
-                              child: Icon(Icons.local_fire_department_rounded, size: 16, color: Colors.white),
-                            ),
-                            Text(
-                              ' ${s.get('activityScore')} $totalPoints',
-                              style: GoogleFonts.notoSansKr(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: cs.onSurface,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
-                        // 커뮤니티 랭킹 (아래 줄)
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(LucideIcons.trophy, size: 14, color: const Color(0xFFFFB366)),
-                            const SizedBox(width: 4),
-                            Text(
-                              '${s.get('communityRanking')} #${(1000 - totalPoints).clamp(1, 999)}',
-                              style: GoogleFonts.notoSansKr(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                                color: cs.onSurfaceVariant,
-                              ),
-                            ),
-                          ],
-                        ),
                       ],
                     ),
                   ),
@@ -328,12 +271,11 @@ class ProfileScreen extends StatelessWidget {
                       ),
                       child: ListenableBuilder(
                             listenable: Listenable.merge([
-                              MessageService.instance.conversations,
+                              FollowService.instance.followingCountNotifier,
                               _profileStatsRefreshNotifier,
                             ]),
                             builder: (context, child) {
-                              final convList = MessageService.instance.conversations.value;
-                              final messageCount = convList.length;
+                              final followCount = FollowService.instance.followingCountNotifier.value;
                               return FutureBuilder<({String postAuthor, String commentAuthor, int postCount, int commentCount})>(
                                 future: () async {
                                   final base = await UserProfileService.instance.getAuthorBaseName();
@@ -379,13 +321,30 @@ class ProfileScreen extends StatelessWidget {
                                       Container(width: 1, height: 28, color: cs.outline.withOpacity(0.4)),
                                       Expanded(
                                         child: _StatCard(
-                                          icon: LucideIcons.mail,
-                                          label: s.get('messages'),
-                                          count: messageCount,
-                                          onTap: () => Navigator.push(
-                                            context,
-                                            CupertinoPageRoute(builder: (_) => const MessagesScreen()),
-                                          ),
+                                          icon: LucideIcons.user_plus,
+                                          label: s.get('profileStatFollow'),
+                                          count: followCount,
+                                          onTap: () async {
+                                            await UserProfileService.instance.loadIfNeeded();
+                                            if (!context.mounted) return;
+                                            final uid = AuthService.instance.currentUser.value?.uid;
+                                            if (uid == null) return;
+                                            final nick = UserProfileService.instance.nicknameNotifier.value?.trim();
+                                            final disp = nick != null && nick.isNotEmpty
+                                                ? nick
+                                                : (AuthService.instance.currentUser.value?.displayName?.trim() ??
+                                                    'Member');
+                                            if (!context.mounted) return;
+                                            Navigator.push<void>(
+                                              context,
+                                              CupertinoPageRoute<void>(
+                                                builder: (_) => FollowScreen(
+                                                  networkOwnerUid: uid,
+                                                  ownerDisplayName: disp,
+                                                ),
+                                              ),
+                                            );
+                                          },
                                           isLight: true,
                                         ),
                                       ),
@@ -483,174 +442,11 @@ class ProfileScreen extends StatelessWidget {
                     ),
                   ),
                 ),
-                const SliverToBoxAdapter(child: SizedBox(height: 10)),
-                // ─── 무료 시청 횟수 카드 ───
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: ValueListenableBuilder<int>(
-                      valueListenable: UserLevelService.instance.freeViewCredits,
-                      builder: (context, credits, _) {
-                        return Container(
-                          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 18),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(20),
-                            gradient: const LinearGradient(
-                              begin: Alignment.centerLeft,
-                              end: Alignment.centerRight,
-                              colors: [Color(0xFFE7635C), Color(0xFFF37A48)],
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.08),
-                                blurRadius: 12,
-                                offset: const Offset(0, 4),
-                              ),
-                            ],
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(LucideIcons.ticket, size: 28, color: Colors.white),
-                              const SizedBox(width: 14),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      s.get('freeViewCountLabel'),
-                                      style: GoogleFonts.notoSansKr(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w700,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      '$credits',
-                                      style: GoogleFonts.notoSansKr(
-                                        fontSize: 24,
-                                        fontWeight: FontWeight.w800,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              Material(
-                                color: Colors.transparent,
-                                child: InkWell(
-                                  onTap: () {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text(s.get('notReadyYet'), style: GoogleFonts.notoSansKr()),
-                                        behavior: SnackBarBehavior.floating,
-                                      ),
-                                    );
-                                  },
-                                  borderRadius: BorderRadius.circular(24),
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      borderRadius: BorderRadius.circular(24),
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: Colors.black.withOpacity(0.12),
-                                          blurRadius: 8,
-                                          offset: const Offset(0, 2),
-                                        ),
-                                      ],
-                                    ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        SizedBox(
-                                          width: 24,
-                                          height: 24,
-                                          child: Stack(
-                                            clipBehavior: Clip.none,
-                                            children: [
-                                              ShaderMask(
-                                                blendMode: BlendMode.srcIn,
-                                                shaderCallback: (bounds) => const LinearGradient(
-                                                  colors: [Color(0xFFED6805), Color(0xFFE76A08)],
-                                                  begin: Alignment.topLeft,
-                                                  end: Alignment.bottomRight,
-                                                ).createShader(bounds),
-                                                child: const Icon(Icons.star_rounded, size: 22, color: Colors.white),
-                                              ),
-                                              Positioned(
-                                                top: -1,
-                                                right: -1,
-                                                child: ShaderMask(
-                                                  blendMode: BlendMode.srcIn,
-                                                  shaderCallback: (bounds) => const LinearGradient(
-                                                    colors: [Color(0xFFED6805), Color(0xFFE76A08)],
-                                                    begin: Alignment.topLeft,
-                                                    end: Alignment.bottomRight,
-                                                  ).createShader(bounds),
-                                                  child: SizedBox(
-                                                    width: 9,
-                                                    height: 9,
-                                                    child: Stack(
-                                                      alignment: Alignment.center,
-                                                      children: [
-                                                        Container(
-                                                          width: 7,
-                                                          height: 2,
-                                                          decoration: BoxDecoration(
-                                                            color: Colors.white,
-                                                            borderRadius: BorderRadius.circular(1),
-                                                          ),
-                                                        ),
-                                                        Container(
-                                                          width: 2,
-                                                          height: 7,
-                                                          decoration: BoxDecoration(
-                                                            color: Colors.white,
-                                                            borderRadius: BorderRadius.circular(1),
-                                                          ),
-                                                        ),
-                                                      ],
-                                                    ),
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        const SizedBox(width: 6),
-                                        Text(
-                                          s.get('watchAdPlusOne'),
-                                          style: GoogleFonts.notoSansKr(
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.w800,
-                                            color: const Color(0xFFE76A08),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 4),
-                                        Icon(
-                                          LucideIcons.chevron_right,
-                                          size: 16,
-                                          color: const Color(0xFFE76A08),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ),
                 const SliverToBoxAdapter(child: SizedBox(height: 12)),
-            // 메뉴 카드
+            // 메뉴 카드 (통계·내가 본 드라마·리뷰와 동일 좌우 16)
             SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
+                padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Container(
                   decoration: BoxDecoration(
                     color: theme.cardTheme.color ?? cs.surface,
@@ -673,30 +469,6 @@ class ProfileScreen extends StatelessWidget {
                           Navigator.push(
                             context,
                             CupertinoPageRoute(builder: (_) => const SavedScreen()),
-                          );
-                        },
-                        color: cs,
-                      ),
-                      _divider(cs),
-                      _ProfileTile(
-                        icon: LucideIcons.message_circle,
-                        label: s.get('messages'),
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            CupertinoPageRoute(builder: (_) => const MessagesScreen()),
-                          );
-                        },
-                        color: cs,
-                      ),
-                      _divider(cs),
-                      _ProfileTile(
-                        icon: LucideIcons.award,
-                        label: s.get('memberLevel'),
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            CupertinoPageRoute(builder: (_) => const LevelInfoPage()),
                           );
                         },
                         color: cs,
@@ -798,8 +570,6 @@ class ProfileScreen extends StatelessWidget {
             ),
           ),
         );
-      },
-    );
   }
 
   Widget _divider(ColorScheme cs) => Padding(

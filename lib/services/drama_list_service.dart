@@ -364,15 +364,25 @@ class DramaListService {
 
   /// 같은 장르(부제)를 가진 드라마 목록. [excludeId] 제외, 최대 [limit]개.
   /// [genreDisplay]는 getDisplaySubtitle으로 얻은 장르 문자열(예: "로맨스·반전·사이다").
-  List<DramaItem> getSimilarByGenre(String excludeId, String genreDisplay, String? country, {int limit = 8}) {
+  /// [maxScan]: 후보를 너무 많이 돌면 탭 지연이 커져 상한(기본 700)으로 자름.
+  List<DramaItem> getSimilarByGenre(
+    String excludeId,
+    String genreDisplay,
+    String? country, {
+    int limit = 8,
+    int maxScan = 700,
+  }) {
     if (genreDisplay.trim().isEmpty) return [];
     final tags = genreDisplay.split(RegExp(r'[·,]')).map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
     if (tags.isEmpty) return [];
     final candidates = getListForCountry(country);
     final result = <DramaItem>[];
+    var scanned = 0;
     for (final item in candidates) {
       if (item.id == excludeId) continue;
       if (result.length >= limit) break;
+      if (scanned >= maxScan) break;
+      scanned++;
       final otherGenre = getDisplaySubtitle(item.id, country);
       final otherTags = otherGenre.split(RegExp(r'[·,]')).map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty);
       if (otherTags.any((t) => tags.contains(t))) result.add(item);
@@ -381,12 +391,12 @@ class DramaListService {
   }
 
   /// [item]에 대한 상세 정보 생성(비슷한 작품 탭 시 상세 페이지 진입용). 평점·리뷰는 페이지에서 로드.
+  /// 비슷한 작품은 목록이 클 때 동기 전부 스캔하면 탭이 버벅이므로 비워 두고 상세 UI에서 지연 로드.
   DramaDetail buildDetailForItem(DramaItem item, String? country) {
     final extra = getExtra(item.id);
     final displayGenre = getDisplaySubtitle(item.id, country).isNotEmpty
         ? getDisplaySubtitle(item.id, country)
         : (extra?.genre ?? item.subtitle);
-    final similarList = getSimilarByGenre(item.id, displayGenre, country, limit: 8);
     final displaySynopsis = getDisplaySynopsis(item.id, country);
     final fallbackSynopsis = '${item.title}의 줄거리입니다.';
     final episodes = extra?.episodes ?? List.generate(12, (i) => DramaEpisode(number: i + 1, title: '에피소드 ${i + 1}', duration: '45분'));
@@ -400,7 +410,7 @@ class DramaListService {
       ratingCount: 0,
       reviews: const [],
       episodes: episodes,
-      similar: similarList,
+      similar: const [],
       cast: cast,
     );
   }

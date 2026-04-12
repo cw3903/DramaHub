@@ -2,9 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../models/post.dart';
+import '../services/auth_service.dart';
+import '../services/follow_service.dart';
 import '../services/post_service.dart';
+import '../services/user_profile_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/country_scope.dart';
+import '../widgets/user_follow_button.dart';
 import 'post_detail_page.dart';
 
 /// 특정 회원이 쓴 댓글 목록 (닉네임 탭 → 작성댓글 보기)
@@ -21,11 +25,50 @@ class _UserCommentsScreenState extends State<UserCommentsScreen> {
   List<({Post post, PostComment comment})> _items = [];
   bool _loading = true;
   String? _error;
+  bool _profileResolving = true;
+  bool _isSelfProfile = false;
+  String? _targetUid;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _resolveProfile();
+  }
+
+  String get _authorAsPost =>
+      widget.authorName.startsWith('u/') ? widget.authorName : 'u/${widget.authorName}';
+
+  String get _baseNickname =>
+      widget.authorName.startsWith('u/') ? widget.authorName.substring(2) : widget.authorName;
+
+  Future<void> _resolveProfile() async {
+    final me = AuthService.instance.currentUser.value?.uid;
+    if (me == null) {
+      if (mounted) setState(() => _profileResolving = false);
+      return;
+    }
+    await UserProfileService.instance.loadIfNeeded();
+    final myAuthor = await UserProfileService.instance.getAuthorForPost();
+    final isSelf = myAuthor == _authorAsPost;
+    if (isSelf) {
+      if (mounted) {
+        setState(() {
+          _isSelfProfile = true;
+          _targetUid = null;
+          _profileResolving = false;
+        });
+      }
+      return;
+    }
+    final uid = await FollowService.instance.resolveUidByNickname(_baseNickname);
+    if (mounted) {
+      setState(() {
+        _isSelfProfile = false;
+        _targetUid = uid;
+        _profileResolving = false;
+      });
+    }
   }
 
   Future<void> _load() async {
@@ -70,6 +113,15 @@ class _UserCommentsScreenState extends State<UserCommentsScreen> {
           icon: const Icon(Icons.arrow_back_ios_new),
           onPressed: () => Navigator.pop(context),
         ),
+        actions: [
+          if (!_profileResolving && !_isSelfProfile && _targetUid != null)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Center(
+                child: UserFollowButton(targetUid: _targetUid!, dense: true),
+              ),
+            ),
+        ],
       ),
       body: RefreshIndicator(
         onRefresh: _load,

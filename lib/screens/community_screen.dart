@@ -111,13 +111,15 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
       return;
     }
     if (idx != _feedPrevTabIndex) {
-      _resetFeedTab(_feedPrevTabIndex);
+      // 이전 탭 목록은 유지 → 다시 들어올 때 네트워크 없이 즉시 표시(스크롤 위치도 유지)
+      setState(() => _postsError = null);
       _feedPrevTabIndex = idx;
     }
     _ensureFeedTabBootstrapped(idx);
   }
 
-  void _resetFeedTab(int tabIndex) {
+  /// 언어·전체 새로고침 등: 해당 탭 캐시 비우고 맨 위로
+  void _purgeFeedTab(int tabIndex) {
     if (tabIndex < 0 || tabIndex > 2) return;
     final c = _feedScrollControllers[tabIndex];
     if (c.hasClients) {
@@ -130,7 +132,6 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
       _tabLastDoc[tabIndex] = null;
       _tabHasMore[tabIndex] = true;
       _tabLoadingMore[tabIndex] = false;
-      // 다시 들어올 때까지 빈 목록이면 로딩으로 간주(빈 화면 문구 깜빡임 방지)
       _tabInitialLoading[tabIndex] = true;
       _postsError = null;
     });
@@ -188,10 +189,12 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
       });
     }
 
-    if (_tabFeedPosts[tabIndex].isEmpty) {
-      setState(() => _tabInitialLoading[tabIndex] = true);
-    }
-    setState(() => _tabLoadingMore[tabIndex] = true);
+    setState(() {
+      if (_tabFeedPosts[tabIndex].isEmpty) {
+        _tabInitialLoading[tabIndex] = true;
+      }
+      _tabLoadingMore[tabIndex] = true;
+    });
 
     try {
       final viewerLanguage = _viewerLanguageForFeed();
@@ -199,12 +202,14 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
       DocumentSnapshot<Map<String, dynamic>>? cursor = _tabLastDoc[tabIndex];
       var pageHasMore = _tabHasMore[tabIndex];
 
-      for (var attempt = 0; attempt < 24; attempt++) {
+      // 클라이언트 필터로 비는 페이지가 많을 수 있어 여러 번 시도하되, 상한으로 지연 방지
+      const maxFilterSkips = 10;
+      for (var attempt = 0; attempt < maxFilterSkips; attempt++) {
         final page = await PostService.instance.getPosts(
           country: viewerLanguage,
           type: _feedBoards[tabIndex],
           lastDocument: cursor,
-          limit: 20,
+          limit: 24,
         );
         pageHasMore = page.hasMore;
         cursor = page.lastDocument;
@@ -254,7 +259,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
     if (!mounted) return;
     _loadCurrentUserAuthor();
     for (var i = 0; i < 3; i++) {
-      _resetFeedTab(i);
+      _purgeFeedTab(i);
     }
     _feedPrevTabIndex = _tabController.index;
     _loadFeedTabPage(_tabController.index, reset: true);
@@ -826,6 +831,7 @@ class _ThemeSwitchPillState extends State<_ThemeSwitchPill>
         final thumbSize = 20.0 * scale;
         final padding = 2.0 * scale;
         final trackInnerW = pillW - padding * 2;
+        final thumbTop = (pillH - thumbSize) / 2;
 
         return GestureDetector(
           onTap: _toggle,
@@ -851,7 +857,7 @@ class _ThemeSwitchPillState extends State<_ThemeSwitchPill>
                   animation: _controller,
                   builder: (context, _) {
                     return Positioned(
-                      top: padding,
+                      top: thumbTop,
                       left: padding + _controller.value * (trackInnerW - thumbSize),
                       child: Container(
                         width: thumbSize,

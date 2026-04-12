@@ -9,6 +9,7 @@ import 'package:image_cropper/image_cropper.dart';
 import 'package:image_picker/image_picker.dart';
 import '../utils/format_utils.dart';
 import '../utils/post_board_utils.dart';
+import '../config/app_moderators.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -134,6 +135,8 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
 
   Post get _post => _currentPost ?? widget.post;
   bool get _isMine => _currentUserAuthor != null && _post.author == _currentUserAuthor;
+  /// 운영자는 타인 글도 삭제 가능(UID는 [kAppModeratorAuthUids]).
+  bool get _canDeletePost => _isMine || isAppModerator();
 
   Future<void> _showPostAuthorMenu(BuildContext context, String author, TapDownDetails details) async {
     if (author.isEmpty) return;
@@ -1603,6 +1606,15 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
                             Text(s.get('delete'), style: GoogleFonts.notoSansKr(color: cs.error)),
                           ]),
                         ),
+                      ] else if (isAppModerator()) ...[
+                        PopupMenuItem(
+                          value: 'delete',
+                          child: Row(children: [
+                            Icon(Icons.delete_outline, size: 18, color: cs.error),
+                            const SizedBox(width: 8),
+                            Text(s.get('delete'), style: GoogleFonts.notoSansKr(color: cs.error)),
+                          ]),
+                        ),
                       ] else ...[
                         PopupMenuItem(
                           value: 'report',
@@ -1935,6 +1947,8 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
                                       if (_isMine) ...[
                                         PopupMenuItem(value: 'edit', child: Row(children: [Icon(Icons.edit_outlined, size: 18, color: cs.onSurface), const SizedBox(width: 10), Text(s.get('edit'), style: GoogleFonts.notoSansKr())])),
                                         PopupMenuItem(value: 'delete', child: Row(children: [Icon(Icons.delete_outline, size: 18, color: cs.error), const SizedBox(width: 10), Text(s.get('delete'), style: GoogleFonts.notoSansKr(color: cs.error))])),
+                                      ] else if (isAppModerator()) ...[
+                                        PopupMenuItem(value: 'delete', child: Row(children: [Icon(Icons.delete_outline, size: 18, color: cs.error), const SizedBox(width: 10), Text(s.get('delete'), style: GoogleFonts.notoSansKr(color: cs.error))])),
                                       ] else ...[
                                         PopupMenuItem(value: 'report', child: Row(children: [Icon(LucideIcons.flag, size: 18, color: cs.error), const SizedBox(width: 10), Text(s.get('report'), style: GoogleFonts.notoSansKr(color: cs.error))])),
                                         PopupMenuItem(value: 'block', child: Row(children: [Icon(LucideIcons.ban, size: 18, color: cs.onSurface), const SizedBox(width: 10), Text(s.get('block'), style: GoogleFonts.notoSansKr())])),
@@ -2129,54 +2143,56 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
                               ],
                             ),
                           ],
-                          if (_isMine) ...[
+                          if (_canDeletePost) ...[
                             const Spacer(),
-                            GestureDetector(
-                              onTap: () async {
-                                final updated = await Navigator.push<Post>(
-                                  context,
-                                  MaterialPageRoute(builder: (_) => WritePostPage(initialPost: _post)),
-                                );
-                                if (updated != null && mounted) setState(() => _currentPost = updated);
-                              },
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                                child: Text(s.get('edit'), style: GoogleFonts.notoSansKr(fontSize: 13, color: cs.onSurfaceVariant)),
+                            if (_isMine)
+                              GestureDetector(
+                                onTap: () async {
+                                  final updated = await Navigator.push<Post>(
+                                    context,
+                                    MaterialPageRoute(builder: (_) => WritePostPage(initialPost: _post)),
+                                  );
+                                  if (updated != null && mounted) setState(() => _currentPost = updated);
+                                },
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                                  child: Text(s.get('edit'), style: GoogleFonts.notoSansKr(fontSize: 13, color: cs.onSurfaceVariant)),
+                                ),
                               ),
-                            ),
-                            GestureDetector(
-                              onTap: () async {
-                                final confirm = await showDialog<bool>(
-                                  context: context,
-                                  builder: (ctx) => AlertDialog(
-                                    title: Text(s.get('delete'), style: GoogleFonts.notoSansKr()),
-                                    content: Text(s.get('deletePostConfirm'), style: GoogleFonts.notoSansKr()),
-                                    actions: [
-                                      TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr())),
-                                      TextButton(onPressed: () => Navigator.pop(ctx, true), child: Text(s.get('delete'), style: GoogleFonts.notoSansKr(color: cs.error))),
-                                    ],
-                                  ),
-                                );
-                                if (confirm == true && mounted) {
-                                  await PostService.instance.deletePost(_post.id);
-                                  if (mounted) {
-                                    widget.onPostDeleted?.call(_post);
-                                    Navigator.pop(context);
+                            if (_canDeletePost)
+                              GestureDetector(
+                                onTap: () async {
+                                  final confirm = await showDialog<bool>(
+                                    context: context,
+                                    builder: (ctx) => AlertDialog(
+                                      title: Text(s.get('delete'), style: GoogleFonts.notoSansKr()),
+                                      content: Text(s.get('deletePostConfirm'), style: GoogleFonts.notoSansKr()),
+                                      actions: [
+                                        TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr())),
+                                        TextButton(onPressed: () => Navigator.pop(ctx, true), child: Text(s.get('delete'), style: GoogleFonts.notoSansKr(color: cs.error))),
+                                      ],
+                                    ),
+                                  );
+                                  if (confirm == true && mounted) {
+                                    await PostService.instance.deletePost(_post.id);
+                                    if (mounted) {
+                                      widget.onPostDeleted?.call(_post);
+                                      Navigator.pop(context);
+                                    }
                                   }
-                                }
-                              },
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                                child: Text(
-                                  s.get('delete'),
-                                  style: GoogleFonts.notoSansKr(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                    color: deleteLabelColor,
+                                },
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                                  child: Text(
+                                    s.get('delete'),
+                                    style: GoogleFonts.notoSansKr(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: deleteLabelColor,
+                                    ),
                                   ),
                                 ),
                               ),
-                            ),
                           ],
                         ],
                       ),

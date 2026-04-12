@@ -1260,7 +1260,7 @@ class _WritePostPageState extends State<WritePostPage> {
             controller: _dramaSearchController,
             focusNode: _dramaSearchFocus,
             onTap: () => setState(() => _dramaSearchExpanded = true),
-            decoration: deco('Search for a short drama...').copyWith(
+            decoration: deco(s.get('reviewDramaSearchHint')).copyWith(
               prefixIcon: Icon(LucideIcons.search, size: 20, color: cs.onSurfaceVariant),
             ),
             style: GoogleFonts.notoSansKr(fontSize: 15, color: cs.onSurface),

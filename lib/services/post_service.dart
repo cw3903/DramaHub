@@ -225,8 +225,12 @@ class PostService {
   }
 
   Future<Post> _mergePostWithViewerVoteDocs(Post post, String uid) async {
-    final likeSnap = await _postLikeDoc(post.id, uid).get();
-    final dislikeSnap = await _postDislikeDoc(post.id, uid).get();
+    final snaps = await Future.wait([
+      _postLikeDoc(post.id, uid).get(),
+      _postDislikeDoc(post.id, uid).get(),
+    ]);
+    final likeSnap = snaps[0];
+    final dislikeSnap = snaps[1];
     final likeDoc = likeSnap.exists;
     final dislikeDoc = dislikeSnap.exists;
     var hasLike = likeDoc || post.likedBy.contains(uid);
