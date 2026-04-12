@@ -12,7 +12,10 @@ import 'drama_detail_page.dart';
 
 /// 리뷰(드라마) 탭 검색창 탭 시 — 실제 드라마 목록(dramas.json) 기준 제목·장르 검색
 class DramaSearchScreen extends StatefulWidget {
-  const DramaSearchScreen({super.key});
+  const DramaSearchScreen({super.key, this.pickMode = false});
+
+  /// true면 행 탭 시 [DramaItem]만 반환하고 상세로 이동하지 않음 (커뮤니티 리뷰용)
+  final bool pickMode;
 
   @override
   State<DramaSearchScreen> createState() => _DramaSearchScreenState();
@@ -282,6 +285,10 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
                   onTap: () async {
                     await DramaSearchStatsService.instance.incrementClick(item.id);
                     if (!mounted) return;
+                    if (widget.pickMode) {
+                      Navigator.pop(context, item);
+                      return;
+                    }
                     final detail = DramaListService.instance.buildDetailForItem(item, country);
                     await Navigator.push(
                       context,

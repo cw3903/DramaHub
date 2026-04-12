@@ -11,6 +11,7 @@ import '../services/saved_service.dart';
 import '../services/user_profile_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/format_utils.dart';
+import '../utils/post_board_utils.dart';
 import '../widgets/country_scope.dart';
 import '../widgets/optimized_network_image.dart';
 import '../widgets/share_sheet.dart';
@@ -22,6 +23,7 @@ import '../screens/user_posts_screen.dart';
 import '../screens/user_comments_screen.dart';
 import '../screens/full_screen_video_page.dart';
 import '../services/message_service.dart';
+import '../services/home_tab_visibility.dart';
 import 'package:video_player/video_player.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
@@ -316,7 +318,14 @@ class _FeedPostCardState extends State<FeedPostCard> {
     if (selected == 'edit') {
       final updated = await Navigator.push<Post>(
         context,
-        MaterialPageRoute(builder: (_) => WritePostPage(initialPost: post)),
+        MaterialPageRoute(
+          builder: (_) => WritePostPage(
+            initialPost: post,
+            initialBoard: postDisplayType(post) == 'review'
+                ? 'review'
+                : (postDisplayType(post) == 'ask' ? 'ask' : 'talk'),
+          ),
+        ),
       );
       if (updated != null && mounted) widget.onPostUpdated?.call(updated);
     } else if (selected == 'delete') {
@@ -969,11 +978,22 @@ class _FeedVideoPlayerState extends State<FeedVideoPlayer> {
   @override
   void initState() {
     super.initState();
+    HomeTabVisibility.isHomeMainTabSelected.addListener(_onHomeMainTabChanged);
     // preload 호출 제거: 동영상 게시글이 많을 때 카드마다 preload하면 동시 초기화로 앱이 무거워짐. 탭 시에만 로드.
+  }
+
+  void _onHomeMainTabChanged() {
+    if (HomeTabVisibility.isHomeMainTabSelected.value) return;
+    final c = _controller;
+    if (c != null && c.value.isInitialized && c.value.isPlaying) {
+      c.pause();
+      if (mounted) setState(() {});
+    }
   }
 
   @override
   void dispose() {
+    HomeTabVisibility.isHomeMainTabSelected.removeListener(_onHomeMainTabChanged);
     VideoPreloadCache.instance.cancel(widget.videoUrl);
     _controller?.removeListener(_onPlayerUpdate);
     _controller?.pause();

@@ -4,7 +4,9 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
 import '../models/drama.dart';
+import '../models/post.dart';
 import '../utils/format_utils.dart';
+import '../utils/post_board_utils.dart';
 
 /// 리뷰 탭(드라마 상세)에서 사용자가 작성한 리뷰
 class MyReviewItem {
@@ -72,6 +74,17 @@ class ReviewService {
   final ValueNotifier<List<MyReviewItem>> listNotifier =
       ValueNotifier<List<MyReviewItem>>([]);
   bool _loaded = false;
+
+  /// [delete]로 DramaFeed `posts`에서 리뷰 글이 지워졌을 때 +1. [consumeLastDeletedFeedPostIds]로 id 목록 소비.
+  final ValueNotifier<int> reviewFeedPostsDeletedTick = ValueNotifier(0);
+  List<String> _lastDeletedFeedPostIds = [];
+
+  /// [reviewFeedPostsDeletedTick] 직후 호출: 방금 삭제된 posts 문서 id (없으면 빈 목록).
+  List<String> consumeLastDeletedFeedPostIds() {
+    final out = List<String>.from(_lastDeletedFeedPostIds);
+    _lastDeletedFeedPostIds = [];
+    return out;
+  }
 
   List<MyReviewItem> get list => listNotifier.value;
 
@@ -259,12 +272,56 @@ class ReviewService {
     listNotifier.value = list;
     await _persist(list);
 
-    if (docId != null) {
+    if (uid != null && docId != null) {
       try {
         await _firestore.collection(_collection).doc(docId).delete();
       } catch (e) {
         debugPrint('ReviewService delete Firestore: $e');
       }
+      final removedIds = await _deleteLinkedFeedReviewPosts(dramaId: dramaId, uid: uid);
+      if (removedIds.isNotEmpty) {
+        _lastDeletedFeedPostIds = removedIds;
+        reviewFeedPostsDeletedTick.value++;
+      }
+    }
+  }
+
+  /// 같은 유저가 같은 드라마에 올린 DramaFeed 리뷰 글(`posts`, type=review) 삭제. 삭제된 문서 id 목록.
+  Future<List<String>> _deleteLinkedFeedReviewPosts({
+    required String dramaId,
+    required String uid,
+  }) async {
+    if (dramaId.isEmpty) return [];
+    try {
+      final snap = await _firestore
+          .collection('posts')
+          .where('authorUid', isEqualTo: uid)
+          .where('dramaId', isEqualTo: dramaId)
+          .get();
+      final toDelete = <DocumentSnapshot<Map<String, dynamic>>>[];
+      for (final doc in snap.docs) {
+        final type = (doc.data()['type'] as String?)?.trim().toLowerCase();
+        if (type == 'review') {
+          toDelete.add(doc);
+        }
+      }
+      if (toDelete.isEmpty) return [];
+      const chunk = 400;
+      final ids = <String>[];
+      for (var i = 0; i < toDelete.length; i += chunk) {
+        final batch = _firestore.batch();
+        final end = (i + chunk) > toDelete.length ? toDelete.length : i + chunk;
+        final slice = toDelete.sublist(i, end);
+        for (final doc in slice) {
+          batch.delete(doc.reference);
+          ids.add(doc.id);
+        }
+        await batch.commit();
+      }
+      return ids;
+    } catch (e, st) {
+      debugPrint('ReviewService _deleteLinkedFeedReviewPosts: $e\n$st');
+      return [];
     }
   }
 
@@ -273,6 +330,33 @@ class ReviewService {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_key, jsonEncode(list.map((e) => e.toMap()).toList()));
     } catch (_) {}
+  }
+
+  /// DramaFeed `posts`에 저장된 리뷰 글을 드라마 상세의 리뷰 탭(`drama_reviews`)과 맞춤.
+  /// [PostService.addPost] / [PostService.updatePost] 성공 후 호출.
+  Future<void> syncDramaReviewFromFeedPost(Post post) async {
+    if (postDisplayType(post) != 'review') return;
+    final dramaId = post.dramaId?.trim() ?? '';
+    if (dramaId.isEmpty) return;
+    final rating = post.rating ?? 0;
+    if (rating <= 0) return;
+    final comment = (post.body ?? '').trim();
+    final dramaTitle = (post.dramaTitle?.trim().isNotEmpty == true) ? post.dramaTitle!.trim() : post.title.trim();
+    var authorName = post.author.startsWith('u/') ? post.author.substring(2) : post.author;
+    if (authorName.isEmpty) authorName = '익명';
+
+    await loadIfNeeded();
+    if (getByDramaId(dramaId) != null) {
+      await update(dramaId: dramaId, rating: rating, comment: comment);
+    } else {
+      await add(
+        dramaId: dramaId,
+        dramaTitle: dramaTitle.isNotEmpty ? dramaTitle : dramaId,
+        rating: rating,
+        comment: comment,
+        authorName: authorName,
+      );
+    }
   }
 
   /// 해당 드라마의 전체 유저 리뷰 기준 평균 평점 & 리뷰 수 (상세 페이지 표시용)

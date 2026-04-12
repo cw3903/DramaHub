@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 적응형 아이콘 전경: 배경색 위에 올라갈 흰 마크만 (홈/최근앱에서 Flutter 로고 대체) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M 42,34 L 42,74 L 76,54 Z" />
+</vector>

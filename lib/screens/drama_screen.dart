@@ -151,6 +151,35 @@ class _DramaScreenState extends State<DramaScreen> {
     return sorted;
   }
 
+  /// 일본어 카테고리탭 2줄(장르) 선택 시: 조회수 몇십만~몇백만 오버레이
+  static const List<int> _jpGenreOverlayViewCounts = [
+    500000, 1200000, 3500000, 8900000, 15000000, 28000000, 51000000,
+    680000, 2100000, 4200000, 9500000, 18000000, 32000000, 68000000,
+    820000, 2500000, 5500000, 11000000, 22000000, 41000000, 85000000,
+    950000, 3100000, 7200000, 14000000, 26000000, 48000000,
+  ];
+  static Map<String, int> _jpGenreViewCountOverlayFor(List<DramaItem> items) {
+    final map = <String, int>{};
+    for (var i = 0; i < items.length && i < _jpGenreOverlayViewCounts.length; i++) {
+      map[items[i].id] = _jpGenreOverlayViewCounts[i];
+    }
+    return map;
+  }
+
+  /// 일본어 카테고리탭 2줄 선택 시: 별점 4.0 이상
+  static const List<double> _jpGenreOverlayRatings = [
+    4.0, 4.2, 4.5, 4.1, 4.8, 4.3, 4.6, 4.0, 4.4, 4.9,
+    4.1, 4.7, 4.2, 4.5, 4.0, 4.6, 4.3, 4.8, 4.4, 4.2,
+    4.5, 4.0, 4.7, 4.3, 4.9, 4.1, 4.6, 4.4, 4.2, 4.8,
+  ];
+  static Map<String, double> _jpGenreRatingOverlayFor(List<DramaItem> items) {
+    final map = <String, double>{};
+    for (var i = 0; i < items.length && i < _jpGenreOverlayRatings.length; i++) {
+      map[items[i].id] = _jpGenreOverlayRatings[i];
+    }
+    return map;
+  }
+
   static const _chipOrange = Color(0xFFFF4500); // 선택된 필터 칩 색상
 
   Widget _buildFilterChip({
@@ -395,17 +424,28 @@ class _DramaScreenState extends State<DramaScreen> {
                             onTapCard: _openDetail,
                             posterPlaceholder: _posterPlaceholder,
                           ),
-                          _DramaGridWithPagination(
-                            list: _getCategorySortedList(
+                          () {
+                            final categoryList = _getCategorySortedList(
                               _getCategoryFilteredList(baseList, country),
                               country,
                               viewCounts,
-                            ),
-                            country: country,
-                            viewCounts: viewCounts,
-                            onTapCard: _openDetail,
-                            posterPlaceholder: _posterPlaceholder,
-                          ),
+                            );
+                            final isJpGenre = (country == 'jp' && _categoryGenreFilter != null);
+                            final listToUse = isJpGenre
+                                ? categoryList.take(_dramaCardsPerPage).toList()
+                                : categoryList;
+                            final effectiveViewCounts = isJpGenre && listToUse.isNotEmpty
+                                ? <String, int>{...viewCounts, ..._jpGenreViewCountOverlayFor(listToUse)}
+                                : viewCounts;
+                            return _DramaGridWithPagination(
+                              list: listToUse,
+                              country: country,
+                              viewCounts: effectiveViewCounts,
+                              onTapCard: _openDetail,
+                              posterPlaceholder: _posterPlaceholder,
+                              ratingOverrides: isJpGenre && listToUse.isNotEmpty ? _jpGenreRatingOverlayFor(listToUse) : null,
+                            );
+                          }(),
                         ],
                       );
                     },
@@ -665,6 +705,7 @@ class _DramaGridWithPagination extends StatefulWidget {
     required this.viewCounts,
     required this.onTapCard,
     required this.posterPlaceholder,
+    this.ratingOverrides,
   });
 
   final List<DramaItem> list;
@@ -672,6 +713,7 @@ class _DramaGridWithPagination extends StatefulWidget {
   final Map<String, int> viewCounts;
   final void Function(DramaItem item) onTapCard;
   final Widget Function(BuildContext context) posterPlaceholder;
+  final Map<String, double>? ratingOverrides;
 
   @override
   State<_DramaGridWithPagination> createState() => _DramaGridWithPaginationState();
@@ -803,7 +845,10 @@ class _DramaGridWithPaginationState extends State<_DramaGridWithPagination> {
                     item.imageUrl;
                 final rawRating =
                     ReviewService.instance.getByDramaId(item.id)?.rating ?? item.rating;
-                final rating = rawRating > 0 ? rawRating : 0.0;
+                var rating = rawRating > 0 ? rawRating : 0.0;
+                if (widget.ratingOverrides != null && widget.ratingOverrides!.containsKey(item.id)) {
+                  rating = widget.ratingOverrides![item.id]!;
+                }
                 final viewsDisplay = widget.viewCounts.isNotEmpty && widget.viewCounts.containsKey(item.id)
                     ? formatCompactCount(widget.viewCounts[item.id]!)
                     : item.views;
@@ -884,6 +929,9 @@ class _DramaGridCard extends StatelessWidget {
                           ? OptimizedNetworkImage(
                               imageUrl: imageUrl!,
                               fit: BoxFit.cover,
+                              memCacheWidth: 320,
+                              memCacheHeight: 448,
+                              placeholder: posterPlaceholder,
                               errorWidget: posterPlaceholder,
                             )
                           : posterPlaceholder,

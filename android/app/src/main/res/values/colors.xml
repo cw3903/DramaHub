@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 스플래시 / Android 12+ 중앙 아이콘 배경 (앱 테마 accent와 동일 #FF4500) -->
+    <color name="splash_background">#FFFFFFFF</color>
+    <color name="splash_background_dark">#FF121212</color>
+    <color name="splash_accent">#FFFF4500</color>
+    <!-- 적응형 런처 아이콘(API 26+) 배경 -->
+    <color name="ic_launcher_background">#FFFF4500</color>
+</resources>

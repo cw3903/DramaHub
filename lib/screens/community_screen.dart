@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
@@ -7,6 +8,7 @@ import '../services/auth_service.dart';
 import '../services/block_service.dart';
 import '../services/level_service.dart';
 import '../services/post_service.dart';
+import '../services/review_service.dart';
 import '../services/user_profile_service.dart';
 import '../services/locale_service.dart';
 import '../theme/app_theme.dart';
@@ -27,6 +29,7 @@ import 'question_board_tab.dart';
 import 'community_search_page.dart';
 import '../widgets/blind_refresh_indicator.dart';
 import '../widgets/community_board_tabs.dart';
+import '../utils/post_board_utils.dart';
 
 /// 홈 탭 - 인기글 / 자유게시판 (모던 스타일)
 class CommunityScreen extends StatefulWidget {
@@ -43,15 +46,21 @@ class CommunityScreen extends StatefulWidget {
 class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
   List<Post> _freeBoardPosts = [];
-  bool _postsLoading = true;
   String? _postsError;
   String? _currentUserAuthor;
 
-  // 탭별 필터 캐시 (build마다 재계산 방지)
+  /// 글 상세 네비용 (로드된 글 합집합)
   List<Post> _cachedFiltered = [];
-  List<Post> _cachedPopular = [];
-  List<Post> _cachedFree = [];
-  List<Post> _cachedQuestion = [];
+
+  static const List<String> _feedBoards = ['review', 'talk', 'ask'];
+  final List<List<Post>> _tabFeedPosts = List.generate(3, (_) => []);
+  final List<DocumentSnapshot<Map<String, dynamic>>?> _tabLastDoc = List.generate(3, (_) => null);
+  final List<bool> _tabHasMore = List.generate(3, (_) => true);
+  final List<bool> _tabLoadingMore = List.generate(3, (_) => false);
+  final List<bool> _tabInitialLoading = [true, false, false];
+  late final List<ScrollController> _feedScrollControllers;
+  int _feedPrevTabIndex = 0;
+  bool _feedTabListenerArmed = false;
 
   // 브라우저 히스토리 (community 레벨)
   List<(Post, int)> _navBackStack = [];
@@ -61,29 +70,242 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    _feedScrollControllers = List.generate(3, (i) {
+      final c = ScrollController();
+      c.addListener(() => _onFeedScrollNearEnd(i));
+      return c;
+    });
+    _tabController.addListener(_onFeedTabControllerTick);
     _rebuildPostCache();
-    _loadPosts();
     _loadCurrentUserAuthor();
     AuthService.instance.isLoggedIn.addListener(_onAuthChanged);
     widget.writeNotifier?.addListener(_onExternalWriteTap);
     BlockService.instance.ensureLoaded().then((_) {
-      if (mounted) setState(() => _rebuildPostCache());
+      if (mounted) _applyBlockFilterToFeeds();
     });
     BlockService.instance.addListener(_onBlockListChanged);
+    LocaleService.instance.localeNotifier.addListener(_onLocaleForFeedReload);
+    ReviewService.instance.reviewFeedPostsDeletedTick.addListener(_onReviewFeedPostsDeletedTick);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _feedTabListenerArmed = true;
+      _loadFeedTabPage(0, reset: true);
+    });
   }
 
-  /// _freeBoardPosts 또는 블록 목록 변경 시 탭별 필터를 한 번에 미리 계산
+  void _onFeedTabControllerTick() {
+    if (!_feedTabListenerArmed || _tabController.indexIsChanging) return;
+    final idx = _tabController.index;
+    if (idx != _feedPrevTabIndex) {
+      _resetFeedTab(_feedPrevTabIndex);
+      _feedPrevTabIndex = idx;
+    }
+    _ensureFeedTabBootstrapped(idx);
+  }
+
+  void _resetFeedTab(int tabIndex) {
+    if (tabIndex < 0 || tabIndex > 2) return;
+    final c = _feedScrollControllers[tabIndex];
+    if (c.hasClients) {
+      try {
+        c.jumpTo(0);
+      } catch (_) {}
+    }
+    setState(() {
+      _tabFeedPosts[tabIndex].clear();
+      _tabLastDoc[tabIndex] = null;
+      _tabHasMore[tabIndex] = true;
+      _tabLoadingMore[tabIndex] = false;
+      _tabInitialLoading[tabIndex] = false;
+      _postsError = null;
+    });
+  }
+
+  void _ensureFeedTabBootstrapped(int tabIndex) {
+    if (_tabFeedPosts[tabIndex].isEmpty && !_tabLoadingMore[tabIndex]) {
+      _loadFeedTabPage(tabIndex, reset: false);
+    }
+  }
+
+  void _onFeedScrollNearEnd(int tabIndex) {
+    if (_tabController.index != tabIndex) return;
+    final c = _feedScrollControllers[tabIndex];
+    if (!c.hasClients) return;
+    if (_tabLoadingMore[tabIndex] || !_tabHasMore[tabIndex]) return;
+    if (c.position.extentAfter > 200) return;
+    _loadFeedTabPage(tabIndex, reset: false);
+  }
+
+  String _viewerLanguageForFeed() {
+    return AuthService.instance.isLoggedIn.value
+        ? (UserProfileService.instance.signupCountryNotifier.value ?? LocaleService.instance.locale)
+        : LocaleService.instance.locale;
+  }
+
+  void _mergeIntoMasterFeeds(List<Post> incoming) {
+    final ids = _freeBoardPosts.map((e) => e.id).toSet();
+    for (final p in incoming) {
+      if (ids.add(p.id)) {
+        _freeBoardPosts.add(p);
+      }
+    }
+    _rebuildPostCache();
+  }
+
+  Future<void> _loadFeedTabPage(int tabIndex, {required bool reset}) async {
+    if (tabIndex < 0 || tabIndex > 2) return;
+    if (_tabLoadingMore[tabIndex]) return;
+    if (!reset && !_tabHasMore[tabIndex]) return;
+
+    if (reset) {
+      setState(() {
+        _tabFeedPosts[tabIndex].clear();
+        _tabLastDoc[tabIndex] = null;
+        _tabHasMore[tabIndex] = true;
+        _postsError = null;
+      });
+    }
+
+    if (_tabFeedPosts[tabIndex].isEmpty) {
+      setState(() => _tabInitialLoading[tabIndex] = true);
+    }
+    setState(() => _tabLoadingMore[tabIndex] = true);
+
+    try {
+      final viewerLanguage = _viewerLanguageForFeed();
+      final accumulated = <Post>[];
+      DocumentSnapshot<Map<String, dynamic>>? cursor = _tabLastDoc[tabIndex];
+      var pageHasMore = _tabHasMore[tabIndex];
+
+      for (var attempt = 0; attempt < 24; attempt++) {
+        final page = await PostService.instance.getPosts(
+          country: viewerLanguage,
+          type: _feedBoards[tabIndex],
+          lastDocument: cursor,
+          limit: 20,
+        );
+        pageHasMore = page.hasMore;
+        cursor = page.lastDocument;
+        for (final p in page.posts) {
+          if (!BlockService.instance.isBlocked(p.author) &&
+              !BlockService.instance.isPostBlocked(p.id)) {
+            accumulated.add(p);
+          }
+        }
+        if (accumulated.isNotEmpty || !pageHasMore || page.lastDocument == null) {
+          break;
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        final ids = _tabFeedPosts[tabIndex].map((e) => e.id).toSet();
+        for (final p in accumulated) {
+          if (ids.add(p.id)) {
+            _tabFeedPosts[tabIndex].add(p);
+          }
+        }
+        _tabLastDoc[tabIndex] = cursor;
+        _tabHasMore[tabIndex] = pageHasMore;
+        _mergeIntoMasterFeeds(accumulated);
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() => _postsError = e.toString());
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _tabLoadingMore[tabIndex] = false;
+          _tabInitialLoading[tabIndex] = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _refreshActiveFeedTab() async {
+    final i = _tabController.index;
+    await _loadFeedTabPage(i, reset: true);
+  }
+
+  void _onLocaleForFeedReload() {
+    if (!mounted) return;
+    _loadCurrentUserAuthor();
+    for (var i = 0; i < 3; i++) {
+      _resetFeedTab(i);
+    }
+    _feedPrevTabIndex = _tabController.index;
+    _loadFeedTabPage(_tabController.index, reset: true);
+  }
+
+  /// _freeBoardPosts 또는 블록 목록 변경 시 글 상세용 목록 갱신
   void _rebuildPostCache() {
     _cachedFiltered = _freeBoardPosts
         .where((p) => !BlockService.instance.isBlocked(p.author) && !BlockService.instance.isPostBlocked(p.id))
         .toList();
-    _cachedPopular = _cachedFiltered.where((p) => p.votes >= 10 || p.views >= 100).toList();
-    _cachedFree = _cachedFiltered.where((p) => p.category == 'free').toList();
-    _cachedQuestion = _cachedFiltered.where((p) => p.category == 'question').toList();
   }
 
-  void _onBlockListChanged() {
-    setState(() => _rebuildPostCache());
+  void _applyBlockFilterToFeeds() {
+    setState(() {
+      for (final list in _tabFeedPosts) {
+        list.removeWhere(
+            (p) => BlockService.instance.isBlocked(p.author) || BlockService.instance.isPostBlocked(p.id));
+      }
+      _freeBoardPosts.removeWhere(
+          (p) => BlockService.instance.isBlocked(p.author) || BlockService.instance.isPostBlocked(p.id));
+      _rebuildPostCache();
+    });
+  }
+
+  void _onBlockListChanged() => _applyBlockFilterToFeeds();
+
+  void _syncPostInFeeds(Post updated) {
+    setState(() {
+      final i = _freeBoardPosts.indexWhere((p) => p.id == updated.id);
+      if (i >= 0) {
+        _freeBoardPosts[i] = updated;
+      } else {
+        _freeBoardPosts.insert(0, updated);
+      }
+      for (var t = 0; t < 3; t++) {
+        if (!postMatchesFeedFilter(updated, _feedBoards[t])) {
+          _tabFeedPosts[t].removeWhere((p) => p.id == updated.id);
+          continue;
+        }
+        final j = _tabFeedPosts[t].indexWhere((p) => p.id == updated.id);
+        if (j >= 0) {
+          _tabFeedPosts[t][j] = updated;
+        } else {
+          _tabFeedPosts[t].insert(0, updated);
+        }
+      }
+      _rebuildPostCache();
+    });
+  }
+
+  void _removePostFromAllFeeds(String id) {
+    setState(() {
+      _freeBoardPosts.removeWhere((p) => p.id == id);
+      for (final list in _tabFeedPosts) {
+        list.removeWhere((p) => p.id == id);
+      }
+      _rebuildPostCache();
+    });
+  }
+
+  /// 드라마 상세 리뷰 탭에서 내 리뷰 삭제 시, 연동된 DramaFeed 글이 지워지면 목록에서 즉시 제거.
+  void _onReviewFeedPostsDeletedTick() {
+    final ids = ReviewService.instance.consumeLastDeletedFeedPostIds();
+    if (!mounted || ids.isEmpty) return;
+    setState(() {
+      for (final id in ids) {
+        _freeBoardPosts.removeWhere((p) => p.id == id);
+        for (final list in _tabFeedPosts) {
+          list.removeWhere((p) => p.id == id);
+        }
+      }
+      _rebuildPostCache();
+    });
   }
 
   void _onExternalWriteTap() => _openWritePost();
@@ -99,34 +321,16 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
     if (mounted) setState(() => _currentUserAuthor = author);
   }
 
-  Future<void> _loadPosts() async {
-    if (mounted) setState(() { _postsLoading = true; _postsError = null; });
-    _loadCurrentUserAuthor();
-    try {
-      // 로그인 사용자: 가입 시 선택한 언어 기준, 비로그인: 현재 앱 언어 기준 → 같은 언어 글만 표시
-      final viewerLanguage = AuthService.instance.isLoggedIn.value
-          ? (UserProfileService.instance.signupCountryNotifier.value ?? LocaleService.instance.locale)
-          : LocaleService.instance.locale;
-      // getPosts 내부에서 country 클라이언트 필터 + 0개면 전체 자동 폴백
-      final list = await PostService.instance.getPosts(country: viewerLanguage);
-      if (mounted) setState(() {
-        _freeBoardPosts = list;
-        _postsLoading = false;
-        _rebuildPostCache();
-      });
-    } catch (e) {
-      if (mounted) setState(() {
-        _postsLoading = false;
-        _postsError = e.toString();
-      });
-    }
-  }
-
   @override
   void dispose() {
     AuthService.instance.isLoggedIn.removeListener(_onAuthChanged);
     widget.writeNotifier?.removeListener(_onExternalWriteTap);
     BlockService.instance.removeListener(_onBlockListChanged);
+    LocaleService.instance.localeNotifier.removeListener(_onLocaleForFeedReload);
+    ReviewService.instance.reviewFeedPostsDeletedTick.removeListener(_onReviewFeedPostsDeletedTick);
+    for (final c in _feedScrollControllers) {
+      c.dispose();
+    }
     _tabController.dispose();
     super.dispose();
   }
@@ -143,10 +347,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
         initialTabIndex: tabIndex,
         initialBoardPosts: _cachedFiltered,
         onPostDeleted: (deleted) {
-          setState(() {
-            _freeBoardPosts.removeWhere((p) => p.id == deleted.id);
-            _rebuildPostCache();
-          });
+          _removePostFromAllFeeds(deleted.id);
         },
       )),
     );
@@ -157,11 +358,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
         _navForwardStack = result.forwardStack;
       });
       if (result.updatedPost != null) {
-        setState(() {
-          final i = _freeBoardPosts.indexWhere((p) => p.id == result.updatedPost!.id);
-          if (i >= 0) _freeBoardPosts[i] = result.updatedPost!;
-          _rebuildPostCache();
-        });
+        _syncPostInFeeds(result.updatedPost!);
       }
     }
   }
@@ -188,18 +385,19 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
       );
       if (!mounted || loggedIn != true) return;
     }
-    final category = _tabController.index == 2 ? 'question' : 'free';
+    final initialBoard = switch (_tabController.index) {
+      0 => 'review',
+      1 => 'talk',
+      _ => 'ask',
+    };
     final Post? post = await Navigator.push<Post>(
       context,
-      MaterialPageRoute(builder: (_) => WritePostPage(initialCategory: category)),
+      MaterialPageRoute(builder: (_) => WritePostPage(initialBoard: initialBoard)),
     );
     if (post != null && mounted) {
       final s = CountryScope.of(context).strings;
       // 즉시 목록에 노출 (낙관적 업데이트)
-      setState(() {
-        _freeBoardPosts.insert(0, post);
-        _rebuildPostCache();
-      });
+      _syncPostInFeeds(post);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(s.get('postSubmitted'), style: GoogleFonts.notoSansKr()),
@@ -218,11 +416,11 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
       final (saved, errorMsg) = result;
       if (!mounted) return;
       if (saved != null) {
-        setState(() {
-          final idx = _freeBoardPosts.indexOf(post);
-          if (idx >= 0) _freeBoardPosts[idx] = saved;
-          _rebuildPostCache();
-        });
+        _freeBoardPosts.removeWhere((p) => p.id == post.id);
+        for (final list in _tabFeedPosts) {
+          list.removeWhere((p) => p.id == post.id);
+        }
+        _syncPostInFeeds(saved);
       } else {
         final msg = errorMsg?.trim().isNotEmpty == true
             ? errorMsg!
@@ -289,7 +487,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
         title: Transform.translate(
           offset: Offset(0, -3 * r),
           child: Text(
-            'DramaTALK',
+            'DramaFeed',
             style: GoogleFonts.notoSansKr(
               fontSize: 22 * r,
               fontWeight: FontWeight.w900,
@@ -364,7 +562,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
           ),
         ],
         bottom: PreferredSize(
-          preferredSize: Size.fromHeight(44 * r),
+          preferredSize: Size.fromHeight(38 * r),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -374,7 +572,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
                     animation: _tabController.animation!,
                     builder: (context, _) {
                       final tabW = 60.0 * r;
-                      final tabH = 32.0 * r;
+                      final tabH = 26.0 * r;
                       final tabGap = 5.0 * r;
                       final leftPad = 14.0 * r;
                       final animValue = _tabController.animation?.value ?? _tabController.index.toDouble();
@@ -396,7 +594,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
                                   height: tabH,
                                   decoration: BoxDecoration(
                                     color: cs.inverseSurface,
-                                    borderRadius: BorderRadius.circular(8 * r),
+                                    borderRadius: BorderRadius.circular(6 * r),
                                   ),
                                 ),
                               ),
@@ -414,18 +612,19 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
                                         alignment: Alignment.center,
                                         decoration: BoxDecoration(
                                           border: Border.all(color: cs.outline, width: 0.7),
-                                          borderRadius: BorderRadius.circular(8 * r),
+                                          borderRadius: BorderRadius.circular(6 * r),
                                         ),
                                         child: Text(
-                                          [s.get('tabHot'), s.get('tabGeneral'), s.get('tabQnA')][i],
-                                          strutStyle: const StrutStyle(
+                                          [s.get('tabReviews'), s.get('tabGeneral'), s.get('tabQnA')][i],
+                                          strutStyle: StrutStyle(
                                             forceStrutHeight: true,
-                                            height: 1.2,
+                                            height: 1.15,
+                                            fontSize: 11 * r,
                                             leadingDistribution: TextLeadingDistribution.even,
                                           ),
                                           style: GoogleFonts.notoSansKr(
-                                            fontSize: 12 * r,
-                                            height: 1.2,
+                                            fontSize: 11 * r,
+                                            height: 1.15,
                                             fontWeight: FontWeight.w700,
                                             color: idx == i ? cs.onInverseSurface : cs.onSurfaceVariant,
                                           ),
@@ -445,7 +644,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
                   SizedBox(width: 14 * r),
                 ],
               ),
-              SizedBox(height: 20 * r),
+              SizedBox(height: 10 * r),
             ],
           ),
         ),
@@ -458,70 +657,51 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
             controller: _tabController,
             children: [
               PopularPostsTab(
-                posts: _cachedPopular,
-                isLoading: _postsLoading,
+                posts: _tabFeedPosts[0],
+                isLoading: _tabFeedPosts[0].isEmpty && _tabInitialLoading[0],
                 error: _postsError,
                 currentUserAuthor: _currentUserAuthor,
-                onRefresh: _loadPosts,
-                onPostUpdated: (Post updated) {
-                  setState(() {
-                    final i = _freeBoardPosts.indexWhere((p) => p.id == updated.id);
-                    if (i >= 0) _freeBoardPosts[i] = updated;
-                    _rebuildPostCache();
-                  });
-                },
-                onPostDeleted: (Post deleted) {
-                  setState(() {
-                    _freeBoardPosts.removeWhere((p) => p.id == deleted.id);
-                    _rebuildPostCache();
-                  });
-                },
-                onPostTap: (post) => _openPost(post, tabName: s.get('tabHot'), backStack: _navBackStack, forwardStack: []),
-                onUserBlocked: () => setState(() {}),
+                onRefresh: _refreshActiveFeedTab,
+                useReviewLayout: true,
+                useLetterboxdReviewLayout: true,
+                useSimpleFeedLayout: true,
+                reviewLetterboxdInlineFeed: true,
+                feedScrollController: _feedScrollControllers[0],
+                feedLoadingMore: _tabLoadingMore[0],
+                feedHasMore: _tabHasMore[0],
+                onPostUpdated: _syncPostInFeeds,
+                onPostDeleted: (Post deleted) => _removePostFromAllFeeds(deleted.id),
+                onUserBlocked: _applyBlockFilterToFeeds,
               ),
               FreeBoardTab(
-                posts: _cachedFree,
-                isLoading: _postsLoading,
+                posts: _tabFeedPosts[1],
+                isLoading: _tabFeedPosts[1].isEmpty && _tabInitialLoading[1],
                 error: _postsError,
                 currentUserAuthor: _currentUserAuthor,
-                onRefresh: _loadPosts,
-                onPostUpdated: (Post updated) {
-                  setState(() {
-                    final i = _freeBoardPosts.indexWhere((p) => p.id == updated.id);
-                    if (i >= 0) _freeBoardPosts[i] = updated;
-                    _rebuildPostCache();
-                  });
-                },
-                onPostDeleted: (Post deleted) {
-                  setState(() {
-                    _freeBoardPosts.removeWhere((p) => p.id == deleted.id);
-                    _rebuildPostCache();
-                  });
-                },
-                onPostTap: (post) => _openPost(post, tabName: s.get('freeBoard'), backStack: _navBackStack, forwardStack: []),
-                onUserBlocked: () => setState(() {}),
+                onRefresh: _refreshActiveFeedTab,
+                useSimpleFeedLayout: true,
+                feedScrollController: _feedScrollControllers[1],
+                feedLoadingMore: _tabLoadingMore[1],
+                feedHasMore: _tabHasMore[1],
+                onPostUpdated: _syncPostInFeeds,
+                onPostDeleted: (Post deleted) => _removePostFromAllFeeds(deleted.id),
+                onPostTap: (post) => _openPost(post, tabName: s.get('tabGeneral'), tabIndex: 1, backStack: _navBackStack, forwardStack: []),
+                onUserBlocked: _applyBlockFilterToFeeds,
               ),
               QuestionBoardTab(
-                posts: _cachedQuestion,
-                isLoading: _postsLoading,
+                posts: _tabFeedPosts[2],
+                isLoading: _tabFeedPosts[2].isEmpty && _tabInitialLoading[2],
                 error: _postsError,
                 currentUserAuthor: _currentUserAuthor,
-                onRefresh: _loadPosts,
-                onPostUpdated: (Post updated) {
-                  setState(() {
-                    final i = _freeBoardPosts.indexWhere((p) => p.id == updated.id);
-                    if (i >= 0) _freeBoardPosts[i] = updated;
-                    _rebuildPostCache();
-                  });
-                },
-                onPostDeleted: (Post deleted) {
-                  setState(() {
-                    _freeBoardPosts.removeWhere((p) => p.id == deleted.id);
-                    _rebuildPostCache();
-                  });
-                },
-                onPostTap: (post) => _openPost(post, tabName: s.get('tabQnA'), backStack: _navBackStack, forwardStack: []),
-                onUserBlocked: () => setState(() {}),
+                onRefresh: _refreshActiveFeedTab,
+                useSimpleFeedLayout: true,
+                feedScrollController: _feedScrollControllers[2],
+                feedLoadingMore: _tabLoadingMore[2],
+                feedHasMore: _tabHasMore[2],
+                onPostUpdated: _syncPostInFeeds,
+                onPostDeleted: (Post deleted) => _removePostFromAllFeeds(deleted.id),
+                onPostTap: (post) => _openPost(post, tabName: s.get('tabQnA'), tabIndex: 2, backStack: _navBackStack, forwardStack: []),
+                onUserBlocked: _applyBlockFilterToFeeds,
               ),
             ],
           ),
@@ -532,8 +712,8 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
             child: BrowserNavBar(
               canGoBack: _navBackStack.isNotEmpty,
               canGoForward: _navForwardStack.isNotEmpty,
-              isRefreshing: _postsLoading,
-              onRefresh: _loadPosts,
+              isRefreshing: _tabLoadingMore[_tabController.index],
+              onRefresh: _refreshActiveFeedTab,
               onBack: _navBack,
               onForward: _navForward,
             ),
@@ -598,10 +778,10 @@ class _ThemeSwitchPillState extends State<_ThemeSwitchPill>
       valueListenable: ThemeService.instance.themeModeNotifier,
       builder: (context, mode, _) {
         final isDark = mode == ThemeMode.dark;
-        final pillW = 62.0 * scale;
-        final pillH = 30.0 * scale;
-        final thumbSize = 24.0 * scale;
-        final padding = 3.0 * scale;
+        final pillW = 58.0 * scale;
+        final pillH = 26.0 * scale;
+        final thumbSize = 20.0 * scale;
+        final padding = 2.0 * scale;
         final trackInnerW = pillW - padding * 2;
 
         return GestureDetector(
@@ -658,8 +838,8 @@ class _ThemeSwitchPillState extends State<_ThemeSwitchPill>
                     child: Text(
                       isDark ? 'DARK' : 'LIGHT',
                       style: GoogleFonts.notoSansKr(
-                        fontSize: (isDark ? 9 : 8) * scale,
-                        height: isDark ? 11 / 9 : 11 / 8,
+                        fontSize: (isDark ? 8.5 : 7.5) * scale,
+                        height: 1.0,
                         fontWeight: FontWeight.w600,
                         color: isDark ? Colors.white : const Color(0xFF3A3A3C),
                       ),

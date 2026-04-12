@@ -57,11 +57,12 @@ class LanguageSelectScreen extends StatelessWidget {
                   color: isDark ? cs.surfaceContainerHighest : (cs.surfaceContainerHighest.withOpacity(0.5)),
                   borderRadius: BorderRadius.circular(16),
                   child: InkWell(
-                    onTap: () async {
-                      await LocaleService.instance.setLocale(code);
-                      if (!context.mounted) return;
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (context.mounted) Navigator.pop(context, true);
+                    onTap: () {
+                      // Navigator 잠금 방지: 먼저 pop한 뒤 다음 프레임에서 언어 변경
+                      WidgetsBinding.instance.addPostFrameCallback((_) async {
+                        if (!context.mounted) return;
+                        Navigator.pop(context, true);
+                        await LocaleService.instance.setLocale(code);
                       });
                     },
                     borderRadius: BorderRadius.circular(16),

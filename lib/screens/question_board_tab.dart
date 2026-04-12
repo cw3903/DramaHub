@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../theme/app_theme.dart';
 import '../widgets/blind_refresh_indicator.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -10,6 +9,8 @@ import '../widgets/community_board_tabs.dart' show PostSearchScope, postSearchSc
 
 const int _postsPerPage = 20;
 
+double _listBottomPad(BuildContext context) =>
+    48 + MediaQuery.of(context).padding.bottom;
 
 class QuestionBoardTab extends StatefulWidget {
   const QuestionBoardTab({
@@ -25,6 +26,10 @@ class QuestionBoardTab extends StatefulWidget {
     this.onUserBlocked,
     this.enablePullToRefresh = true,
     this.shrinkWrap = false,
+    this.useSimpleFeedLayout = false,
+    this.feedScrollController,
+    this.feedLoadingMore = false,
+    this.feedHasMore = true,
   });
 
   final List<Post> posts;
@@ -38,6 +43,10 @@ class QuestionBoardTab extends StatefulWidget {
   final void Function(Post)? onPostDeleted;
   final void Function(Post)? onPostTap;
   final VoidCallback? onUserBlocked;
+  final bool useSimpleFeedLayout;
+  final ScrollController? feedScrollController;
+  final bool feedLoadingMore;
+  final bool feedHasMore;
 
   @override
   State<QuestionBoardTab> createState() => _QuestionBoardTabState();
@@ -118,6 +127,111 @@ class _QuestionBoardTabState extends State<QuestionBoardTab> {
     return (len / _postsPerPage).ceil();
   }
 
+  Widget _wrapRefresh(Widget child) {
+    if (widget.enablePullToRefresh) {
+      return BlindRefreshIndicator(onRefresh: widget.onRefresh, spinnerOffsetDown: 17.0, child: child);
+    }
+    return child;
+  }
+
+  Widget _buildSimpleAskFeed(
+    BuildContext context,
+    ColorScheme cs,
+    List<Post> posts,
+    bool isLoading,
+    String? error,
+    Future<void> Function() onRefresh,
+    String? currentUserAuthor,
+    void Function(Post)? onPostUpdated,
+    void Function(Post)? onPostDeleted,
+  ) {
+    final tabName = CountryScope.of(context).strings.get('tabQnA');
+    if (isLoading && posts.isEmpty) {
+      if (widget.shrinkWrap) {
+        return ListView(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          padding: const EdgeInsets.symmetric(vertical: 48),
+          children: const [Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator()))],
+        );
+      }
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (error != null && posts.isEmpty) {
+      final bottom = _listBottomPad(context);
+      return _wrapRefresh(ListView(
+        shrinkWrap: widget.shrinkWrap,
+        physics: widget.shrinkWrap ? const NeverScrollableScrollPhysics() : const AlwaysScrollableScrollPhysics(),
+        padding: EdgeInsets.fromLTRB(24, 48, 24, bottom),
+        children: [
+          const SizedBox(height: 8),
+          Icon(LucideIcons.cloud_off, size: 56, color: cs.error.withOpacity(0.6)),
+          const SizedBox(height: 20),
+          Text('글을 불러오지 못했어요', textAlign: TextAlign.center, style: GoogleFonts.notoSansKr(fontSize: 16, fontWeight: FontWeight.w600, color: cs.onSurface)),
+          const SizedBox(height: 8),
+          Text(error, textAlign: TextAlign.center, style: GoogleFonts.notoSansKr(fontSize: 12, color: cs.error, height: 1.5)),
+          const SizedBox(height: 20),
+          TextButton(onPressed: onRefresh, child: Text('다시 시도', style: GoogleFonts.notoSansKr(fontSize: 14, color: cs.primary))),
+        ],
+      ));
+    }
+    if (posts.isEmpty) {
+      final bottom = _listBottomPad(context);
+      return _wrapRefresh(ListView(
+        shrinkWrap: widget.shrinkWrap,
+        physics: widget.shrinkWrap ? const NeverScrollableScrollPhysics() : const AlwaysScrollableScrollPhysics(),
+        padding: EdgeInsets.fromLTRB(24, 48, 24, bottom),
+        children: [
+          const SizedBox(height: 8),
+          Icon(LucideIcons.message_circle, size: 56, color: cs.onSurface.withOpacity(0.18)),
+          const SizedBox(height: 20),
+          Text('아직 질문이 없어요', textAlign: TextAlign.center, style: GoogleFonts.notoSansKr(fontSize: 16, fontWeight: FontWeight.w600, color: cs.onSurface)),
+          const SizedBox(height: 8),
+          Text('첫 번째 질문을 남겨보세요!', textAlign: TextAlign.center, style: GoogleFonts.notoSansKr(fontSize: 13, color: cs.onSurface.withOpacity(0.45), height: 1.5)),
+        ],
+      ));
+    }
+    final footerCount = (widget.feedLoadingMore && widget.feedHasMore) ? 1 : 0;
+    final bottom = widget.shrinkWrap ? 24.0 : _listBottomPad(context);
+    final listView = ListView.builder(
+      controller: widget.feedScrollController,
+      shrinkWrap: widget.shrinkWrap,
+      physics: widget.shrinkWrap ? const NeverScrollableScrollPhysics() : const AlwaysScrollableScrollPhysics(),
+      padding: EdgeInsets.zero,
+      cacheExtent: 400,
+      itemCount: posts.length + footerCount + 1,
+      itemBuilder: (context, index) {
+        if (index < posts.length) {
+          final post = posts[index];
+          return RepaintBoundary(
+            child: FeedPostCard(
+              key: ValueKey(post.id),
+              post: post,
+              currentUserAuthor: currentUserAuthor,
+              onPostUpdated: onPostUpdated,
+              onPostDeleted: onPostDeleted,
+              tabName: tabName,
+              onTap: widget.onPostTap != null ? () => widget.onPostTap!(post) : null,
+              onUserBlocked: widget.onUserBlocked,
+            ),
+          );
+        }
+        if (footerCount == 1 && index == posts.length) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: cs.primary))),
+          );
+        }
+        return SizedBox(height: bottom);
+      },
+    );
+    return GestureDetector(
+      onTap: () => FocusScope.of(context).unfocus(),
+      behavior: HitTestBehavior.translucent,
+      child: _wrapRefresh(listView),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -129,6 +243,10 @@ class _QuestionBoardTabState extends State<QuestionBoardTab> {
     final currentUserAuthor = widget.currentUserAuthor;
     final onPostUpdated = widget.onPostUpdated;
     final onPostDeleted = widget.onPostDeleted;
+
+    if (widget.useSimpleFeedLayout) {
+      return _buildSimpleAskFeed(context, cs, posts, isLoading, error, onRefresh, currentUserAuthor, onPostUpdated, onPostDeleted);
+    }
 
     if (isLoading) {
       if (widget.shrinkWrap) {
@@ -266,31 +384,33 @@ class _QuestionBoardTabState extends State<QuestionBoardTab> {
     return Container(
       height: 44,
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: cs.surface,
         borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: const Color(0xFFFF6B35), width: 1),
+        border: Border.all(color: cs.primary, width: 1),
       ),
       child: Row(
         children: [
           Padding(
             padding: const EdgeInsets.only(left: 14),
-            child: Icon(LucideIcons.search, size: 17, color: Colors.black.withOpacity(0.35)),
+            child: Icon(LucideIcons.search, size: 17, color: cs.onSurfaceVariant.withOpacity(0.8)),
           ),
           const SizedBox(width: 8),
           Expanded(
             child: TextField(
               controller: _searchController,
               textAlignVertical: TextAlignVertical.center,
+              cursorColor: cs.primary,
               decoration: InputDecoration(
                 hintText: CountryScope.of(context).strings.get('search'),
-                hintStyle: GoogleFonts.notoSansKr(fontSize: 14, color: Colors.black.withOpacity(0.28), fontWeight: FontWeight.w400),
+                hintStyle: GoogleFonts.notoSansKr(fontSize: 14, color: cs.onSurfaceVariant.withOpacity(0.7), fontWeight: FontWeight.w400),
+                filled: false,
                 border: InputBorder.none,
                 enabledBorder: InputBorder.none,
                 focusedBorder: InputBorder.none,
                 isCollapsed: true,
                 contentPadding: EdgeInsets.zero,
               ),
-              style: GoogleFonts.notoSansKr(fontSize: 14, fontWeight: FontWeight.w400, color: Colors.black87),
+              style: GoogleFonts.notoSansKr(fontSize: 14, fontWeight: FontWeight.w400, color: cs.onSurface),
               onSubmitted: (_) => _submitSearch(),
             ),
           ),
@@ -299,10 +419,10 @@ class _QuestionBoardTabState extends State<QuestionBoardTab> {
               onTap: () { _searchController.clear(); setState(() => _searchQuery = ''); },
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: Icon(LucideIcons.x, size: 16, color: Colors.black.withOpacity(0.35)),
+                child: Icon(LucideIcons.x, size: 16, color: cs.onSurfaceVariant.withOpacity(0.8)),
               ),
             ),
-          Container(width: 1, height: 22, color: Colors.black.withOpacity(0.08)),
+          Container(width: 1, height: 22, color: cs.onSurface.withOpacity(0.08)),
           GestureDetector(
             key: _filterKey,
             onTap: () async {

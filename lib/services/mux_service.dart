@@ -2,6 +2,13 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
 
+/// Mux 무료 플랜 에셋 한도(10개) 초과 시
+class MuxAssetLimitException implements Exception {
+  @override
+  String toString() =>
+      'Mux 무료 플랜은 에셋 10개까지입니다. dashboard.mux.com에서 기존 에셋을 삭제하거나 플랜을 업그레이드해 주세요.';
+}
+
 /// Mux 영상 스트리밍 서비스 (HLS)
 /// 사용법:
 ///   1. dashboard.mux.com 에서 API Token 발급
@@ -39,7 +46,11 @@ class MuxService {
       }),
     );
     if (response.statusCode != 201) {
-      throw Exception('Mux 업로드 URL 발급 실패 (${response.statusCode}): ${response.body}');
+      final body = response.body;
+      if (response.statusCode == 400 && body.contains('10 assets') && body.contains('Free plan')) {
+        throw MuxAssetLimitException();
+      }
+      throw Exception('Mux 업로드 URL 발급 실패 (${response.statusCode}): $body');
     }
     final data = jsonDecode(response.body)['data'] as Map<String, dynamic>;
     return _MuxUpload(

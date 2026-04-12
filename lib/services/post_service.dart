@@ -9,8 +9,10 @@ import 'package:image/image.dart' as img;
 import '../models/post.dart';
 import '../models/notification_item.dart';
 import '../utils/format_utils.dart';
+import '../utils/post_board_utils.dart';
 import 'auth_service.dart';
 import 'notification_service.dart';
+import 'review_service.dart';
 import 'user_profile_service.dart';
 
 /// 자유게시판 글 Firestore 저장/로드
@@ -251,37 +253,13 @@ class PostService {
     for (var attempt = 0; attempt < 2; attempt++) {
       try {
         final docRef = await _col.add(map);
-        return (
-          Post(
-            id: docRef.id,
-            title: post.title,
-            subreddit: post.subreddit,
-            author: post.author,
-            timeAgo: post.timeAgo,
-            votes: post.votes,
-            comments: post.comments,
-            views: post.views,
-            hasImage: post.hasImage,
-            imageUrls: post.imageUrls,
-            imageDimensions: post.imageDimensions,
-            hasVideo: post.hasVideo,
-            videoUrl: post.videoUrl,
-            videoThumbnailUrl: post.videoThumbnailUrl,
-            isGif: post.isGif,
-            body: post.body,
-            linkUrl: post.linkUrl,
-            commentsList: post.commentsList,
-            authorLevel: post.authorLevel,
-            likedBy: post.likedBy,
-            dislikedBy: post.dislikedBy,
-            category: post.category,
-            authorPhotoUrl: post.authorPhotoUrl,
-            authorAvatarColorIndex: post.authorAvatarColorIndex,
-            authorUid: post.authorUid,
-            country: post.country,
-          ),
-          null,
-        );
+        final saved = post.copyWith(id: docRef.id, authorUid: uid);
+        try {
+          await ReviewService.instance.syncDramaReviewFromFeedPost(saved);
+        } catch (e, st) {
+          debugPrint('syncDramaReviewFromFeedPost: $e\n$st');
+        }
+        return (saved, null);
       } catch (e, st) {
         debugPrint('addPost 실패 (attempt ${attempt + 1}): $e');
         debugPrint('$st');
@@ -319,7 +297,7 @@ class PostService {
     return lastResult;
   }
 
-  /// 글 수정. 수정 가능한 필드(title, body, imageUrls, linkUrl, hasImage)만 업데이트.
+  /// 글 수정. 제목·내용·미디어·게시판·리뷰 메타 등 저장 필드 업데이트.
   Future<Post?> updatePost(Post post) async {
     if (post.id.isEmpty) return null;
     try {
@@ -331,12 +309,30 @@ class PostService {
         'linkUrl': post.linkUrl,
         'hasImage': post.hasImage,
         'hasVideo': post.hasVideo,
+        'category': post.category,
+        'hasSpoiler': post.hasSpoiler,
+        'isLiked': post.isLiked,
+        'isFirstWatch': post.isFirstWatch,
+        'tags': post.tags,
+        'allowReply': post.allowReply,
       };
+      if (post.type != null && post.type!.isNotEmpty) updateData['type'] = post.type;
+      if (post.dramaId != null && post.dramaId!.isNotEmpty) updateData['dramaId'] = post.dramaId;
+      if (post.dramaTitle != null && post.dramaTitle!.isNotEmpty) updateData['dramaTitle'] = post.dramaTitle;
+      if (post.dramaThumbnail != null && post.dramaThumbnail!.isNotEmpty) {
+        updateData['dramaThumbnail'] = post.dramaThumbnail;
+      }
+      if (post.rating != null) updateData['rating'] = post.rating;
       if (post.imageDimensions != null) updateData['imageDimensions'] = post.imageDimensions;
       if (post.videoUrl != null) updateData['videoUrl'] = post.videoUrl;
       if (post.videoThumbnailUrl != null) updateData['videoThumbnailUrl'] = post.videoThumbnailUrl;
       if (post.isGif != null) updateData['isGif'] = post.isGif;
       await docRef.update(updateData);
+      try {
+        await ReviewService.instance.syncDramaReviewFromFeedPost(post);
+      } catch (e, st) {
+        debugPrint('syncDramaReviewFromFeedPost: $e\n$st');
+      }
       return post;
     } catch (e, st) {
       debugPrint('updatePost 실패: $e');
@@ -546,6 +542,7 @@ class PostService {
           'dislikedBy': FieldValue.arrayRemove([uid]),
           'likedBy': FieldValue.arrayUnion([uid]),
           'votes': FieldValue.increment(voteDelta),
+          'likeCount': FieldValue.increment(1),
         });
         if (postAuthorUid != null) {
           final myNickname = 'u/${UserProfileService.instance.nicknameNotifier.value ?? uid}';
@@ -561,6 +558,7 @@ class PostService {
         await docRef.update(<String, dynamic>{
           'likedBy': FieldValue.arrayRemove([uid]),
           'votes': FieldValue.increment(-1),
+          'likeCount': FieldValue.increment(-1),
         });
       }
       return nowLiked;
@@ -617,7 +615,7 @@ class PostService {
       if (!docSnap.exists) return null;
       final data = docSnap.data()!;
       data['id'] = docSnap.id;
-      final post = Post.fromMap(data);
+      final post = Post.fromMap(_normalizePostMap(Map<String, dynamic>.from(data)));
       final list = post.commentsList;
       final found = findCommentById(list, commentId);
       if (found == null) return null;
@@ -661,30 +659,7 @@ class PostService {
           );
         }
       }
-      return Post(
-        id: post.id,
-        title: post.title,
-        subreddit: post.subreddit,
-        author: post.author,
-        timeAgo: post.timeAgo,
-        votes: post.votes,
-        comments: post.comments,
-        views: post.views,
-        hasImage: post.hasImage,
-        imageUrls: post.imageUrls,
-        imageDimensions: post.imageDimensions,
-        hasVideo: post.hasVideo,
-        videoUrl: post.videoUrl,
-        videoThumbnailUrl: post.videoThumbnailUrl,
-        isGif: post.isGif,
-        body: post.body,
-        linkUrl: post.linkUrl,
-        commentsList: newList,
-        authorLevel: post.authorLevel,
-        likedBy: post.likedBy,
-        dislikedBy: post.dislikedBy,
-        country: post.country,
-      );
+      return post.copyWith(commentsList: newList);
     } catch (e, st) {
       debugPrint('toggleCommentLike 실패: $e');
       debugPrint('$st');
@@ -702,7 +677,7 @@ class PostService {
       if (!docSnap.exists) return null;
       final data = docSnap.data()!;
       data['id'] = docSnap.id;
-      final post = Post.fromMap(data);
+      final post = Post.fromMap(_normalizePostMap(Map<String, dynamic>.from(data)));
       final list = post.commentsList;
       final found = findCommentById(list, commentId);
       if (found == null) return null;
@@ -731,30 +706,7 @@ class PostService {
       final newList = replaceCommentById(list, commentId, newComment);
       final newCommentsList = newList.map((c) => c.toMap()).toList();
       await docRef.update({'commentsList': newCommentsList});
-      return Post(
-        id: post.id,
-        title: post.title,
-        subreddit: post.subreddit,
-        author: post.author,
-        timeAgo: post.timeAgo,
-        votes: post.votes,
-        comments: post.comments,
-        views: post.views,
-        hasImage: post.hasImage,
-        imageUrls: post.imageUrls,
-        imageDimensions: post.imageDimensions,
-        hasVideo: post.hasVideo,
-        videoUrl: post.videoUrl,
-        videoThumbnailUrl: post.videoThumbnailUrl,
-        isGif: post.isGif,
-        body: post.body,
-        linkUrl: post.linkUrl,
-        commentsList: newList,
-        authorLevel: post.authorLevel,
-        likedBy: post.likedBy,
-        dislikedBy: post.dislikedBy,
-        country: post.country,
-      );
+      return post.copyWith(commentsList: newList);
     } catch (e, st) {
       debugPrint('toggleCommentDislike 실패: $e');
       debugPrint('$st');
@@ -806,7 +758,7 @@ class PostService {
 
   /// 특정 작성자의 글만 조회 (닉네임/작성자명 기준)
   Future<List<Post>> getPostsByAuthor(String author) async {
-    final all = await getPosts();
+    final all = await getPostsAllPages();
     return all.where((p) => p.author == author).toList();
   }
 
@@ -829,7 +781,7 @@ class PostService {
 
   /// 특정 작성자가 쓴 댓글 목록 (글 정보 포함). 댓글·답글 모두 포함.
   Future<List<({Post post, PostComment comment})>> getCommentsByAuthor(String author) async {
-    final posts = await getPosts();
+    final posts = await getPostsAllPages();
     final result = <({Post post, PostComment comment})>[];
     for (final post in posts) {
       void collect(List<PostComment> list) {
@@ -843,56 +795,79 @@ class PostService {
     return result;
   }
 
-  /// 자유게시판 글 목록 로드 (최신순, 최대 100건).
-  /// orderBy를 Firestore 서버에서 하지 않고 클라이언트에서 정렬:
-  ///   → createdAt 필드가 없는 문서도 결과에 포함됨 (Firestore orderBy는 해당 필드 없는 문서 제외).
-  /// country 필터도 클라이언트에서 처리 (복합 인덱스 불필요).
-  Future<List<Post>> getPosts({String? country}) async {
+  /// Firestore 페이지 단위 로드 (createdAt 내림차순).
+  /// [type]이 있으면 클라이언트에서 [postMatchesFeedFilter] 적용 (기존과 동일).
+  /// [country]가 있으면 해당 국가만 반환 (매칭 없으면 빈 목록).
+  /// createdAt 없는 문서는 이 쿼리에서 제외됨.
+  Future<({List<Post> posts, DocumentSnapshot<Map<String, dynamic>>? lastDocument, bool hasMore})> getPosts({
+    String? country,
+    String? type,
+    DocumentSnapshot<Map<String, dynamic>>? lastDocument,
+    int limit = 20,
+  }) async {
     try {
-      // orderBy 없이 전체 조회 → createdAt 없는 문서도 포함됨
-      final snapshot = await _col.limit(200).get();
-      debugPrint('getPosts: Firestore에서 ${snapshot.docs.length}개 문서 조회됨');
-      final list = <Post>[];
+      final countryEq = country?.trim();
+      final Query<Map<String, dynamic>> q;
+      if (countryEq != null && countryEq.isNotEmpty) {
+        q = _col
+            .where('country', isEqualTo: countryEq)
+            .orderBy('createdAt', descending: true)
+            .limit(limit);
+      } else {
+        q = _col.orderBy('createdAt', descending: true).limit(limit);
+      }
+      final snapshot = await (lastDocument != null ? q.startAfterDocument(lastDocument) : q).get();
+      debugPrint('getPosts: page ${snapshot.docs.length} docs (limit $limit)');
+      final board = type?.trim().toLowerCase();
+      final out = <Post>[];
+      DocumentSnapshot<Map<String, dynamic>>? pageLast;
       for (final doc in snapshot.docs) {
+        pageLast = doc;
         try {
           final data = doc.data();
           data['id'] = doc.id;
           final createdAt = data['createdAt'];
           final sortAt = createdAt is Timestamp
               ? createdAt.toDate()
-              : (data['id'] != null
-                  ? DateTime.fromMillisecondsSinceEpoch(int.tryParse(data['id'].toString()) ?? 0)
-                  : DateTime.fromMillisecondsSinceEpoch(0));
-          data['_sortAt'] = sortAt.millisecondsSinceEpoch;
+              : DateTime.fromMillisecondsSinceEpoch(0);
           final normalized = _normalizePostMap(data);
           normalized['timeAgo'] = formatTimeAgo(sortAt, country);
-          list.add(Post.fromMap(normalized));
+          final post = Post.fromMap(normalized);
+          if (board != null && board.isNotEmpty) {
+            if (!postMatchesFeedFilter(post, board)) continue;
+          }
+          if (countryEq != null && countryEq.isNotEmpty) {
+            if (post.country != countryEq) continue;
+          }
+          out.add(post);
         } catch (e, st) {
           debugPrint('getPosts: 문서 ${doc.id} 파싱 실패 - $e');
           debugPrint('$st');
         }
       }
-      // 클라이언트에서 최신순 정렬 (id가 밀리초 타임스탬프인 경우 사용, 없으면 0)
-      list.sort((a, b) {
-        final ta = int.tryParse(a.id) ?? 0;
-        final tb = int.tryParse(b.id) ?? 0;
-        return tb.compareTo(ta);
-      });
-      // 최신 100개만 유지
-      final sorted = list.length > 100 ? list.sublist(0, 100) : list;
-      // country 필터: 해당 언어 글만 반환 (없으면 빈 목록, 폴백으로 전체 반환하지 않음)
-      if (country != null && country.isNotEmpty) {
-        final filtered = sorted.where((p) => p.country == country).toList();
-        debugPrint('getPosts: country=$country 필터 → ${filtered.length}개 (전체 ${sorted.length}개)');
-        return filtered;
-      }
-      debugPrint('getPosts: ${sorted.length}개 글 반환');
-      return sorted;
+      final hasMore = snapshot.docs.length >= limit;
+      return (posts: out, lastDocument: pageLast, hasMore: hasMore);
     } catch (e, st) {
       debugPrint('getPosts 실패: $e');
       debugPrint('$st');
-      return [];
+      return (posts: <Post>[], lastDocument: null, hasMore: false);
     }
+  }
+
+  /// [getPosts]를 cursor로 이어 붙여 전체 목록 (검색·레거시 호환).
+  Future<List<Post>> getPostsAllPages({String? country, String? type, int pageSize = 100}) async {
+    final acc = <Post>[];
+    final seen = <String>{};
+    DocumentSnapshot<Map<String, dynamic>>? last;
+    while (true) {
+      final r = await getPosts(country: country, type: type, lastDocument: last, limit: pageSize);
+      for (final p in r.posts) {
+        if (seen.add(p.id)) acc.add(p);
+      }
+      if (!r.hasMore || r.lastDocument == null) break;
+      last = r.lastDocument;
+    }
+    return acc;
   }
 
   /// 댓글 createdAt 마이그레이션: id(밀리초)로 createdAt 없는 댓글을 복원
@@ -954,6 +929,10 @@ class PostService {
     if (m['likedBy'] != null && m['likedBy'] is! List) {
       final raw = m['likedBy'] as Map;
       m['likedBy'] = raw.values.map((e) => e.toString()).toList();
+    }
+    if (m['dislikedBy'] != null && m['dislikedBy'] is! List) {
+      final raw = m['dislikedBy'] as Map;
+      m['dislikedBy'] = raw.values.map((e) => e.toString()).toList();
     }
     return m;
   }

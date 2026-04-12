@@ -7,6 +7,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:image_cropper/image_cropper.dart';
 import 'package:image_picker/image_picker.dart';
 import '../utils/format_utils.dart';
+import '../utils/post_board_utils.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -14,6 +15,7 @@ import '../services/auth_service.dart';
 import '../services/block_service.dart';
 import '../services/level_service.dart';
 import '../services/message_service.dart';
+import '../services/locale_service.dart';
 import '../services/post_service.dart';
 import '../services/user_profile_service.dart';
 import '../theme/app_theme.dart';
@@ -21,6 +23,9 @@ import '../widgets/country_scope.dart';
 import '../widgets/share_sheet.dart';
 import '../services/saved_service.dart';
 import '../models/post.dart';
+import '../models/drama.dart';
+import '../services/drama_list_service.dart';
+import 'drama_detail_page.dart';
 import 'login_page.dart';
 import 'message_thread_screen.dart';
 import 'user_posts_screen.dart';
@@ -79,7 +84,7 @@ class PostDetailPage extends StatefulWidget {
   final List<(Post, int)> initialBackStack;
   final List<(Post, int)> initialForwardStack;
   final int? initialTabIndex;
-  /// 홈탭 게시판 목록(인기글/자유/질문). 넘기면 글 상세 하단 DramaTALK에 그대로 표시
+  /// 홈탭 게시판 목록(인기글/자유/질문). 넘기면 글 상세 하단 DramaFeed에 그대로 표시
   final List<Post>? initialBoardPosts;
 
   @override
@@ -118,6 +123,9 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
   late int _morePostsTabIndex;
   Timer? _keyboardDebounceTimer;
   bool _isRefreshing = false;
+  /// Letterboxd 리뷰 상세: 스포일러 본문 공개 여부 (글 바뀌면 초기화)
+  bool _reviewSpoilerRevealed = false;
+  String? _letterboxdSpoilerBoundPostId;
   // 브라우저 히스토리 스택 (Post, tabIndex)
   late final List<(Post, int)> _backStack;
   late final List<(Post, int)> _forwardStack;
@@ -193,7 +201,7 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
     WidgetsBinding.instance.addObserver(this);
     _backStack = List.of(widget.initialBackStack);
     _forwardStack = List.of(widget.initialForwardStack);
-    _morePostsTabIndex = widget.initialTabIndex ?? 0;
+    _morePostsTabIndex = (widget.initialTabIndex ?? 0).clamp(0, 2);
     _scrollController.addListener(_updateFabVisibility);
     _currentPost = widget.post;
     final n = widget.post.commentsList.length;
@@ -221,9 +229,19 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
     super.didChangeDependencies();
     if (widget.initialTabIndex == null) {
       final s = CountryScope.of(context).strings;
-      final idx = widget.tabName == s.get('freeBoard') ? 1 : 0;
-      if (_morePostsTabIndex != idx) {
-        _morePostsTabIndex = idx;
+      var idx = 0;
+      if (widget.tabName == s.get('tabReviews')) {
+        idx = 0;
+      } else if (widget.tabName == s.get('tabHot')) {
+        idx = 1;
+      } else if (widget.tabName == s.get('freeBoard') || widget.tabName == s.get('tabGeneral')) {
+        idx = 1;
+      } else if (widget.tabName == s.get('tabQnA')) {
+        idx = 2;
+      }
+      final clamped = idx.clamp(0, 2);
+      if (_morePostsTabIndex != clamped) {
+        _morePostsTabIndex = clamped;
       }
     }
   }
@@ -232,29 +250,7 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
     // 낙관적 업데이트: 화면에 먼저 +1 반영 (인기글 mock·네트워크 실패 시에도 조회수 표시)
     if (mounted) {
       setState(() {
-        _currentPost = Post(
-          id: _post.id,
-          title: _post.title,
-          subreddit: _post.subreddit,
-          author: _post.author,
-          timeAgo: _post.timeAgo,
-          votes: _post.votes,
-          comments: _post.comments,
-          views: _post.views + 1,
-          hasImage: _post.hasImage,
-          imageUrls: _post.imageUrls,
-          imageDimensions: _post.imageDimensions,
-          hasVideo: _post.hasVideo,
-          videoUrl: _post.videoUrl,
-          videoThumbnailUrl: _post.videoThumbnailUrl,
-          isGif: _post.isGif,
-          body: _post.body,
-          linkUrl: _post.linkUrl,
-          commentsList: _post.commentsList,
-          authorLevel: _post.authorLevel,
-          likedBy: _post.likedBy,
-          dislikedBy: _post.dislikedBy,
-        );
+        _currentPost = _post.copyWith(views: _post.views + 1);
       });
     }
     await PostService.instance.incrementPostViews(widget.post.id);
@@ -372,33 +368,9 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
               ),
             )
           : [..._post.commentsList, newComment];
-      final optimisticPost = Post(
-        id: _post.id,
-        title: _post.title,
-        subreddit: _post.subreddit,
-        author: _post.author,
-        timeAgo: _post.timeAgo,
-        votes: _post.votes,
+      final optimisticPost = _post.copyWith(
         comments: _post.comments + 1,
-        views: _post.views,
-        hasImage: _post.hasImage,
-        imageUrls: _post.imageUrls,
-        imageDimensions: _post.imageDimensions,
-        hasVideo: _post.hasVideo,
-        videoUrl: _post.videoUrl,
-        videoThumbnailUrl: _post.videoThumbnailUrl,
-        isGif: _post.isGif,
-        body: _post.body,
-        linkUrl: _post.linkUrl,
         commentsList: newList,
-        authorLevel: _post.authorLevel,
-        likedBy: _post.likedBy,
-        dislikedBy: _post.dislikedBy,
-        category: _post.category,
-        authorPhotoUrl: _post.authorPhotoUrl,
-        authorAvatarColorIndex: _post.authorAvatarColorIndex,
-        popularAt: _post.popularAt,
-        authorUid: _post.authorUid,
       );
       if (mounted) {
         setState(() {
@@ -483,17 +455,9 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
       _votePending = true;
       _isLiked = nowLiked;
       _isDisliked = false;
-      _currentPost = Post(
-        id: _post.id, title: _post.title, subreddit: _post.subreddit,
-        author: _post.author, timeAgo: _post.timeAgo,
+      _currentPost = _post.copyWith(
         votes: _post.votes + likeVoteDelta,
-        comments: _post.comments, views: _post.views,
-        hasImage: _post.hasImage, imageUrls: _post.imageUrls,
-        imageDimensions: _post.imageDimensions,
-        hasVideo: _post.hasVideo, videoUrl: _post.videoUrl,
-        videoThumbnailUrl: _post.videoThumbnailUrl, isGif: _post.isGif,
-        body: _post.body, linkUrl: _post.linkUrl, commentsList: _post.commentsList,
-        authorLevel: _post.authorLevel, likedBy: newLikedBy,
+        likedBy: newLikedBy,
         dislikedBy: nowLiked ? _post.dislikedBy.where((u) => u != uid).toList() : _post.dislikedBy,
       );
     });
@@ -537,17 +501,9 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
       _votePending = true;
       _isDisliked = nowDisliked;
       _isLiked = false;
-      _currentPost = Post(
-        id: _post.id, title: _post.title, subreddit: _post.subreddit,
-        author: _post.author, timeAgo: _post.timeAgo,
+      _currentPost = _post.copyWith(
         votes: _post.votes + voteDelta,
-        comments: _post.comments, views: _post.views,
-        hasImage: _post.hasImage, imageUrls: _post.imageUrls,
-        imageDimensions: _post.imageDimensions,
-        hasVideo: _post.hasVideo, videoUrl: _post.videoUrl,
-        videoThumbnailUrl: _post.videoThumbnailUrl, isGif: _post.isGif,
-        body: _post.body, linkUrl: _post.linkUrl, commentsList: _post.commentsList,
-        authorLevel: _post.authorLevel, likedBy: newLikedBy,
+        likedBy: newLikedBy,
         dislikedBy: newDislikedBy,
       );
     });
@@ -828,7 +784,7 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
       _backStack.add((_post, _morePostsTabIndex));
       _forwardStack.clear();
       _currentPost = post;
-      _morePostsTabIndex = tabIndex;
+      _morePostsTabIndex = tabIndex.clamp(0, 2);
       _commentPage = 0;
       _commentLines = 2;
       _commentController.clear();
@@ -858,7 +814,7 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
       _forwardStack.add((_post, _morePostsTabIndex));
       final (post, tabIndex) = _backStack.removeLast();
       _currentPost = post;
-      _morePostsTabIndex = tabIndex;
+      _morePostsTabIndex = tabIndex.clamp(0, 2);
       _commentPage = 0;
       _commentLines = 2;
       _commentController.clear();
@@ -876,7 +832,7 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
       _backStack.add((_post, _morePostsTabIndex));
       final (post, tabIndex) = _forwardStack.removeLast();
       _currentPost = post;
-      _morePostsTabIndex = tabIndex;
+      _morePostsTabIndex = tabIndex.clamp(0, 2);
       _commentPage = 0;
       _commentLines = 2;
       _commentController.clear();
@@ -889,9 +845,12 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
   }
 
   Future<void> _openWritePost() async {
+    final ib = postDisplayType(_post) == 'review'
+        ? 'review'
+        : (postDisplayType(_post) == 'ask' ? 'ask' : 'talk');
     final post = await Navigator.push<Post>(
       context,
-      MaterialPageRoute(builder: (_) => const WritePostPage()),
+      MaterialPageRoute(builder: (_) => WritePostPage(initialBoard: ib)),
     );
     if (post != null && mounted) {
       final s = CountryScope.of(context).strings;
@@ -1263,6 +1222,150 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
     );
   }
 
+  void _letterboxdEnsureSpoilerStateForPost(String postId) {
+    if (_letterboxdSpoilerBoundPostId != postId) {
+      _letterboxdSpoilerBoundPostId = postId;
+      _reviewSpoilerRevealed = false;
+    }
+  }
+
+  static const Color _kLetterboxdHeroOrange = Color(0xFFFF6B35);
+
+  Widget _buildReviewStarRowLetterboxd(double? rating, {double totalWidth = 168}) {
+    final r = (rating ?? 0).clamp(0.0, 5.0);
+    final units = (r * 2).round().clamp(0, 10);
+    final fullCount = units ~/ 2;
+    final hasHalf = units.isOdd;
+    const starOrange = Color(0xFFFFB020);
+    final slotW = totalWidth / 5;
+    final iconSize = (slotW * 0.82).clamp(15.0, 24.0);
+    return SizedBox(
+      width: totalWidth,
+      child: Row(
+        children: List.generate(5, (i) {
+          final IconData icon;
+          if (i < fullCount) {
+            icon = Icons.star_rounded;
+          } else if (i == fullCount && hasHalf) {
+            icon = Icons.star_half_rounded;
+          } else {
+            icon = Icons.star_border_rounded;
+          }
+          return SizedBox(
+            width: slotW,
+            child: Center(child: Icon(icon, size: iconSize, color: starOrange)),
+          );
+        }),
+      ),
+    );
+  }
+
+  Future<void> _openDramaDetailFromReview(Post post) async {
+    await DramaListService.instance.loadFromAsset();
+    if (!mounted) return;
+    final locale = CountryScope.maybeOf(context)?.country;
+    final dramaId = post.dramaId?.trim() ?? '';
+    DramaItem item;
+    DramaItem? fromList;
+    for (final e in DramaListService.instance.list) {
+      if (dramaId.isNotEmpty && e.id == dramaId) {
+        fromList = e;
+        break;
+      }
+    }
+    if (fromList != null) {
+      item = fromList;
+    } else {
+      final title = (post.dramaTitle?.trim().isNotEmpty == true)
+          ? post.dramaTitle!.trim()
+          : DramaListService.instance.getDisplayTitleByTitle(post.title, locale);
+      final thumb = post.dramaThumbnail?.trim();
+      final hasImg = thumb != null && (thumb.startsWith('http') || thumb.startsWith('assets/'));
+      item = DramaItem(
+        id: dramaId.isNotEmpty ? dramaId : 'review_${post.id}',
+        title: title,
+        subtitle: '',
+        views: '0',
+        rating: post.rating ?? 0,
+        imageUrl: hasImg ? thumb : null,
+      );
+    }
+    final detail = DramaListService.instance.buildDetailForItem(item, locale);
+    if (!mounted) return;
+    await Navigator.push<void>(
+      context,
+      CupertinoPageRoute<void>(builder: (_) => DramaDetailPage(detail: detail)),
+    );
+  }
+
+  Future<void> _onLetterboxdPostMenuSelected(String? value, Post post, ColorScheme cs, dynamic s) async {
+    if (!mounted || value == null) return;
+    if (value == 'edit') {
+      final updated = await Navigator.push<Post>(context, MaterialPageRoute(builder: (_) => WritePostPage(initialPost: post)));
+      if (updated != null && mounted) setState(() => _currentPost = updated);
+    } else if (value == 'delete') {
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(s.get('delete'), style: GoogleFonts.notoSansKr()),
+          content: Text(s.get('deletePostConfirm'), style: GoogleFonts.notoSansKr()),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr())),
+            TextButton(onPressed: () => Navigator.pop(ctx, true), child: Text(s.get('delete'), style: GoogleFonts.notoSansKr(color: cs.error))),
+          ],
+        ),
+      );
+      if (confirm == true && mounted) {
+        await PostService.instance.deletePost(post.id);
+        if (mounted) {
+          widget.onPostDeleted?.call(post);
+          Navigator.pop(context);
+        }
+      }
+    } else if (value == 'report') {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(s.get('reportPostTitle'), style: GoogleFonts.notoSansKr()),
+          content: Text(s.get('reportPostMessage'), style: GoogleFonts.notoSansKr()),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr())),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(s.get('reportSubmitted'), style: GoogleFonts.notoSansKr()), behavior: SnackBarBehavior.floating),
+                );
+              },
+              child: Text(s.get('report'), style: GoogleFonts.notoSansKr(color: cs.error)),
+            ),
+          ],
+        ),
+      );
+    } else if (value == 'block') {
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(s.get('blockPostTitle'), style: GoogleFonts.notoSansKr()),
+          content: Text(s.get('blockPostMessage'), style: GoogleFonts.notoSansKr()),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr())),
+            TextButton(onPressed: () => Navigator.pop(ctx, true), child: Text(s.get('block'), style: GoogleFonts.notoSansKr())),
+          ],
+        ),
+      );
+      if (confirm == true && mounted) {
+        await BlockService.instance.blockPost(post.id);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(s.get('blockPostDone'), style: GoogleFonts.notoSansKr()), behavior: SnackBarBehavior.floating),
+          );
+          Navigator.pop(context);
+        }
+      }
+    }
+  }
+
   Widget _buildGifPhotoReplyRow(ColorScheme cs, dynamic s) {
     return ValueListenableBuilder<bool>(
       valueListenable: AuthService.instance.isLoggedIn,
@@ -1326,12 +1429,295 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
     );
   }
 
+  Widget _buildReviewSmallPoster(Post post, ColorScheme cs, double w, double h) {
+    final t = post.dramaThumbnail?.trim();
+    final ok = t != null && t.startsWith('http');
+    if (ok) {
+      return OptimizedNetworkImage(
+        imageUrl: t!,
+        width: w,
+        height: h,
+        fit: BoxFit.cover,
+        memCacheWidth: (w * 2).round(),
+        memCacheHeight: (h * 2).round(),
+      );
+    }
+    return Container(
+      width: w,
+      height: h,
+      color: cs.surfaceContainerHighest,
+      alignment: Alignment.center,
+      child: Icon(Icons.movie_outlined, color: cs.onSurfaceVariant, size: 28),
+    );
+  }
+
+  Widget _buildLetterboxdReviewSection(BuildContext context, ThemeData theme, ColorScheme cs, Post post) {
+    final s = CountryScope.of(context).strings;
+    final heroThumb = post.dramaThumbnail?.trim();
+    final hasHttpHero = heroThumb != null && heroThumb.startsWith('http');
+    final dramaTitle = post.dramaTitle?.trim().isNotEmpty == true ? post.dramaTitle! : post.title;
+    final bodyRaw = post.body ?? '';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          height: 220,
+          width: double.infinity,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (hasHttpHero)
+                OptimizedNetworkImage.thumbnail(
+                  imageUrl: heroThumb!,
+                  height: 220,
+                  width: MediaQuery.sizeOf(context).width,
+                )
+              else
+                const ColoredBox(color: _kLetterboxdHeroOrange),
+              Positioned.fill(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [Colors.black.withOpacity(0.38), Colors.transparent],
+                      stops: const [0, 0.42],
+                    ),
+                  ),
+                ),
+              ),
+              SafeArea(
+                bottom: false,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      IconButton(
+                        icon: const Icon(LucideIcons.arrow_left, color: Colors.white, size: 26),
+                        tooltip: MaterialLocalizations.of(context).backButtonTooltip,
+                        onPressed: () => Navigator.pop(context, _buildResult(updatedPost: _post)),
+                      ),
+                      IconButton(
+                        icon: const Icon(LucideIcons.share_2, color: Colors.white, size: 22),
+                        onPressed: () => ShareSheet.show(context, title: post.title, type: 'post'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 18, 8, 8),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _PostAuthorAvatar(
+                      photoUrl: post.authorPhotoUrl,
+                      author: post.author,
+                      colorIndex: post.authorAvatarColorIndex,
+                      size: 40,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: GestureDetector(
+                        onTapDown: (d) => _showPostAuthorMenu(context, post.author, d),
+                        behavior: HitTestBehavior.opaque,
+                        child: Text(
+                          post.author.startsWith('u/') ? post.author.substring(2) : post.author,
+                          style: GoogleFonts.notoSansKr(fontSize: 15, fontWeight: FontWeight.w700, color: cs.onSurface),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () => _openDramaDetailFromReview(post),
+                      borderRadius: BorderRadius.circular(8),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: _buildReviewSmallPoster(post, cs, 60, 85),
+                      ),
+                    ),
+                  ),
+                  PopupMenuButton<String>(
+                    padding: EdgeInsets.zero,
+                    icon: Icon(LucideIcons.ellipsis, size: 20, color: cs.onSurfaceVariant),
+                    onSelected: (v) => _onLetterboxdPostMenuSelected(v, post, cs, s),
+                    itemBuilder: (ctx) => [
+                      if (_isMine) ...[
+                        PopupMenuItem(
+                          value: 'edit',
+                          child: Row(children: [
+                            Icon(Icons.edit_outlined, size: 18, color: cs.onSurface),
+                            const SizedBox(width: 8),
+                            Text(s.get('edit'), style: GoogleFonts.notoSansKr()),
+                          ]),
+                        ),
+                        PopupMenuItem(
+                          value: 'delete',
+                          child: Row(children: [
+                            Icon(Icons.delete_outline, size: 18, color: cs.error),
+                            const SizedBox(width: 8),
+                            Text(s.get('delete'), style: GoogleFonts.notoSansKr(color: cs.error)),
+                          ]),
+                        ),
+                      ] else ...[
+                        PopupMenuItem(
+                          value: 'report',
+                          child: Row(children: [
+                            Icon(LucideIcons.flag, size: 18, color: cs.error),
+                            const SizedBox(width: 8),
+                            Text(s.get('report'), style: GoogleFonts.notoSansKr(color: cs.error)),
+                          ]),
+                        ),
+                        PopupMenuItem(
+                          value: 'block',
+                          child: Row(children: [
+                            Icon(LucideIcons.ban, size: 18, color: cs.onSurface),
+                            const SizedBox(width: 8),
+                            Text(s.get('block'), style: GoogleFonts.notoSansKr()),
+                          ]),
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              InkWell(
+                onTap: () => _openDramaDetailFromReview(post),
+                child: Text(
+                  dramaTitle,
+                  style: GoogleFonts.notoSansKr(fontSize: 19, fontWeight: FontWeight.w800, color: cs.onSurface, height: 1.25),
+                ),
+              ),
+              const SizedBox(height: 8),
+              _buildReviewStarRowLetterboxd(post.rating),
+              const SizedBox(height: 6),
+              Text(post.timeAgo, style: GoogleFonts.notoSansKr(fontSize: 13, color: cs.onSurfaceVariant)),
+            ],
+          ),
+        ),
+        if (post.hasSpoiler && !_reviewSpoilerRevealed)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+            child: InkWell(
+              onTap: () => setState(() => _reviewSpoilerRevealed = true),
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: cs.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: cs.outline.withOpacity(0.22)),
+                ),
+                child: Text(
+                  s.get('reviewSpoilerTapToRevealLetterboxd'),
+                  style: GoogleFonts.notoSansKr(
+                    fontSize: 15,
+                    height: 1.45,
+                    color: cs.onSurfaceVariant,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          )
+        else if (bodyRaw.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+            child: Text(
+              bodyRaw,
+              style: GoogleFonts.notoSansKr(fontSize: 16, color: cs.onSurface, height: 1.65),
+            ),
+          ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 4, 16, 4),
+          child: InkWell(
+            onTap: _onLikeTap,
+            borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    _isLiked ? Icons.favorite : Icons.favorite_border,
+                    size: 26,
+                    color: _isLiked ? Colors.redAccent : cs.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    s.get('reviewLikeLabel'),
+                    style: GoogleFonts.notoSansKr(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.4,
+                      color: cs.onSurface,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    '${post.likedBy.length}',
+                    style: GoogleFonts.notoSansKr(fontSize: 15, fontWeight: FontWeight.w600, color: cs.onSurfaceVariant),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          child: SizedBox(
+            width: double.infinity,
+            child: OutlinedButton(
+              onPressed: () => _openDramaDetailFromReview(post),
+              style: OutlinedButton.styleFrom(
+                alignment: Alignment.centerLeft,
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                side: BorderSide(color: cs.outline.withOpacity(0.35)),
+              ),
+              child: Text(
+                s.get('reviewFilmButton'),
+                style: GoogleFonts.notoSansKr(fontSize: 15, fontWeight: FontWeight.w700, color: cs.primary),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final post = _post;
     final s = CountryScope.of(context).strings;
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
+    final isTypedReview = postDisplayType(post) == 'review';
+    _letterboxdEnsureSpoilerStateForPost(post.id);
     return Scaffold(
       resizeToAvoidBottomInset: true,
       backgroundColor: theme.scaffoldBackgroundColor,
@@ -1339,6 +1725,7 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
         children: [
         Column(
         children: [
+          if (!isTypedReview)
           // 상단 바: 댓글 0/시간순 영역과 동일한 배경색
           Container(
             width: double.infinity,
@@ -1390,6 +1777,8 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                    if (isTypedReview) _buildLetterboxdReviewSection(context, theme, cs, post),
+                    if (!isTypedReview) ...[
                     // 본문 카드 (왼쪽 끝으로 붙임)
                     Container(
                       margin: const EdgeInsets.symmetric(horizontal: 5),
@@ -1718,6 +2107,7 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
                         ],
                       ),
                     ),
+                    ],
                     // 액션 바 아래 구분선 (댓글 시간순 위) - 얇은 회색선
                     Container(height: 1, color: cs.outline.withOpacity(0.4)),
                     // 댓글 섹션 (contentWidth로 3행 버튼 오른쪽 끝 통일)
@@ -2091,7 +2481,11 @@ class _MorePostsSectionState extends State<_MorePostsSection> with SingleTickerP
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this, initialIndex: widget.initialTabIndex);
+    _tabController = TabController(
+      length: 3,
+      vsync: this,
+      initialIndex: widget.initialTabIndex.clamp(0, 2),
+    );
     _tabController.addListener(() {
       if (!_tabController.indexIsChanging) {
         setState(() {});
@@ -2113,10 +2507,17 @@ class _MorePostsSectionState extends State<_MorePostsSection> with SingleTickerP
     super.dispose();
   }
 
+  /// 글 상세 하단 DramaFeed: 홈과 동일한 국가 기준(us/kr/jp/cn).
+  String _currentCountryForRelatedPosts() {
+    return AuthService.instance.isLoggedIn.value
+        ? (UserProfileService.instance.signupCountryNotifier.value ?? LocaleService.instance.locale)
+        : LocaleService.instance.locale;
+  }
+
   Future<void> _loadPosts() async {
     if (mounted) setState(() { _loading = true; _error = null; });
     try {
-      final list = await PostService.instance.getPosts();
+      final list = await PostService.instance.getPostsAllPages(country: _currentCountryForRelatedPosts());
       if (mounted) setState(() { _posts = list; _loading = false; });
     } catch (e) {
       if (mounted) setState(() { _loading = false; _error = e.toString(); });
@@ -2124,12 +2525,12 @@ class _MorePostsSectionState extends State<_MorePostsSection> with SingleTickerP
   }
 
   /// 홈탭과 동일한 피드 표시(현재 글도 목록에 포함)
-  List<Post> _popularPosts() =>
-      _posts.where((p) => p.votes >= 10 || p.views >= 100).toList();
-  List<Post> _freePosts() =>
-      _posts.where((p) => p.category == 'free').toList();
-  List<Post> _questionPosts() =>
-      _posts.where((p) => p.category == 'question').toList();
+  List<Post> _reviewPosts() =>
+      _posts.where((p) => postMatchesFeedFilter(p, 'review')).toList();
+  List<Post> _talkPosts() =>
+      _posts.where((p) => postMatchesFeedFilter(p, 'talk')).toList();
+  List<Post> _askPosts() =>
+      _posts.where((p) => postMatchesFeedFilter(p, 'ask')).toList();
 
   @override
   Widget build(BuildContext context) {
@@ -2138,28 +2539,29 @@ class _MorePostsSectionState extends State<_MorePostsSection> with SingleTickerP
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // DramaTALK 헤더
+        // DramaFeed 헤더
         Container(
           color: theme.scaffoldBackgroundColor,
           padding: const EdgeInsets.fromLTRB(12, 30, 14, 20),
           alignment: Alignment.centerLeft,
           child: Text(
-              'DramaTALK',
+              'DramaFeed',
               style: GoogleFonts.notoSansKr(fontSize: 26, fontWeight: FontWeight.w800, color: cs.onSurface, letterSpacing: -0.5),
             ),
         ),
         // 탭바 (홈탭과 동일한 스타일)
         Container(
           color: theme.scaffoldBackgroundColor,
-          padding: const EdgeInsets.fromLTRB(14, 0, 14, 20),
+          padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
           child: AnimatedBuilder(
             animation: _tabController.animation!,
             builder: (context, _) {
               const tabW = 60.0;
-              const tabH = 32.0;
+              const tabH = 26.0;
               const tabGap = 5.0;
               final animValue = _tabController.animation?.value ?? _tabController.index.toDouble();
               final idx = animValue.round().clamp(0, 2);
+              final s = CountryScope.of(context).strings;
               return Align(
                 alignment: Alignment.centerLeft,
                 child: SizedBox(
@@ -2176,7 +2578,7 @@ class _MorePostsSectionState extends State<_MorePostsSection> with SingleTickerP
                           height: tabH,
                           decoration: BoxDecoration(
                             color: cs.inverseSurface,
-                            borderRadius: BorderRadius.circular(8),
+                            borderRadius: BorderRadius.circular(6),
                           ),
                         ),
                       ),
@@ -2194,18 +2596,19 @@ class _MorePostsSectionState extends State<_MorePostsSection> with SingleTickerP
                                 alignment: Alignment.center,
                                 decoration: BoxDecoration(
                                   border: Border.all(color: cs.outline.withOpacity(0.6), width: 0.7),
-                                  borderRadius: BorderRadius.circular(8),
+                                  borderRadius: BorderRadius.circular(6),
                                 ),
                                 child: Text(
-                                  [CountryScope.of(context).strings.get('tabHot'), CountryScope.of(context).strings.get('tabGeneral'), CountryScope.of(context).strings.get('tabQnA')][i],
+                                  [s.get('tabReviews'), s.get('tabGeneral'), s.get('tabQnA')][i],
                                   strutStyle: const StrutStyle(
                                     forceStrutHeight: true,
-                                    height: 1.2,
+                                    height: 1.15,
+                                    fontSize: 11,
                                     leadingDistribution: TextLeadingDistribution.even,
                                   ),
                                   style: GoogleFonts.notoSansKr(
-                                    fontSize: 12,
-                                    height: 1.2,
+                                    fontSize: 11,
+                                    height: 1.15,
                                     fontWeight: FontWeight.w700,
                                     color: idx == i ? cs.onInverseSurface : cs.onSurfaceVariant,
                                   ),
@@ -2224,65 +2627,56 @@ class _MorePostsSectionState extends State<_MorePostsSection> with SingleTickerP
         // 탭 아래 영역: IndexedStack 대신 현재 탭만 렌더링 → 다른 탭 높이로 빈 공간 생기는 문제 방지
         Builder(builder: (context) {
           final idx = _tabController.index;
+          void onUpdated(Post updated) {
+            setState(() {
+              final i = _posts.indexWhere((p) => p.id == updated.id);
+              if (i >= 0) _posts[i] = updated;
+            });
+          }
+
+          void onDeleted(Post deleted) {
+            setState(() => _posts.removeWhere((p) => p.id == deleted.id));
+          }
+
           if (idx == 0) {
             return PopularPostsTab(
-              posts: _popularPosts(),
+              posts: _reviewPosts(),
               isLoading: _loading,
               error: _error,
               currentUserAuthor: widget.currentUserAuthor,
               onRefresh: _loadPosts,
               enablePullToRefresh: false,
               shrinkWrap: true,
-              onPostUpdated: (updated) {
-                setState(() {
-                  final i = _posts.indexWhere((p) => p.id == updated.id);
-                  if (i >= 0) _posts[i] = updated;
-                });
-              },
-              onPostDeleted: (deleted) {
-                setState(() => _posts.removeWhere((p) => p.id == deleted.id));
-              },
+              useReviewLayout: true,
+              onPostUpdated: onUpdated,
+              onPostDeleted: onDeleted,
               onPostTap: widget.onPostTap,
             );
           }
           if (idx == 1) {
             return FreeBoardTab(
-              posts: _freePosts(),
+              posts: _talkPosts(),
               isLoading: _loading,
               error: _error,
               currentUserAuthor: widget.currentUserAuthor,
               onRefresh: _loadPosts,
               enablePullToRefresh: false,
               shrinkWrap: true,
-              onPostUpdated: (updated) {
-                setState(() {
-                  final i = _posts.indexWhere((p) => p.id == updated.id);
-                  if (i >= 0) _posts[i] = updated;
-                });
-              },
-              onPostDeleted: (deleted) {
-                setState(() => _posts.removeWhere((p) => p.id == deleted.id));
-              },
+              onPostUpdated: onUpdated,
+              onPostDeleted: onDeleted,
               onPostTap: widget.onPostTap,
             );
           }
           return QuestionBoardTab(
-            posts: _questionPosts(),
+            posts: _askPosts(),
             isLoading: _loading,
             error: _error,
             currentUserAuthor: widget.currentUserAuthor,
             onRefresh: _loadPosts,
             enablePullToRefresh: false,
             shrinkWrap: true,
-            onPostUpdated: (updated) {
-              setState(() {
-                final i = _posts.indexWhere((p) => p.id == updated.id);
-                if (i >= 0) _posts[i] = updated;
-              });
-            },
-            onPostDeleted: (deleted) {
-              setState(() => _posts.removeWhere((p) => p.id == deleted.id));
-            },
+            onPostUpdated: onUpdated,
+            onPostDeleted: onDeleted,
             onPostTap: widget.onPostTap,
           );
         }),

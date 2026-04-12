@@ -43,7 +43,7 @@ class _CommunitySearchPageState extends State<CommunitySearchPage> {
   Future<void> _fetchIfNeeded() async {
     if (_hasFetched) return;
     setState(() => _loading = true);
-    final posts = await PostService.instance.getPosts();
+    final posts = await PostService.instance.getPostsAllPages();
     if (mounted) {
       setState(() {
         _allPosts = posts;

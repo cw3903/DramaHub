@@ -31,6 +31,16 @@ class Post {
     this.popularAt,
     this.authorUid,
     this.country = 'us',
+    this.type,
+    this.dramaId,
+    this.dramaTitle,
+    this.dramaThumbnail,
+    this.rating,
+    this.hasSpoiler = false,
+    this.isLiked = false,
+    this.isFirstWatch = true,
+    this.tags = const [],
+    this.allowReply = true,
   });
   final String id;
   final String title;
@@ -72,6 +82,102 @@ class Post {
   final String? authorUid;
   /// 지역: 'kr' 한국, 'us' US, 'jp' 일본, 'cn' 중국 (따로 보기용)
   final String country;
+  /// 게시판 종류: review | trend | talk | ask (없으면 category로 폴백)
+  final String? type;
+  /// 리뷰 전용: 드라마 ID
+  final String? dramaId;
+  final String? dramaTitle;
+  final String? dramaThumbnail;
+  /// 리뷰 전용 별점 0.5~5.0
+  final double? rating;
+  final bool hasSpoiler;
+  /// 리뷰: 이 드라마에 대한 좋아요(하트) 표시 (게시글 투표 likedBy와 별개)
+  final bool isLiked;
+  /// 리뷰: 첫 시청 여부
+  final bool isFirstWatch;
+  final List<String> tags;
+  /// 리뷰: 댓글 허용 여부
+  final bool allowReply;
+
+  Post copyWith({
+    String? id,
+    String? title,
+    String? subreddit,
+    String? author,
+    String? timeAgo,
+    int? votes,
+    int? comments,
+    int? views,
+    bool? hasImage,
+    List<String>? imageUrls,
+    List<List<int>>? imageDimensions,
+    bool? hasVideo,
+    String? videoUrl,
+    String? videoThumbnailUrl,
+    bool? isGif,
+    String? body,
+    String? linkUrl,
+    List<PostComment>? commentsList,
+    int? authorLevel,
+    List<String>? likedBy,
+    List<String>? dislikedBy,
+    String? category,
+    String? authorPhotoUrl,
+    int? authorAvatarColorIndex,
+    DateTime? popularAt,
+    String? authorUid,
+    String? country,
+    String? type,
+    String? dramaId,
+    String? dramaTitle,
+    String? dramaThumbnail,
+    double? rating,
+    bool? hasSpoiler,
+    bool? isLiked,
+    bool? isFirstWatch,
+    List<String>? tags,
+    bool? allowReply,
+  }) {
+    return Post(
+      id: id ?? this.id,
+      title: title ?? this.title,
+      subreddit: subreddit ?? this.subreddit,
+      author: author ?? this.author,
+      timeAgo: timeAgo ?? this.timeAgo,
+      votes: votes ?? this.votes,
+      comments: comments ?? this.comments,
+      views: views ?? this.views,
+      hasImage: hasImage ?? this.hasImage,
+      imageUrls: imageUrls ?? this.imageUrls,
+      imageDimensions: imageDimensions ?? this.imageDimensions,
+      hasVideo: hasVideo ?? this.hasVideo,
+      videoUrl: videoUrl ?? this.videoUrl,
+      videoThumbnailUrl: videoThumbnailUrl ?? this.videoThumbnailUrl,
+      isGif: isGif ?? this.isGif,
+      body: body ?? this.body,
+      linkUrl: linkUrl ?? this.linkUrl,
+      commentsList: commentsList ?? this.commentsList,
+      authorLevel: authorLevel ?? this.authorLevel,
+      likedBy: likedBy ?? this.likedBy,
+      dislikedBy: dislikedBy ?? this.dislikedBy,
+      category: category ?? this.category,
+      authorPhotoUrl: authorPhotoUrl ?? this.authorPhotoUrl,
+      authorAvatarColorIndex: authorAvatarColorIndex ?? this.authorAvatarColorIndex,
+      popularAt: popularAt ?? this.popularAt,
+      authorUid: authorUid ?? this.authorUid,
+      country: country ?? this.country,
+      type: type ?? this.type,
+      dramaId: dramaId ?? this.dramaId,
+      dramaTitle: dramaTitle ?? this.dramaTitle,
+      dramaThumbnail: dramaThumbnail ?? this.dramaThumbnail,
+      rating: rating ?? this.rating,
+      hasSpoiler: hasSpoiler ?? this.hasSpoiler,
+      isLiked: isLiked ?? this.isLiked,
+      isFirstWatch: isFirstWatch ?? this.isFirstWatch,
+      tags: tags ?? this.tags,
+      allowReply: allowReply ?? this.allowReply,
+    );
+  }
 
   /// Firestore 저장/복원용
   Map<String, dynamic> toMap() {
@@ -103,6 +209,16 @@ class Post {
       if (authorAvatarColorIndex != null) 'authorAvatarColorIndex': authorAvatarColorIndex,
       if (authorUid != null) 'authorUid': authorUid,
       'country': country,
+      if (type != null && type!.isNotEmpty) 'type': type,
+      if (dramaId != null && dramaId!.isNotEmpty) 'dramaId': dramaId,
+      if (dramaTitle != null && dramaTitle!.isNotEmpty) 'dramaTitle': dramaTitle,
+      if (dramaThumbnail != null && dramaThumbnail!.isNotEmpty) 'dramaThumbnail': dramaThumbnail,
+      if (rating != null) 'rating': rating,
+      'hasSpoiler': hasSpoiler,
+      'isLiked': isLiked,
+      'isFirstWatch': isFirstWatch,
+      'tags': tags,
+      'allowReply': allowReply,
     };
   }
 
@@ -122,11 +238,11 @@ class Post {
     final likedByRaw = map['likedBy'];
     final likedBy = (likedByRaw != null && likedByRaw is List<dynamic>)
         ? List<String>.from(likedByRaw.map((e) => e.toString()))
-        : (likedByRaw is Map ? (likedByRaw as Map).values.map((e) => e.toString()).toList() : <String>[]);
+        : (likedByRaw is Map ? likedByRaw.values.map((e) => e.toString()).toList() : <String>[]);
     final dislikedByRaw = map['dislikedBy'];
     final dislikedBy = (dislikedByRaw != null && dislikedByRaw is List<dynamic>)
         ? List<String>.from(dislikedByRaw.map((e) => e.toString()))
-        : (dislikedByRaw is Map ? (dislikedByRaw as Map).values.map((e) => e.toString()).toList() : <String>[]);
+        : (dislikedByRaw is Map ? dislikedByRaw.values.map((e) => e.toString()).toList() : <String>[]);
 
     final imageUrlsRaw = map['imageUrls'];
     final imageUrls = (imageUrlsRaw is List<dynamic>)
@@ -176,7 +292,28 @@ class Post {
       popularAt: (map['popularAt'] is Timestamp) ? (map['popularAt'] as Timestamp).toDate() : null,
       authorUid: map['authorUid'] as String?,
       country: _normalizeCountry(map['country'] as String?),
+      type: map['type'] as String?,
+      dramaId: map['dramaId'] as String?,
+      dramaTitle: map['dramaTitle'] as String?,
+      dramaThumbnail: map['dramaThumbnail'] as String?,
+      rating: (map['rating'] is num) ? (map['rating'] as num).toDouble() : null,
+      hasSpoiler: map['hasSpoiler'] as bool? ?? false,
+      isLiked: map['isLiked'] as bool? ?? false,
+      isFirstWatch: map['isFirstWatch'] as bool? ?? true,
+      tags: _tagsFromMap(map['tags']),
+      allowReply: map['allowReply'] as bool? ?? true,
     );
+  }
+
+  static List<String> _tagsFromMap(dynamic raw) {
+    if (raw == null) return const [];
+    if (raw is List) {
+      return raw.map((e) => e.toString().trim()).where((s) => s.isNotEmpty).toList();
+    }
+    if (raw is String && raw.trim().isNotEmpty) {
+      return raw.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+    }
+    return const [];
   }
 
   static String _normalizeCountry(String? v) {

@@ -1,0 +1,7 @@
+# 출시(릴리스) 서명용. 이 파일을 key.properties 로 복사한 뒤 값을 채우세요.
+# key.properties, *.keystore 는 .gitignore 되어 있으므로 Git에 올라가지 않습니다.
+
+storePassword=여기에_키스토어_비밀번호
+keyPassword=여기에_키_비밀번호
+keyAlias=dramahub
+storeFile=app-release.keystore

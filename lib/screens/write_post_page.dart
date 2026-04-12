@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'package:cross_file/cross_file.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -9,7 +8,6 @@ import 'package:image_picker/image_picker.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:video_compress/video_compress.dart';
 import '../services/mux_service.dart';
-import '../theme/app_theme.dart';
 import '../widgets/country_scope.dart';
 import '../models/post.dart';
 import '../services/auth_service.dart';
@@ -17,8 +15,11 @@ import '../services/post_service.dart';
 import '../services/user_profile_service.dart';
 import '../services/locale_service.dart';
 import '../services/level_service.dart';
-import '../utils/image_utils.dart';
+import '../utils/post_board_utils.dart';
+import '../models/drama.dart';
+import '../services/drama_list_service.dart';
 import 'video_select_page.dart';
+import '../widgets/optimized_network_image.dart';
 
 const int _maxTitleLength = 80;
 const int _maxPhotos = 4;
@@ -33,6 +34,7 @@ class WritePostPage extends StatefulWidget {
     super.key,
     this.initialPost,
     this.initialCategory = 'free',
+    this.initialBoard,
     this.initialVideoPath,
     this.isGif = false,
   });
@@ -40,6 +42,8 @@ class WritePostPage extends StatefulWidget {
   final Post? initialPost;
   /// 글쓰기 시작 시 선택된 게시판: 'free' 또는 'question'
   final String initialCategory;
+  /// DramaFeed 탭 기준: 'review' | 'talk' | 'ask' ([initialPost]가 있으면 무시)
+  final String? initialBoard;
   /// 영상 업로드 플로우에서 넘긴 파일 경로 (있으면 영상/GIF 업로드 모드)
   final String? initialVideoPath;
   /// true면 GIF로 업로드 (uploadPostGif)
@@ -54,8 +58,12 @@ class _WritePostPageState extends State<WritePostPage> {
   final _titleController = TextEditingController();
   final _bodyController = TextEditingController();
   final _linkController = TextEditingController();
+  final _reviewBodyController = TextEditingController();
+  final _tagsController = TextEditingController();
+  final _dramaSearchController = TextEditingController();
   final _titleFocus = FocusNode();
   final _bodyFocus = FocusNode();
+  final _dramaSearchFocus = FocusNode();
   bool _isSubmitting = false;
   final List<XFile> _pickedImages = [];
   final ImagePicker _picker = ImagePicker();
@@ -70,10 +78,25 @@ class _WritePostPageState extends State<WritePostPage> {
 
   bool get _isVideoMode => _videoPathForUpload != null && _videoPathForUpload!.isNotEmpty;
   late String _selectedCategory;
+  /// review | talk | ask
+  late String _boardKind;
+  String? _pickDramaId;
+  String? _pickDramaTitle;
+  String? _pickDramaThumb;
+  double? _reviewRating;
+  /// 리뷰: No spoilers ON → hasSpoiler false
+  bool _noSpoilers = true;
+  bool _reviewDramaLiked = false;
+  bool _isFirstWatch = true;
+  bool _allowReply = true;
+  bool _dramaSearchExpanded = false;
+
+  bool get _isReviewLayout => _boardKind == 'review' && !_isVideoMode;
 
   @override
   void initState() {
     super.initState();
+    DramaListService.instance.loadFromAsset();
     _videoPathForUpload = widget.initialVideoPath;
     if (widget.initialVideoPath != null) {
       _postAsGif = widget.isGif;
@@ -85,9 +108,32 @@ class _WritePostPageState extends State<WritePostPage> {
       _bodyController.text = p.body ?? '';
       _linkController.text = p.linkUrl ?? '';
       _selectedCategory = p.category;
+      final dt = postDisplayType(p);
+      _boardKind = dt == 'review' ? 'review' : (dt == 'ask' ? 'ask' : 'talk');
+      if (_boardKind == 'review') {
+        _pickDramaId = p.dramaId;
+        _pickDramaTitle = p.dramaTitle;
+        _pickDramaThumb = p.dramaThumbnail;
+        _reviewRating = p.rating;
+        _noSpoilers = !p.hasSpoiler;
+        _reviewDramaLiked = p.isLiked;
+        _isFirstWatch = p.isFirstWatch;
+        _allowReply = p.allowReply;
+        _reviewBodyController.text = p.body ?? '';
+        _tagsController.text = p.tags.join(', ');
+      }
     } else {
-      _selectedCategory = widget.initialCategory;
+      _boardKind = widget.initialBoard ??
+          (widget.initialCategory == 'question' ? 'ask' : 'review');
+      _selectedCategory = _boardKind == 'ask' ? 'question' : 'free';
     }
+    _reviewBodyController.addListener(_onReviewFieldChanged);
+    _tagsController.addListener(_onReviewFieldChanged);
+    _dramaSearchController.addListener(_onReviewFieldChanged);
+  }
+
+  void _onReviewFieldChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _generateLocalThumb(String videoPath) async {
@@ -107,11 +153,18 @@ class _WritePostPageState extends State<WritePostPage> {
     if (_videoThumbPath != null) {
       try { File(_videoThumbPath!).deleteSync(); } catch (_) {}
     }
+    _reviewBodyController.removeListener(_onReviewFieldChanged);
+    _tagsController.removeListener(_onReviewFieldChanged);
+    _dramaSearchController.removeListener(_onReviewFieldChanged);
     _titleController.dispose();
     _bodyController.dispose();
     _linkController.dispose();
+    _reviewBodyController.dispose();
+    _tagsController.dispose();
+    _dramaSearchController.dispose();
     _titleFocus.dispose();
     _bodyFocus.dispose();
+    _dramaSearchFocus.dispose();
     super.dispose();
   }
 
@@ -246,13 +299,7 @@ class _WritePostPageState extends State<WritePostPage> {
       final toAdd = <XFile>[];
       for (final pf in result.files) {
         if (toAdd.length >= remaining) break;
-        final xFile = pf.xFile;
-        final path = pf.path;
-        if (xFile != null) {
-          toAdd.add(xFile);
-        } else if (path != null && path.isNotEmpty) {
-          toAdd.add(XFile(path));
-        }
+        toAdd.add(pf.xFile);
       }
       if (toAdd.isNotEmpty && mounted) {
         setState(() {
@@ -276,6 +323,51 @@ class _WritePostPageState extends State<WritePostPage> {
 
   void _removeImage(int index) {
     setState(() => _pickedImages.removeAt(index));
+  }
+
+  String _typeForStorage() {
+    if (_boardKind == 'review') return 'review';
+    if (_boardKind == 'ask') return 'ask';
+    return 'talk';
+  }
+
+  List<String> _parseTagsInput() {
+    final raw = _tagsController.text.trim();
+    if (raw.isEmpty) return const [];
+    return raw
+        .split(RegExp(r'[,#\s]+'))
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+  }
+
+  List<DramaItem> _dramasForSearchGrid(String? country) {
+    final all = DramaListService.instance.getListForCountry(country);
+    final popular = all.where((e) => e.isPopular).toList();
+    final base = popular.length >= 6 ? popular : all;
+    final q = _dramaSearchController.text.trim().toLowerCase();
+    if (q.isEmpty) return base.take(30).toList();
+    return base
+        .where((item) {
+          final t = DramaListService.instance.getDisplayTitle(item.id, country).toLowerCase();
+          final sub = DramaListService.instance.getDisplaySubtitle(item.id, country).toLowerCase();
+          return t.contains(q) || sub.contains(q);
+        })
+        .take(30)
+        .toList();
+  }
+
+  void _selectDramaForReview(DramaItem item, String? country) {
+    final title = DramaListService.instance.getDisplayTitle(item.id, country);
+    final thumb = DramaListService.instance.getDisplayImageUrl(item.id, country) ?? item.imageUrl;
+    setState(() {
+      _pickDramaId = item.id;
+      _pickDramaTitle = title;
+      _pickDramaThumb = thumb;
+      _dramaSearchExpanded = false;
+      _dramaSearchController.clear();
+      _dramaSearchFocus.unfocus();
+    });
   }
 
   Future<void> _onVideoTap() async {
@@ -306,13 +398,42 @@ class _WritePostPageState extends State<WritePostPage> {
     if (_isSubmitting) return;
     _titleFocus.unfocus();
     _bodyFocus.unfocus();
-    if (!_formKey.currentState!.validate()) return;
+    if (!_isReviewLayout) {
+      if (!_formKey.currentState!.validate()) return;
+    }
+
+    final s = CountryScope.of(context).strings;
+    if (_isReviewLayout) {
+      if (_pickDramaId == null || _pickDramaId!.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(s.get('reviewNeedDrama'), style: GoogleFonts.notoSansKr()),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+      if ((_reviewRating ?? 0) <= 0) {
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: Text(s.get('ratingLabel'), style: GoogleFonts.notoSansKr(fontWeight: FontWeight.w700)),
+            content: Text(s.get('reviewPleaseSelectRating'), style: GoogleFonts.notoSansKr()),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text(s.get('ok'), style: GoogleFonts.notoSansKr()),
+              ),
+            ],
+          ),
+        );
+        return;
+      }
+    }
 
     setState(() => _isSubmitting = true);
 
     await Future.delayed(const Duration(milliseconds: 400));
-
-    final s = CountryScope.of(context).strings;
 
     try {
     // 영상/GIF 업로드 모드 (클립 조정에서 진입)
@@ -342,7 +463,7 @@ class _WritePostPageState extends State<WritePostPage> {
           final temp = File('${Directory.systemTemp.path}/drama_hub_video_${DateTime.now().millisecondsSinceEpoch}.$ext');
           await temp.writeAsBytes(bytes);
           contentUriTempPath = temp.path;
-          uploadPath = contentUriTempPath!;
+          uploadPath = contentUriTempPath;
         } catch (e) {
           if (mounted) {
             setState(() => _isSubmitting = false);
@@ -371,8 +492,9 @@ class _WritePostPageState extends State<WritePostPage> {
             deleteOrigin: false,
             includeAudio: true,
           );
-          if (info?.path != null) {
-            compressedPath = info!.path!;
+          final compressed = info?.path;
+          if (compressed != null) {
+            compressedPath = compressed;
             uploadPath = compressedPath;
           }
         } catch (_) {}
@@ -395,12 +517,16 @@ class _WritePostPageState extends State<WritePostPage> {
           thumbnailUrl = MuxService.thumbnailUrl(playbackId);
         } catch (e) {
           if (compressedPath != null) { try { await File(compressedPath).delete(); } catch (_) {} }
-          if (contentUriTempPath != null) { try { await File(contentUriTempPath!).delete(); } catch (_) {} }
+          if (contentUriTempPath != null) { try { await File(contentUriTempPath).delete(); } catch (_) {} }
           if (mounted) {
             setState(() => _isSubmitting = false);
+            final message = e is MuxAssetLimitException
+                ? e.toString()
+                : '영상 업로드 실패: $e';
             ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: Text('영상 업로드 실패: $e', style: GoogleFonts.notoSansKr()),
+              content: Text(message, style: GoogleFonts.notoSansKr()),
               behavior: SnackBarBehavior.floating,
+              duration: e is MuxAssetLimitException ? const Duration(seconds: 6) : const Duration(seconds: 4),
             ));
           }
           return;
@@ -416,7 +542,7 @@ class _WritePostPageState extends State<WritePostPage> {
               : await PostService.instance.uploadPostVideo(uploadPath);
         } catch (e) {
           if (compressedPath != null) { try { await File(compressedPath).delete(); } catch (_) {} }
-          if (contentUriTempPath != null) { try { await File(contentUriTempPath!).delete(); } catch (_) {} }
+          if (contentUriTempPath != null) { try { await File(contentUriTempPath).delete(); } catch (_) {} }
           if (mounted) {
             setState(() => _isSubmitting = false);
             await showDialog(
@@ -448,7 +574,7 @@ class _WritePostPageState extends State<WritePostPage> {
       }
 
       if (compressedPath != null) { try { await File(compressedPath).delete(); } catch (_) {} }
-      if (contentUriTempPath != null) { try { await File(contentUriTempPath!).delete(); } catch (_) {} }
+      if (contentUriTempPath != null) { try { await File(contentUriTempPath).delete(); } catch (_) {} }
       if (!mounted) { setState(() => _isSubmitting = false); return; }
 
       await UserProfileService.instance.loadIfNeeded();
@@ -478,6 +604,11 @@ class _WritePostPageState extends State<WritePostPage> {
         linkUrl: linkTrimmed.isEmpty ? null : linkTrimmed,
         authorLevel: LevelService.instance.currentLevel.clamp(1, 30),
         category: _selectedCategory,
+        type: 'talk',
+        isLiked: false,
+        isFirstWatch: true,
+        tags: const [],
+        allowReply: true,
         authorPhotoUrl: UserProfileService.instance.profileImageUrlNotifier.value,
         authorAvatarColorIndex: UserProfileService.instance.avatarColorNotifier.value,
         country: UserProfileService.instance.signupCountryNotifier.value ?? LocaleService.instance.locale,
@@ -526,29 +657,26 @@ class _WritePostPageState extends State<WritePostPage> {
     final linkTrimmed = _linkController.text.trim();
     if (_isEditMode && widget.initialPost != null) {
       final base = widget.initialPost!;
-      final updated = Post(
-        id: base.id,
-        title: _titleController.text.trim(),
-        subreddit: base.subreddit,
-        author: base.author,
-        timeAgo: base.timeAgo,
-        votes: base.votes,
-        comments: base.comments,
-        views: base.views,
+      final updated = base.copyWith(
+        title: _isReviewLayout && (_pickDramaTitle?.isNotEmpty ?? false)
+            ? _pickDramaTitle!.trim()
+            : _titleController.text.trim(),
         hasImage: imageUrls.isNotEmpty || base.imageUrls.isNotEmpty,
         imageUrls: imageUrls.isNotEmpty ? imageUrls : base.imageUrls,
         imageDimensions: imageDimensions ?? base.imageDimensions,
-        hasVideo: base.hasVideo,
-        videoUrl: base.videoUrl,
-        videoThumbnailUrl: base.videoThumbnailUrl,
-        isGif: base.isGif,
-        body: _bodyController.text.trim(),
+        body: _isReviewLayout ? _reviewBodyController.text.trim() : _bodyController.text.trim(),
         linkUrl: linkTrimmed.isEmpty ? null : linkTrimmed,
-        commentsList: base.commentsList,
-        authorLevel: base.authorLevel,
-        likedBy: base.likedBy,
-        dislikedBy: base.dislikedBy,
-        country: base.country,
+        category: _selectedCategory,
+        type: _typeForStorage(),
+        dramaId: _boardKind == 'review' ? _pickDramaId : null,
+        dramaTitle: _boardKind == 'review' ? _pickDramaTitle : null,
+        dramaThumbnail: _boardKind == 'review' ? _pickDramaThumb : null,
+        rating: _boardKind == 'review' ? _reviewRating : null,
+        hasSpoiler: _boardKind == 'review' ? !_noSpoilers : false,
+        isLiked: _boardKind == 'review' ? _reviewDramaLiked : base.isLiked,
+        isFirstWatch: _boardKind == 'review' ? _isFirstWatch : base.isFirstWatch,
+        tags: _boardKind == 'review' ? _parseTagsInput() : base.tags,
+        allowReply: _boardKind == 'review' ? _allowReply : base.allowReply,
       );
       final result = await PostService.instance.updatePost(updated);
       if (!mounted) return;
@@ -565,10 +693,11 @@ class _WritePostPageState extends State<WritePostPage> {
       }
       return;
     }
+    final reviewTitle = (_pickDramaTitle?.trim().isNotEmpty ?? false) ? _pickDramaTitle!.trim() : '';
     final post = Post(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
-      title: _titleController.text.trim(),
-      subreddit: s.get('freeBoardPlaceholder'),
+      title: _isReviewLayout ? reviewTitle : _titleController.text.trim(),
+      subreddit: _boardKind == 'review' ? s.get('tabReviews') : s.get('freeBoardPlaceholder'),
       author: 'u/$authorName',
       timeAgo: s.get('soon'),
       votes: 0,
@@ -576,10 +705,20 @@ class _WritePostPageState extends State<WritePostPage> {
       hasImage: imageUrls.isNotEmpty,
       imageUrls: imageUrls,
       imageDimensions: imageDimensions,
-      body: _bodyController.text.trim(),
+      body: _isReviewLayout ? _reviewBodyController.text.trim() : _bodyController.text.trim(),
       linkUrl: linkTrimmed.isEmpty ? null : linkTrimmed,
       authorLevel: LevelService.instance.currentLevel.clamp(1, 30),
       category: _selectedCategory,
+      type: _typeForStorage(),
+      dramaId: _boardKind == 'review' ? _pickDramaId : null,
+      dramaTitle: _boardKind == 'review' ? _pickDramaTitle : null,
+      dramaThumbnail: _boardKind == 'review' ? _pickDramaThumb : null,
+      rating: _boardKind == 'review' ? _reviewRating : null,
+      hasSpoiler: _boardKind == 'review' ? !_noSpoilers : false,
+      isLiked: _boardKind == 'review' ? _reviewDramaLiked : false,
+      isFirstWatch: _boardKind == 'review' ? _isFirstWatch : true,
+      tags: _boardKind == 'review' ? _parseTagsInput() : const [],
+      allowReply: _boardKind == 'review' ? _allowReply : true,
       authorPhotoUrl: UserProfileService.instance.profileImageUrlNotifier.value,
       authorAvatarColorIndex: UserProfileService.instance.avatarColorNotifier.value,
       country: UserProfileService.instance.signupCountryNotifier.value ?? LocaleService.instance.locale,
@@ -646,7 +785,7 @@ class _WritePostPageState extends State<WritePostPage> {
                     ),
                   )
                 : TextButton(
-                    onPressed: _submit,
+                    onPressed: _isSubmitting ? null : _submit,
                     child: Text(
                       _isEditMode ? s.get('edit') : s.get('postSubmit'),
                       style: GoogleFonts.notoSansKr(
@@ -668,30 +807,70 @@ class _WritePostPageState extends State<WritePostPage> {
                 padding: EdgeInsets.fromLTRB(20, 12, 20, bottomPadding + 24),
                 keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
                 children: [
-            // 게시판 선택 pill
+            // 게시판 선택 (리뷰 / 톡 / 질문)
             if (!_isEditMode)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 16),
-              child: Row(
-                children: [
-                  _CategoryPill(
-                    label: s.get('freeBoard'),
-                    icon: LucideIcons.message_square,
-                    selected: _selectedCategory == 'free',
-                    onTap: () => setState(() => _selectedCategory = 'free'),
-                    cs: cs,
-                  ),
-                  const SizedBox(width: 8),
-                  _CategoryPill(
-                    label: s.get('questionBoard'),
-                    icon: LucideIcons.message_circle,
-                    selected: _selectedCategory == 'question',
-                    onTap: () => setState(() => _selectedCategory = 'question'),
-                    cs: cs,
-                  ),
-                ],
+              Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        _CategoryPill(
+                          label: s.get('tabReviews'),
+                          icon: LucideIcons.star,
+                          selected: _boardKind == 'review',
+                          onTap: () => setState(() {
+                            _boardKind = 'review';
+                            _selectedCategory = 'free';
+                          }),
+                          cs: cs,
+                        ),
+                        const SizedBox(width: 8),
+                        _CategoryPill(
+                          label: s.get('tabGeneral'),
+                          icon: LucideIcons.message_square,
+                          selected: _boardKind == 'talk',
+                          onTap: () => setState(() {
+                            _boardKind = 'talk';
+                            _selectedCategory = 'free';
+                            _pickDramaId = null;
+                            _pickDramaTitle = null;
+                            _pickDramaThumb = null;
+                            _reviewRating = null;
+                            _noSpoilers = true;
+                            _reviewDramaLiked = false;
+                            _isFirstWatch = true;
+                            _allowReply = true;
+                          }),
+                          cs: cs,
+                        ),
+                        const SizedBox(width: 8),
+                        _CategoryPill(
+                          label: s.get('tabQnA'),
+                          icon: LucideIcons.message_circle,
+                          selected: _boardKind == 'ask',
+                          onTap: () => setState(() {
+                            _boardKind = 'ask';
+                            _selectedCategory = 'question';
+                            _pickDramaId = null;
+                            _pickDramaTitle = null;
+                            _pickDramaThumb = null;
+                            _reviewRating = null;
+                            _noSpoilers = true;
+                            _reviewDramaLiked = false;
+                            _isFirstWatch = true;
+                            _allowReply = true;
+                          }),
+                          cs: cs,
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
-            ),
+            if (_isReviewLayout) _buildReviewLayout(cs, theme),
+            if (!_isReviewLayout) ...[
             // 제목 섹션
             _SectionLabel(label: s.get('postTitle')),
             const SizedBox(height: 8),
@@ -741,6 +920,7 @@ class _WritePostPageState extends State<WritePostPage> {
               textInputAction: TextInputAction.next,
               onFieldSubmitted: (_) => FocusScope.of(context).requestFocus(_bodyFocus),
               validator: (v) {
+                if (_isReviewLayout) return null;
                 if (v == null || v.trim().isEmpty) return s.get('titleRequired');
                 if (v.trim().length < 2) return s.get('titleMinLength');
                 return null;
@@ -789,6 +969,7 @@ class _WritePostPageState extends State<WritePostPage> {
               maxLines: null,
               minLines: 6,
               validator: (v) {
+                if (_isReviewLayout) return null;
                 final hasImage = _pickedImages.isNotEmpty;
                 final hasVideo = _isVideoMode;
                 final text = v?.trim() ?? '';
@@ -921,18 +1102,289 @@ class _WritePostPageState extends State<WritePostPage> {
               ),
               const SizedBox(height: 12),
             ],
+            ],
           ],
         ),
             ),
             // 키보드 위 툴바: 링크, 사진, 영상 (영상 모드에서는 사진 추가 숨김)
-            _KeyboardToolbar(
-              onLink: () => _showLinkSheet(context),
-              onImage: _isVideoMode ? null : _showImageSourceChoice,
-              onVideo: _isVideoMode ? null : _onVideoTap,
-              cs: cs,
-            ),
+            if (!_isReviewLayout)
+              _KeyboardToolbar(
+                onLink: () => _showLinkSheet(context),
+                onImage: _isVideoMode ? null : _showImageSourceChoice,
+                onVideo: _isVideoMode ? null : _onVideoTap,
+                cs: cs,
+              ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildHalfStarRating(ColorScheme cs) {
+    const slotW = 36.0;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: List.generate(5, (si) {
+        final r = _reviewRating ?? 0;
+        final IconData icon;
+        if (r >= si + 1) {
+          icon = Icons.star_rounded;
+        } else if (r >= si + 0.5) {
+          icon = Icons.star_half_rounded;
+        } else {
+          icon = Icons.star_border_rounded;
+        }
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapDown: (details) {
+            final half = details.localPosition.dx < slotW / 2;
+            setState(() => _reviewRating = si + (half ? 0.5 : 1.0));
+          },
+          child: SizedBox(
+            width: slotW,
+            height: 40,
+            child: Icon(icon, size: 32, color: const Color(0xFFFFB020)),
+          ),
+        );
+      }),
+    );
+  }
+
+  Widget _reviewOptionChip({
+    required Widget icon,
+    required bool selected,
+    required VoidCallback onTap,
+    required ColorScheme cs,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: selected ? cs.primaryContainer : cs.surfaceContainerHighest.withOpacity(0.45),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: cs.outline.withOpacity(0.25)),
+          ),
+          child: IconTheme(
+            data: IconThemeData(
+              color: selected ? cs.onPrimaryContainer : cs.onSurfaceVariant,
+              size: 22,
+            ),
+            child: icon,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildReviewLayout(ColorScheme cs, ThemeData theme) {
+    final country = CountryScope.maybeOf(context)?.country;
+    final thumbUrl = _pickDramaThumb?.trim();
+    final showHttpThumb = thumbUrl != null && thumbUrl.startsWith('http');
+
+    InputDecoration deco(String hint) => InputDecoration(
+          hintText: hint,
+          hintStyle: GoogleFonts.notoSansKr(fontSize: 15, color: cs.onSurfaceVariant.withOpacity(0.65)),
+          filled: true,
+          fillColor: cs.surfaceContainerHighest.withOpacity(0.45),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide(color: cs.outline.withOpacity(0.25)),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide(color: cs.outline.withOpacity(0.25)),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide(color: cs.primary, width: 1.4),
+          ),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        );
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (_pickDramaTitle != null && _pickDramaTitle!.trim().isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 14),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: showHttpThumb
+                        ? OptimizedNetworkImage(
+                            imageUrl: thumbUrl,
+                            width: 72,
+                            height: 96,
+                            fit: BoxFit.cover,
+                            memCacheWidth: 144,
+                            memCacheHeight: 192,
+                          )
+                        : Container(
+                            width: 72,
+                            height: 96,
+                            color: cs.surfaceContainerHighest,
+                            alignment: Alignment.center,
+                            child: Icon(Icons.movie_outlined, color: cs.onSurfaceVariant, size: 32),
+                          ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Text(
+                      _pickDramaTitle!.trim(),
+                      style: GoogleFonts.notoSansKr(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        height: 1.25,
+                        color: cs.onSurface,
+                      ),
+                      maxLines: 4,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          TextField(
+            controller: _dramaSearchController,
+            focusNode: _dramaSearchFocus,
+            onTap: () => setState(() => _dramaSearchExpanded = true),
+            decoration: deco('Search for a short drama...').copyWith(
+              prefixIcon: Icon(LucideIcons.search, size: 20, color: cs.onSurfaceVariant),
+            ),
+            style: GoogleFonts.notoSansKr(fontSize: 15, color: cs.onSurface),
+          ),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 260),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.topCenter,
+            child: _dramaSearchExpanded
+                ? Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: ValueListenableBuilder<List<DramaItem>>(
+                      valueListenable: DramaListService.instance.listNotifier,
+                      builder: (context, _, __) {
+                        final grid = _dramasForSearchGrid(country);
+                        return ConstrainedBox(
+                          constraints: const BoxConstraints(maxHeight: 300),
+                          child: GridView.builder(
+                            shrinkWrap: true,
+                            physics: const ClampingScrollPhysics(),
+                            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: 3,
+                              childAspectRatio: 0.68,
+                              crossAxisSpacing: 8,
+                              mainAxisSpacing: 8,
+                            ),
+                            itemCount: grid.length,
+                            itemBuilder: (context, i) {
+                              final item = grid[i];
+                              final url = DramaListService.instance.getDisplayImageUrl(item.id, country) ?? item.imageUrl;
+                              final title = DramaListService.instance.getDisplayTitle(item.id, country);
+                              final ok = url != null && url.startsWith('http');
+                              return Material(
+                                color: cs.surfaceContainerLow,
+                                borderRadius: BorderRadius.circular(10),
+                                clipBehavior: Clip.antiAlias,
+                                child: InkWell(
+                                  onTap: () => _selectDramaForReview(item, country),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                                    children: [
+                                      Expanded(
+                                        child: ok
+                                            ? OptimizedNetworkImage(imageUrl: url, fit: BoxFit.cover)
+                                            : Container(
+                                                color: cs.surfaceContainerHighest,
+                                                alignment: Alignment.center,
+                                                child: Icon(Icons.movie_outlined, color: cs.onSurfaceVariant),
+                                              ),
+                                      ),
+                                      Padding(
+                                        padding: const EdgeInsets.fromLTRB(6, 4, 6, 6),
+                                        child: Text(
+                                          title,
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: GoogleFonts.notoSansKr(fontSize: 11, fontWeight: FontWeight.w600),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        );
+                      },
+                    ),
+                  )
+                : const SizedBox.shrink(),
+          ),
+          const SizedBox(height: 18),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              _buildHalfStarRating(cs),
+              const Spacer(),
+              IconButton(
+                tooltip: 'Like',
+                onPressed: () => setState(() => _reviewDramaLiked = !_reviewDramaLiked),
+                icon: Icon(
+                  _reviewDramaLiked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                  size: 30,
+                  color: _reviewDramaLiked ? const Color(0xFFE53935) : cs.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _reviewBodyController,
+            minLines: 5,
+            maxLines: 12,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: deco('Add review...'),
+            style: GoogleFonts.notoSansKr(fontSize: 16, height: 1.45, color: cs.onSurface),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _tagsController,
+            decoration: deco('Add tags...'),
+            style: GoogleFonts.notoSansKr(fontSize: 15, color: cs.onSurface),
+          ),
+          const SizedBox(height: 18),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              _reviewOptionChip(
+                icon: Icon(LucideIcons.eye),
+                selected: _isFirstWatch,
+                onTap: () => setState(() => _isFirstWatch = !_isFirstWatch),
+                cs: cs,
+              ),
+              _reviewOptionChip(
+                icon: const Icon(Icons.masks_rounded),
+                selected: _noSpoilers,
+                onTap: () => setState(() => _noSpoilers = !_noSpoilers),
+                cs: cs,
+              ),
+              _reviewOptionChip(
+                icon: Icon(LucideIcons.message_circle),
+                selected: _allowReply,
+                onTap: () => setState(() => _allowReply = !_allowReply),
+                cs: cs,
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -1058,36 +1510,20 @@ class _KeyboardToolbar extends StatelessWidget {
 }
 
 class _SectionLabel extends StatelessWidget {
-  const _SectionLabel({required this.label, this.subtitle});
+  const _SectionLabel({required this.label});
 
   final String label;
-  final String? subtitle;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return Row(
-      children: [
-        Text(
-          label,
-          style: GoogleFonts.notoSansKr(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-            color: cs.onSurface,
-          ),
-        ),
-        if (subtitle != null) ...[
-          const SizedBox(width: 6),
-          Text(
-            subtitle!,
-            style: GoogleFonts.notoSansKr(
-              fontSize: 12,
-              color: cs.onSurfaceVariant,
-              fontWeight: FontWeight.w400,
-            ),
-          ),
-        ],
-      ],
+    return Text(
+      label,
+      style: GoogleFonts.notoSansKr(
+        fontSize: 14,
+        fontWeight: FontWeight.w600,
+        color: cs.onSurface,
+      ),
     );
   }
 }
