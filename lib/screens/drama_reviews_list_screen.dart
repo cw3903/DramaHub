@@ -114,15 +114,17 @@ class _DramaReviewsListScreenState extends State<DramaReviewsListScreen>
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
     final s = CountryScope.of(context).strings;
     final popular = _sortedPopular(_reviews);
     final all = _sortedAll(_reviews);
 
     return Scaffold(
-      backgroundColor: cs.surface,
+      backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
-        backgroundColor: cs.surface,
+        toolbarHeight: kToolbarHeight,
+        backgroundColor: theme.scaffoldBackgroundColor,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         centerTitle: true,
@@ -135,7 +137,7 @@ class _DramaReviewsListScreenState extends State<DramaReviewsListScreen>
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: GoogleFonts.notoSansKr(
-            fontSize: 17,
+            fontSize: 16,
             fontWeight: FontWeight.w700,
             color: cs.onSurface,
           ),

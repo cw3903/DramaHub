@@ -49,22 +49,26 @@ class _ShareSettingsPageState extends State<ShareSettingsPage> {
   @override
   Widget build(BuildContext context) {
     final s = CountryScope.of(context).strings;
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0D0D0D),
+      backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
+        toolbarHeight: kToolbarHeight,
+        backgroundColor: theme.scaffoldBackgroundColor,
         elevation: 0,
         leading: AppBarBackIconButton(
-          iconColor: Colors.white,
+          iconColor: cs.onSurface,
           onPressed: () => Navigator.pop(context),
         ),
         title: Text(
           s.get('shareSettings'),
           style: GoogleFonts.notoSansKr(
-            fontSize: 17,
-            fontWeight: FontWeight.w600,
-            color: Colors.white,
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.12,
+            color: cs.onSurface,
           ),
         ),
       ),
@@ -133,7 +137,9 @@ class _CountryTile extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 18),
             decoration: BoxDecoration(
-              color: isSelected ? AppColors.accent.withOpacity(0.15) : const Color(0xFF1A1A1A),
+              color: isSelected
+                  ? AppColors.accent.withValues(alpha: 0.15)
+                  : const Color(0xFF1A1A1A),
               borderRadius: BorderRadius.circular(14),
               border: Border.all(
                 color: isSelected ? AppColors.accent : Colors.white12,

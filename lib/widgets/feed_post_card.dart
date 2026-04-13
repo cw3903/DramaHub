@@ -405,6 +405,16 @@ class _FeedPostCardState extends State<FeedPostCard> {
     final cs = theme.colorScheme;
     final boardKind = postDisplayType(post);
     final compactTalkAskBar = boardKind == 'talk' || boardKind == 'ask';
+    final baseCardColor = theme.cardTheme.color ?? cs.surface;
+    /// 톡·에스크 탭 카드만 배경을 한 톤 더 짙게(리뷰/인기 등과 구분).
+    final cardFillColor = (boardKind == 'talk' || boardKind == 'ask')
+        ? Color.lerp(
+              baseCardColor,
+              Colors.black,
+              theme.brightness == Brightness.dark ? 0.11 : 0.05,
+            ) ??
+            baseCardColor
+        : baseCardColor;
 
     return RepaintBoundary(
       child: GestureDetector(
@@ -424,7 +434,7 @@ class _FeedPostCardState extends State<FeedPostCard> {
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
-          color: theme.cardTheme.color ?? cs.surface,
+          color: cardFillColor,
           borderRadius: BorderRadius.circular(20),
           boxShadow: [
             BoxShadow(

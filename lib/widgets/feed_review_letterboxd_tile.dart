@@ -264,22 +264,20 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
     );
 
     /// 제목은 글자 너비만 드라마 탭 (Expanded로 가로 꽉 차지 않게).
-    final Widget dramaTitleWidget = onDramaTap != null
-        ? Material(
-            type: MaterialType.transparency,
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: onDramaTap,
-              splashColor: _reviewTapSplash(cs),
-              highlightColor: _reviewTapHighlight(cs),
-              borderRadius: BorderRadius.circular(6),
-              child: Text(
-                dramaTitle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                softWrap: false,
-                style: titleStyle,
-              ),
+    final dramaTap = onDramaTap;
+    final Widget dramaTitleWidget = dramaTap != null
+        ? _TapBehindExpanded(
+            onTap: dramaTap,
+            outsets: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+            borderRadius: BorderRadius.circular(6),
+            splashColor: _reviewTapSplash(cs),
+            highlightColor: _reviewTapHighlight(cs),
+            child: Text(
+              dramaTitle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              softWrap: false,
+              style: titleStyle,
             ),
           )
         : Text(
@@ -307,19 +305,16 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
             child: Icon(Icons.movie_outlined, color: cs.onSurfaceVariant, size: 26),
           );
 
-    final Widget thumbBlock = onDramaTap != null
-        ? Material(
-            type: MaterialType.transparency,
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: onDramaTap,
-              splashColor: _reviewTapSplash(cs),
-              highlightColor: _reviewTapHighlight(cs),
+    final Widget thumbBlock = dramaTap != null
+        ? _TapBehindExpanded(
+            onTap: dramaTap,
+            outsets: const EdgeInsets.all(10),
+            borderRadius: BorderRadius.circular(_thumbRadius),
+            splashColor: _reviewTapSplash(cs),
+            highlightColor: _reviewTapHighlight(cs),
+            child: ClipRRect(
               borderRadius: BorderRadius.circular(_thumbRadius),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(_thumbRadius),
-                child: thumbChild,
-              ),
+              child: thumbChild,
             ),
           )
         : ClipRRect(
@@ -357,29 +352,26 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
     final navAuthor = _authorNavKey(post.author);
     final authorRow = navAuthor.isEmpty
         ? authorRowCore
-        : Material(
-            type: MaterialType.transparency,
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: () {
-                final nav = navAuthor;
-                final ctx = context;
-                // 상위 InkWell(onReviewBodyTap) 등과 겹칠 때 Navigator 잠금 회피
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (!ctx.mounted) return;
-                  Navigator.push<void>(
-                    ctx,
-                    MaterialPageRoute<void>(
-                      builder: (_) => UserPostsScreen(authorName: nav),
-                    ),
-                  );
-                });
-              },
-              borderRadius: BorderRadius.circular(8),
-              splashColor: _reviewTapSplash(cs),
-              highlightColor: _reviewTapHighlight(cs),
-              child: authorRowCore,
-            ),
+        : _TapBehindExpanded(
+            onTap: () {
+              final nav = navAuthor;
+              final ctx = context;
+              // 상위 InkWell(onReviewBodyTap) 등과 겹칠 때 Navigator 잠금 회피
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!ctx.mounted) return;
+                Navigator.push<void>(
+                  ctx,
+                  MaterialPageRoute<void>(
+                    builder: (_) => UserPostsScreen(authorName: nav),
+                  ),
+                );
+              });
+            },
+            outsets: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            borderRadius: BorderRadius.circular(8),
+            splashColor: _reviewTapSplash(cs),
+            highlightColor: _reviewTapHighlight(cs),
+            child: authorRowCore,
           );
 
     final bool canModeratorDelete =
@@ -510,20 +502,15 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
       height: 1.0,
       color: _starOrange,
     );
-    final Widget starRowWidget = onRatingTap != null
-        ? Material(
-            type: MaterialType.transparency,
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: onRatingTap,
-              splashColor: _reviewTapSplash(cs),
-              highlightColor: _reviewTapHighlight(cs),
-              borderRadius: BorderRadius.circular(6),
-              child: Padding(
-                padding: EdgeInsets.zero,
-                child: _starRow(r, _thumbW, halfLabelStyle: halfStarLabelStyle),
-              ),
-            ),
+    final ratingTap = onRatingTap;
+    final Widget starRowWidget = ratingTap != null
+        ? _TapBehindExpanded(
+            onTap: ratingTap,
+            outsets: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+            borderRadius: BorderRadius.circular(6),
+            splashColor: _reviewTapSplash(cs),
+            highlightColor: _reviewTapHighlight(cs),
+            child: _starRow(r, _thumbW, halfLabelStyle: halfStarLabelStyle),
           )
         : _starRow(r, _thumbW, halfLabelStyle: halfStarLabelStyle);
 
@@ -624,6 +611,54 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         child: content,
+      ),
+    );
+  }
+}
+
+/// 레이아웃·시각 크기는 [child]만큼이고, 터치만 [outsets]만큼 바깥으로 넓힘.
+class _TapBehindExpanded extends StatelessWidget {
+  const _TapBehindExpanded({
+    required this.child,
+    required this.onTap,
+    required this.outsets,
+    required this.borderRadius,
+    required this.splashColor,
+    required this.highlightColor,
+  });
+
+  final Widget child;
+  final VoidCallback onTap;
+  final EdgeInsets outsets;
+  final BorderRadius borderRadius;
+  final Color splashColor;
+  final Color highlightColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      type: MaterialType.transparency,
+      color: Colors.transparent,
+      child: Stack(
+        clipBehavior: Clip.none,
+        fit: StackFit.passthrough,
+        alignment: Alignment.center,
+        children: [
+          Positioned(
+            left: -outsets.left,
+            top: -outsets.top,
+            right: -outsets.right,
+            bottom: -outsets.bottom,
+            child: InkWell(
+              onTap: onTap,
+              borderRadius: borderRadius,
+              splashColor: splashColor,
+              highlightColor: highlightColor,
+              child: const SizedBox.expand(),
+            ),
+          ),
+          IgnorePointer(child: child),
+        ],
       ),
     );
   }

@@ -28,6 +28,9 @@ service cloud.firestore {
     match /users/{uid}/watch_history/{docId} {
       allow read, write: if request.auth != null && request.auth.uid == uid;
     }
+    match /users/{uid}/custom_lists/{listId} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
     match /users/{uid}/conversations/{docId} {
       allow read, write: if request.auth != null && request.auth.uid == uid;
     }

@@ -57,6 +57,33 @@ bool commentContainsQuery(PostComment c, String q) {
   return c.replies.any((r) => commentContainsQuery(r, q));
 }
 
+/// 레이아웃은 [visual]과 동일, 터치만 [outsets]만큼 확장. 스플래시/하이라이트 없음.
+Widget reviewInlineActionHitTarget({
+  required VoidCallback onTap,
+  required Widget visual,
+  EdgeInsets outsets = const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+}) {
+  return Stack(
+    clipBehavior: Clip.none,
+    fit: StackFit.passthrough,
+    alignment: Alignment.center,
+    children: [
+      Positioned(
+        left: -outsets.left,
+        top: -outsets.top,
+        right: -outsets.right,
+        bottom: -outsets.bottom,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onTap,
+          child: const SizedBox.expand(),
+        ),
+      ),
+      IgnorePointer(child: visual),
+    ],
+  );
+}
+
 /// 인기글 탭 - 홈탭/글상세 공통
 class PopularPostsTab extends StatefulWidget {
   const PopularPostsTab({
@@ -136,9 +163,11 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
   String? _lastSearchQuery;
   PostSearchScope? _lastSearchScope;
 
-  // _latestPost O(1) 캐시 — widget.posts 레퍼런스가 바뀌면 재구성
-  Map<String, Post>? _postLookup;
-  List<Post>? _lastPostsForLookup;
+  /// 낙관적 업데이트용 로컬 재정의 맵. 키: post.id, 값: 낙관적 Post.
+  /// 부모 setState로 같은 리스트 인스턴스 요소만 교체될 때 캐시 문제를 우회.
+  final Map<String, Post> _localOverrides = {};
+  Map<String, Post>? _postsCache;
+  List<Post>? _postsCacheSource;
 
   final Set<String> _inlineLikeBusy = {};
   final Set<String> _inlineCommentSubmitting = {};
@@ -173,14 +202,17 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
   }
 
   Map<String, Post> get _postsById {
-    if (!identical(_lastPostsForLookup, widget.posts)) {
-      _lastPostsForLookup = widget.posts;
-      _postLookup = {for (final p in widget.posts) p.id: p};
+    // 포스트 리스트가 바뀐 경우에만 캐시 재구성
+    if (!identical(_postsCacheSource, widget.posts)) {
+      _postsCacheSource = widget.posts;
+      _postsCache = {for (final p in widget.posts) p.id: p};
     }
-    return _postLookup!;
+    return _postsCache!;
   }
 
-  Post _latestPost(Post p) => _postsById[p.id] ?? p;
+  /// 낙관적 재정의 우선, 그 다음 캐시된 맵, 없으면 [p] 그대로.
+  Post _latestPost(Post p) =>
+      _localOverrides[p.id] ?? _postsById[p.id] ?? p;
 
   Future<void> _refreshPostForComments(String postId) async {
     final locale = CountryScope.maybeOf(context)?.country;
@@ -198,13 +230,15 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
       if (!mounted) return;
       if (!AuthService.instance.isLoggedIn.value) return;
     }
-    if (_inlineLikeBusy.contains(post.id)) return;
     final uid = AuthService.instance.currentUser.value?.uid;
     if (uid == null) return;
+
+    // 현재 상태(낙관적 재정의 포함)에서 최신 Post 가져오기.
     final p = _latestPost(post);
     final liked = p.likedBy.contains(uid);
     final currentVote = liked ? 1 : (p.dislikedBy.contains(uid) ? -1 : 0);
-    _inlineLikeBusy.add(p.id);
+
+    // 낙관적 업데이트 — 네트워크 응답 전에 즉시 반영.
     final newLikedBy = List<String>.from(p.likedBy);
     if (!liked) {
       if (!newLikedBy.contains(uid)) newLikedBy.add(uid);
@@ -230,19 +264,42 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
       likeCount: nextLikeCount,
       dislikeCount: nextDislikeCount,
     );
+    // 로컬 재정의에 먼저 저장해 다음 탭이 최신 낙관 상태를 즉시 참조.
+    _localOverrides[p.id] = optimistic;
     widget.onPostUpdated?.call(optimistic);
+
+    // 이전 요청이 아직 진행 중이면 Firestore 호출 중복 방지만 하고 UI는 이미 업데이트.
+    if (_inlineLikeBusy.contains(p.id)) return;
+    _inlineLikeBusy.add(p.id);
+
+    // 마지막 낙관 상태를 실제로 서버에 반영(연속 탭 시 마지막 상태만 전송).
+    await Future.delayed(Duration.zero); // microtask 경계: 연속 탭 배칭.
+    if (!mounted) {
+      _inlineLikeBusy.remove(p.id);
+      return;
+    }
+    // 가장 최근 낙관 상태를 다시 참조해 서버로 전송.
+    final latest = _localOverrides[p.id] ?? optimistic;
+    final latestLiked = latest.likedBy.contains(uid);
+    final latestVote = latestLiked ? 1 : (latest.dislikedBy.contains(uid) ? -1 : 0);
+
     final ok = await PostService.instance.togglePostLike(
       p.id,
-      currentVoteState: currentVote,
+      currentVoteState: latestVote,
       postAuthorUid: p.authorUid,
       postTitle: p.title,
     );
-    if (mounted) _inlineLikeBusy.remove(p.id);
+    _inlineLikeBusy.remove(p.id);
     if (!mounted) return;
     if (ok == null) {
+      // 실패 시 서버에서 최신 상태 복원.
+      _localOverrides.remove(p.id);
       final loc = CountryScope.maybeOf(context)?.country;
       final re = await PostService.instance.getPost(p.id, loc);
       if (re != null && mounted) widget.onPostUpdated?.call(re);
+    } else {
+      // 성공 시 로컬 재정의 제거(부모 상태가 곧 업데이트됨).
+      _localOverrides.remove(p.id);
     }
   }
 
@@ -491,59 +548,57 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.start,
         children: [
-          InkWell(
-            onTap: () => _inlineToggleLike(post),
-            borderRadius: BorderRadius.circular(6),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    liked ? Icons.favorite : Icons.favorite_border,
-                    size: iconSize,
-                    color: liked ? Colors.redAccent : cs.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    formatCompactCount(p.likeCount),
-                    style: GoogleFonts.notoSansKr(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                      color: cs.onSurfaceVariant,
+          reviewInlineActionHitTarget(
+              onTap: () => _inlineToggleLike(post),
+              visual: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      liked ? Icons.favorite : Icons.favorite_border,
+                      size: iconSize,
+                      color: liked ? Colors.redAccent : cs.onSurfaceVariant,
                     ),
-                  ),
-                ],
+                    const SizedBox(width: 4),
+                    Text(
+                      formatCompactCount(p.likeCount),
+                      style: GoogleFonts.notoSansKr(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: cs.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
-          const SizedBox(width: 4),
-          InkWell(
-            onTap: () => _openReviewCommentOverlay(post),
-            borderRadius: BorderRadius.circular(6),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    LucideIcons.message_circle,
-                    size: iconSize,
-                    color: cs.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    formatCompactCount(p.comments),
-                    style: GoogleFonts.notoSansKr(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
+            const SizedBox(width: 4),
+            reviewInlineActionHitTarget(
+              onTap: () => _openReviewCommentOverlay(post),
+              visual: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      LucideIcons.message_circle,
+                      size: iconSize,
                       color: cs.onSurfaceVariant,
                     ),
-                  ),
-                ],
+                    const SizedBox(width: 4),
+                    Text(
+                      formatCompactCount(p.comments),
+                      style: GoogleFonts.notoSansKr(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: cs.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
         ],
       ),
     );

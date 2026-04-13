@@ -44,6 +44,9 @@ class DramaGridCard extends StatelessWidget {
 
     /// true면 포스터 아래 **제목만**(별·장르 줄 없음). 즐겨찾기 픽 등.
     this.titleOnly = false,
+
+    /// 리스트 다중 픽 등 — 포스터 위 선택 표시
+    this.pickMultiSelected = false,
   });
 
   final String displayTitle;
@@ -53,6 +56,7 @@ class DramaGridCard extends StatelessWidget {
   final VoidCallback onTap;
   final Widget posterPlaceholder;
   final bool titleOnly;
+  final bool pickMultiSelected;
 
   @override
   Widget build(BuildContext context) {
@@ -69,6 +73,7 @@ class DramaGridCard extends StatelessWidget {
       builder: (context, constraints) {
         final w = constraints.maxWidth;
         final posterHeight = w / (1 / 1.4);
+        final posterRadius = BorderRadius.circular(8 * r);
         return GestureDetector(
           onTap: onTap,
           child: Column(
@@ -79,17 +84,39 @@ class DramaGridCard extends StatelessWidget {
                 width: w,
                 height: posterHeight,
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(8 * r),
-                  child: imageUrl != null && imageUrl!.isNotEmpty
-                      ? OptimizedNetworkImage(
-                          imageUrl: imageUrl!,
-                          fit: BoxFit.cover,
-                          memCacheWidth: 160,
-                          memCacheHeight: 224,
-                          placeholder: posterPlaceholder,
-                          errorWidget: posterPlaceholder,
-                        )
-                      : posterPlaceholder,
+                  borderRadius: posterRadius,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      imageUrl != null && imageUrl!.isNotEmpty
+                          ? OptimizedNetworkImage(
+                              imageUrl: imageUrl!,
+                              fit: BoxFit.cover,
+                              memCacheWidth: 160,
+                              memCacheHeight: 224,
+                              placeholder: posterPlaceholder,
+                              errorWidget: posterPlaceholder,
+                            )
+                          : posterPlaceholder,
+                      if (pickMultiSelected)
+                        Positioned.fill(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.58),
+                            ),
+                          ),
+                        ),
+                      if (pickMultiSelected)
+                        Positioned(
+                          right: 5 * r,
+                          top: 5 * r,
+                          child: CustomPaint(
+                            size: Size(22 * r, 22 * r),
+                            painter: const _PickChunkyCheckPainter(),
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
               ),
               SizedBox(height: 1 * r),
@@ -159,4 +186,43 @@ class DramaGridCard extends StatelessWidget {
       },
     );
   }
+}
+
+/// Add drama 다중 선택 — 흰 원 + 작은 검은 체크(각진 스트로크)
+class _PickChunkyCheckPainter extends CustomPainter {
+  const _PickChunkyCheckPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final d = size.shortestSide;
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = d / 2 - 0.5;
+    canvas.drawCircle(center, radius, Paint()..color = Colors.white);
+    canvas.drawCircle(
+      center,
+      radius,
+      Paint()
+        ..color = Colors.black.withValues(alpha: 0.14)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
+    );
+    final stroke = (d * 0.1).clamp(1.5, 2.8);
+    final paint = Paint()
+      ..color = Colors.black
+      ..strokeWidth = stroke
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.square
+      ..strokeJoin = StrokeJoin.miter;
+    final w = size.width;
+    final h = size.height;
+    // 중앙에 작게 모인 짧은 체크
+    final path = Path()
+      ..moveTo(w * 0.36, h * 0.56)
+      ..lineTo(w * 0.46, h * 0.66)
+      ..lineTo(w * 0.66, h * 0.42);
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

@@ -252,8 +252,11 @@ class _DramaScreenState extends State<DramaScreen> {
 
     const headerBlue = Color(0xFF3399FF);
     final isDark = theme.brightness == Brightness.dark;
-    // 다크모드: 상단바를 화면과 같은 짙은 회색으로 (파란색 제거)
-    final headerBg = isDark ? theme.scaffoldBackgroundColor : headerBlue;
+    final pageBg = theme.scaffoldBackgroundColor;
+    // 다크: 홈 탭 헤더와 동일 — 순검정 대신 스캐폴드 쪽으로 살짝만 보간.
+    final headerBg = isDark
+        ? Color.lerp(Colors.black, pageBg, 0.45) ?? const Color(0xFF0A0A0A)
+        : headerBlue;
     final headerFg = isDark ? cs.onSurface : Colors.white;
     final searchBarBg = isDark ? cs.surfaceContainerHighest : Colors.white;
     final searchBarFg = isDark ? cs.onSurfaceVariant : Colors.grey.shade600;
@@ -262,9 +265,10 @@ class _DramaScreenState extends State<DramaScreen> {
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle(
         statusBarColor: statusBarBg,
-        statusBarIconBrightness: statusBarBg == Colors.white
-            ? Brightness.dark
-            : Brightness.light,
+        statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
+        statusBarIconBrightness:
+            isDark ? Brightness.light : Brightness.dark,
+        systemStatusBarContrastEnforced: false,
       ),
       child: Scaffold(
         backgroundColor: theme.scaffoldBackgroundColor,

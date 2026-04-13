@@ -31,10 +31,13 @@ class LanguageSelectScreen extends StatelessWidget {
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
+        toolbarHeight: kToolbarHeight,
         title: Text(
           title,
           style: GoogleFonts.notoSansKr(
-            fontWeight: FontWeight.w600,
+            fontWeight: FontWeight.w700,
+            fontSize: 16,
+            letterSpacing: 0.12,
             color: cs.onSurface,
           ),
         ),

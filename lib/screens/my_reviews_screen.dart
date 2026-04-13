@@ -185,13 +185,14 @@ class _MyReviewsScreenState extends State<MyReviewsScreen> {
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
+        toolbarHeight: kToolbarHeight,
         centerTitle: true,
         title: Text(
           s.get('tabReviews'),
           style: GoogleFonts.notoSansKr(
             fontWeight: FontWeight.w700,
-            fontSize: 17,
-            letterSpacing: 0.2,
+            fontSize: 16,
+            letterSpacing: 0.12,
           ),
         ),
         backgroundColor: theme.scaffoldBackgroundColor,

@@ -14,10 +14,6 @@ import '../widgets/optimized_network_image.dart';
 import 'drama_detail_page.dart';
 import 'login_page.dart';
 
-/// Letterboxd 다크 모드에 가까운 배경
-const Color _kWatchlistGridBg = Color(0xFF14181C);
-const Color _kWatchlistBarBg = Color(0xFF000000);
-
 String _watchlistOwnerDisplayName() {
   final n = UserProfileService.instance.nicknameNotifier.value?.trim();
   if (n != null && n.isNotEmpty) return n;
@@ -141,7 +137,7 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
     final cs = theme.colorScheme;
     final s = CountryScope.of(context).strings;
     final isDark = theme.brightness == Brightness.dark;
-    final barBg = isDark ? _kWatchlistBarBg : theme.scaffoldBackgroundColor;
+    final barBg = theme.scaffoldBackgroundColor;
     final name = _watchlistOwnerDisplayName();
     final titleText =
         s.get('watchlistTitleWithName').replaceAll('{name}', name);
@@ -154,9 +150,9 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
       ]),
       builder: (context, _) {
         return Scaffold(
-          backgroundColor:
-              isDark ? _kWatchlistGridBg : theme.scaffoldBackgroundColor,
+          backgroundColor: theme.scaffoldBackgroundColor,
           appBar: AppBar(
+            toolbarHeight: kToolbarHeight,
             centerTitle: true,
             title: Text(
               titleText,
@@ -164,7 +160,7 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
               overflow: TextOverflow.ellipsis,
               style: GoogleFonts.notoSansKr(
                 fontWeight: FontWeight.w700,
-                fontSize: 17,
+                fontSize: 16,
                 letterSpacing: 0.12,
                 color: isDark ? Colors.white : cs.onSurface,
               ),
@@ -217,8 +213,7 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
           body: _WatchlistBody(
             newestFirst: _newestFirst,
             fourColumns: _fourColumns,
-            gridBackground:
-                isDark ? _kWatchlistGridBg : theme.scaffoldBackgroundColor,
+            gridBackground: theme.scaffoldBackgroundColor,
           ),
         );
       },

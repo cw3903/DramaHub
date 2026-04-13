@@ -338,6 +338,7 @@ class _DiaryScreenState extends State<DiaryScreen> {
         return Scaffold(
           backgroundColor: theme.scaffoldBackgroundColor,
           appBar: AppBar(
+            toolbarHeight: kToolbarHeight,
             centerTitle: false,
             titleSpacing: 0,
             title: Padding(
@@ -352,8 +353,8 @@ class _DiaryScreenState extends State<DiaryScreen> {
                       textAlign: TextAlign.start,
                       style: GoogleFonts.notoSansKr(
                         fontWeight: FontWeight.w700,
-                        fontSize: 17,
-                        letterSpacing: 0.15,
+                        fontSize: 16,
+                        letterSpacing: 0.12,
                       ),
                     ),
                   ),

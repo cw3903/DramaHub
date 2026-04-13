@@ -799,7 +799,6 @@ class ProfileScreen extends StatelessWidget {
               SliverToBoxAdapter(
                 child: _ProfileFavoritesSection(readOnly: favoritesReadOnly),
               ),
-              SliverToBoxAdapter(child: _profileFullBleedDivider(cs)),
               const SliverToBoxAdapter(child: _ProfileRecentActivitySection()),
               SliverToBoxAdapter(child: _profileFullBleedDivider(cs)),
               SliverToBoxAdapter(child: _ProfileRatingsSection()),
@@ -2556,8 +2555,9 @@ class _RecentActivityReviewGateState extends State<_RecentActivityReviewGate> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
+      final theme = Theme.of(context);
       return Scaffold(
-        backgroundColor: Colors.black,
+        backgroundColor: theme.scaffoldBackgroundColor,
         body: Center(
           child: SizedBox(
             width: 28,

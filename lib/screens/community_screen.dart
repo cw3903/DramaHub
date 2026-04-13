@@ -11,7 +11,6 @@ import '../services/post_service.dart';
 import '../services/review_service.dart';
 import '../services/user_profile_service.dart';
 import '../services/locale_service.dart';
-import '../theme/app_theme.dart';
 import '../utils/format_utils.dart';
 import '../widgets/country_scope.dart';
 import '../widgets/optimized_network_image.dart';
@@ -488,15 +487,27 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
     final cs = theme.colorScheme;
     final shortSide = MediaQuery.sizeOf(context).shortestSide;
     final r = (shortSide / 360).clamp(0.85, 1.25);
-    /// 리뷰·톡·질문 **본문 패널** 배경(이전 상단 스트립과 동일 톤). DramaFeed **AppBar**는 `scaffoldBackgroundColor`와 맞춤.
-    final homeFeedBoardPanelColor = theme.brightness == Brightness.dark
-        ? AppColors.darkSurfaceVariant
-        : AppColors.communityBoardBackground;
-    return Scaffold(
+    final isDark = theme.brightness == Brightness.dark;
+    final pageBg = theme.scaffoldBackgroundColor;
+    /// 다크: 순검정 대신 스캐폴드 쪽으로 살짝만 올린 헤더(상태바·앱바 동일).
+    final homeHeaderBarBg = isDark
+        ? Color.lerp(Colors.black, pageBg, 0.45) ?? const Color(0xFF0A0A0A)
+        : pageBg;
+    final homeStatusOverlay = SystemUiOverlayStyle(
+      statusBarColor: homeHeaderBarBg,
+      statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
+      statusBarIconBrightness:
+          isDark ? Brightness.light : Brightness.dark,
+      systemStatusBarContrastEnforced: false,
+    );
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: homeStatusOverlay,
+      child: Scaffold(
       resizeToAvoidBottomInset: true,
-      backgroundColor: homeFeedBoardPanelColor,
+      backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
-        backgroundColor: theme.scaffoldBackgroundColor,
+        backgroundColor: homeHeaderBarBg,
+        systemOverlayStyle: homeStatusOverlay,
         elevation: 6,
         scrolledUnderElevation: 6,
         shadowColor: cs.shadow.withOpacity(0.18),
@@ -691,7 +702,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
         ),
       ),
       body: Container(
-        color: homeFeedBoardPanelColor,
+        color: theme.scaffoldBackgroundColor,
         child: Stack(
           children: [
             TabBarView(
@@ -782,6 +793,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
           ),
         ],
         ),
+      ),
       ),
     );
   }

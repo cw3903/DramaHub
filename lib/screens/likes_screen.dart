@@ -47,9 +47,15 @@ class _LikesScreenState extends State<LikesScreen> with SingleTickerProviderStat
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
+        toolbarHeight: kToolbarHeight,
+        centerTitle: true,
         title: Text(
           s.get('likes'),
-          style: GoogleFonts.notoSansKr(fontWeight: FontWeight.w600),
+          style: GoogleFonts.notoSansKr(
+            fontWeight: FontWeight.w700,
+            fontSize: 16,
+            letterSpacing: 0.12,
+          ),
         ),
         backgroundColor: theme.scaffoldBackgroundColor,
         elevation: 0,

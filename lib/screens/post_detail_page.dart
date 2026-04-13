@@ -1453,12 +1453,13 @@ class _PostDetailPageState extends State<PostDetailPage>
     dynamic s,
     Post post,
   ) {
+    final isRecentCompact = widget.hideBelowLetterboxdLike;
     final short = _letterboxdAuthorShort(post);
     final title = s
         .get('letterboxdReviewDetailAppBarTitle')
         .replaceAll('{name}', short);
     return ColoredBox(
-      color: Colors.black,
+      color: isRecentCompact ? theme.scaffoldBackgroundColor : Colors.black,
       child: SafeArea(
         bottom: false,
         child: SizedBox(
@@ -1975,8 +1976,11 @@ class _PostDetailPageState extends State<PostDetailPage>
     const recentPosterOneLineBlockH = 126.0;
     final recentPosterW = recentPosterOneLineBlockH * 2 / 3;
 
+    final screenBg = recentCompact
+        ? theme.scaffoldBackgroundColor
+        : _kLetterboxdReviewScreenBg;
     return ColoredBox(
-      color: _kLetterboxdReviewScreenBg,
+      color: screenBg,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -2363,6 +2367,7 @@ class _PostDetailPageState extends State<PostDetailPage>
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final isTypedReview = postDisplayType(post) == 'review';
+    final useScaffoldBgForReview = isTypedReview && widget.hideBelowLetterboxdLike;
     final hideLetterboxdTail = isTypedReview && widget.hideBelowLetterboxdLike;
     final boardKind = postDisplayType(post);
     final showAuthorProfileMenu = boardKind != 'talk' && boardKind != 'ask';
@@ -2380,7 +2385,7 @@ class _PostDetailPageState extends State<PostDetailPage>
       },
       child: Scaffold(
         resizeToAvoidBottomInset: true,
-        backgroundColor: isTypedReview
+        backgroundColor: (isTypedReview && !useScaffoldBgForReview)
             ? _kLetterboxdReviewScreenBg
             : theme.scaffoldBackgroundColor,
         body: ValueListenableBuilder<bool>(
@@ -2448,7 +2453,7 @@ class _PostDetailPageState extends State<PostDetailPage>
                         onRefresh: _loadLatestPost,
                         spinnerOffsetDown: 15.0,
                         child: Container(
-                          color: isTypedReview
+                          color: (isTypedReview && !useScaffoldBgForReview)
                               ? _kLetterboxdReviewScreenBg
                               : theme.scaffoldBackgroundColor,
                           child: SingleChildScrollView(

@@ -56,53 +56,61 @@ class DramaSearchStatsService {
     return [_hourKey(now), _dayKey(now), _monthKey(now), _yearKey(now)];
   }
 
-  /// 클릭 시: hour + day + month + year 문서에 +1
+  Future<void> _incrementClickOneDoc(String docId, String dramaId) async {
+    try {
+      final ref = _firestore.collection(_collection).doc(docId);
+      await ref.update({'clicks.$dramaId': FieldValue.increment(1)});
+    } catch (e) {
+      if (e.toString().contains('NOT_FOUND') || e.toString().contains('no document')) {
+        final ref = _firestore.collection(_collection).doc(docId);
+        await ref.set({'clicks': {dramaId: 1}, 'searches': {}}, SetOptions(merge: true));
+      } else {
+        debugPrint('DramaSearchStatsService incrementClick ERROR: $e');
+      }
+    }
+  }
+
+  /// 클릭 시: hour + day + month + year 문서에 +1 (병렬 쓰기)
   Future<void> incrementClick(String dramaId) async {
     if (dramaId.isEmpty) return;
     final now = DateTime.now();
-    for (final docId in _writeDocIds(now)) {
-      try {
-        final ref = _firestore.collection(_collection).doc(docId);
-        await ref.update({'clicks.$dramaId': FieldValue.increment(1)});
-      } catch (e) {
-        if (e.toString().contains('NOT_FOUND') || e.toString().contains('no document')) {
-          final ref = _firestore.collection(_collection).doc(docId);
-          await ref.set({'clicks': {dramaId: 1}, 'searches': {}}, SetOptions(merge: true));
-        } else {
-          debugPrint('DramaSearchStatsService incrementClick ERROR: $e');
-        }
-      }
-    }
+    await Future.wait(
+      _writeDocIds(now).map((docId) => _incrementClickOneDoc(docId, dramaId)),
+    );
     debugPrint('DramaSearchStatsService incrementClick: $dramaId');
   }
 
-  /// 검색 제출 시: 결과 상위 드라마 id들에 대해 hour + day + month + year에 검색 +1
+  Future<void> _incrementSearchOneDoc(String docId, List<String> ids) async {
+    try {
+      final ref = _firestore.collection(_collection).doc(docId);
+      final updates = <String, dynamic>{};
+      for (final id in ids) {
+        updates['searches.$id'] = FieldValue.increment(1);
+      }
+      await ref.update(updates);
+    } catch (e) {
+      if (e.toString().contains('NOT_FOUND') || e.toString().contains('no document')) {
+        final ref = _firestore.collection(_collection).doc(docId);
+        final searches = <String, dynamic>{};
+        for (final id in ids) {
+          searches[id] = 1;
+        }
+        await ref.set({'clicks': {}, 'searches': searches}, SetOptions(merge: true));
+      } else {
+        debugPrint('DramaSearchStatsService incrementSearch ERROR: $e');
+      }
+    }
+  }
+
+  /// 검색 제출 시: 결과 상위 드라마 id들에 대해 hour + day + month + year에 검색 +1 (병렬 쓰기)
   Future<void> incrementSearch(List<String> dramaIds) async {
     if (dramaIds.isEmpty) return;
     final now = DateTime.now();
     final ids = dramaIds.where((id) => id.isNotEmpty).toList();
     if (ids.isEmpty) return;
-    for (final docId in _writeDocIds(now)) {
-      try {
-        final ref = _firestore.collection(_collection).doc(docId);
-        final updates = <String, dynamic>{};
-        for (final id in ids) {
-          updates['searches.$id'] = FieldValue.increment(1);
-        }
-        await ref.update(updates);
-      } catch (e) {
-        if (e.toString().contains('NOT_FOUND') || e.toString().contains('no document')) {
-          final ref = _firestore.collection(_collection).doc(docId);
-          final searches = <String, dynamic>{};
-          for (final id in ids) {
-            searches[id] = 1;
-          }
-          await ref.set({'clicks': {}, 'searches': searches}, SetOptions(merge: true));
-        } else {
-          debugPrint('DramaSearchStatsService incrementSearch ERROR: $e');
-        }
-      }
-    }
+    await Future.wait(
+      _writeDocIds(now).map((docId) => _incrementSearchOneDoc(docId, ids)),
+    );
     debugPrint('DramaSearchStatsService incrementSearch: ${ids.length} dramas');
   }
 
