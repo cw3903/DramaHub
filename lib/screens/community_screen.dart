@@ -657,17 +657,19 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
                                         ),
                                         child: Text(
                                           [s.get('tabReviews'), s.get('tabGeneral'), s.get('tabQnA')][i],
-                                          strutStyle: StrutStyle(
-                                            forceStrutHeight: true,
-                                            height: 1.15,
-                                            fontSize: 10 * r,
-                                            leadingDistribution: TextLeadingDistribution.even,
+                                          textHeightBehavior: const TextHeightBehavior(
+                                            applyHeightToFirstAscent: false,
+                                            applyHeightToLastDescent: false,
                                           ),
                                           style: GoogleFonts.notoSansKr(
                                             fontSize: 10 * r,
-                                            height: 1.15,
-                                            fontWeight: FontWeight.w700,
-                                            color: idx == i ? cs.onInverseSurface : cs.onSurfaceVariant,
+                                            height: 1.0,
+                                            fontWeight: FontWeight.w900,
+                                            letterSpacing: -0.2,
+                                            foreground: Paint()
+                                              ..style = PaintingStyle.fill
+                                              ..strokeWidth = 0.4
+                                              ..color = (idx == i ? cs.onInverseSurface : cs.onSurfaceVariant),
                                           ),
                                         ),
                                       ),

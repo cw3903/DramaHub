@@ -10,7 +10,48 @@ import 'language_select_screen.dart';
 import '../app_strings.dart';
 import '../services/locale_service.dart';
 
-/// 로그인 탭 화면 - 로그인 폼 표시
+class _LoginPalette {
+  const _LoginPalette({
+    required this.scaffoldBg,
+    required this.fieldFill,
+    required this.border,
+    required this.text,
+    required this.muted,
+    required this.snackBarBg,
+  });
+
+  final Color scaffoldBg;
+  final Color fieldFill;
+  final Color border;
+  final Color text;
+  final Color muted;
+  final Color snackBarBg;
+
+  static _LoginPalette of(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cs = Theme.of(context).colorScheme;
+    if (isDark) {
+      return _LoginPalette(
+        scaffoldBg: AppColors.darkSurface,
+        fieldFill: AppColors.darkSurfaceVariant,
+        border: cs.outline.withValues(alpha: 0.85),
+        text: AppColors.darkOnSurface,
+        muted: AppColors.darkOnSurfaceVariant,
+        snackBarBg: const Color(0xFF2C2C2C),
+      );
+    }
+    return _LoginPalette(
+      scaffoldBg: AppColors.surface,
+      fieldFill: const Color(0xFFFAFAFA),
+      border: const Color(0xFFDBDBDB),
+      text: const Color(0xFF262626),
+      muted: const Color(0xFF8E8E8E),
+      snackBarBg: const Color(0xFF262626),
+    );
+  }
+}
+
+/// 로그인 탭 화면
 class LoginScreen extends StatelessWidget {
   const LoginScreen({super.key, this.onLoginSuccess});
 
@@ -18,17 +59,28 @@ class LoginScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = _LoginPalette.of(context);
     return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: LoginFormContent(onLoginSuccess: onLoginSuccess),
+      backgroundColor: p.scaffoldBg,
+      body: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 8),
+              child: SizedBox(
+                height: constraints.maxHeight,
+                width: constraints.maxWidth,
+                child: LoginFormContent(onLoginSuccess: onLoginSuccess),
+              ),
+            );
+          },
+        ),
       ),
     );
   }
 }
 
-/// 로그인 폼 (탭에서 사용 - 로그인 페이지와 동일한 폼)
+/// 로그인 폼 (프로필 탭·[LoginPage] 공통)
 class LoginFormContent extends StatefulWidget {
   const LoginFormContent({super.key, this.onLoginSuccess});
 
@@ -52,6 +104,41 @@ class _LoginFormContentState extends State<LoginFormContent> {
     super.dispose();
   }
 
+  InputDecoration _fieldDecoration(_LoginPalette p, {required String hint, Widget? suffixIcon}) {
+    final border = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: BorderSide(color: p.border, width: 1),
+    );
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: GoogleFonts.notoSansKr(
+        color: p.muted,
+        fontSize: 15,
+        fontWeight: FontWeight.w400,
+      ),
+      filled: true,
+      fillColor: p.fieldFill,
+      isDense: true,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      border: border,
+      enabledBorder: border,
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppColors.accent, width: 1.4),
+      ),
+      errorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: Colors.red.shade400, width: 1),
+      ),
+      focusedErrorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: Colors.red.shade600, width: 1.2),
+      ),
+      suffixIcon: suffixIcon,
+      errorStyle: GoogleFonts.notoSansKr(fontSize: 12, color: Colors.red.shade400),
+    );
+  }
+
   void _onLogin() async {
     if (_formKey.currentState?.validate() != true) return;
     final email = _emailController.text.trim();
@@ -68,6 +155,7 @@ class _LoginFormContentState extends State<LoginFormContent> {
       if (!mounted) return;
       setState(() => _isLoading = false);
       final s = CountryScope.of(context).strings;
+      final p = _LoginPalette.of(context);
       String msg = s.get('loginErrorGeneric');
       if (e is FirebaseAuthException && e.code == 'invalid-credential') {
         try {
@@ -80,8 +168,9 @@ class _LoginFormContentState extends State<LoginFormContent> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(msg, style: GoogleFonts.notoSansKr()),
+          content: Text(msg, style: GoogleFonts.notoSansKr(color: Colors.white)),
           behavior: SnackBarBehavior.floating,
+          backgroundColor: p.snackBarBg,
           duration: const Duration(seconds: 3),
         ),
       );
@@ -106,7 +195,7 @@ class _LoginFormContentState extends State<LoginFormContent> {
         SnackBar(
           content: Text(
             '${s.get('loginPreparing')}: $e',
-            style: GoogleFonts.notoSansKr(),
+            style: GoogleFonts.notoSansKr(color: Colors.white),
           ),
           behavior: SnackBarBehavior.floating,
           backgroundColor: Colors.red.shade700,
@@ -115,204 +204,232 @@ class _LoginFormContentState extends State<LoginFormContent> {
     }
   }
 
+  Future<void> _openSignUp() async {
+    final title = AppStrings(LocaleService.instance.locale).get('language');
+    final ok = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => LanguageSelectScreen(
+          title: title,
+          showCloseButton: true,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (ok == true) {
+      await Navigator.push<void>(
+        context,
+        MaterialPageRoute<void>(builder: (_) => const SignupPage()),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = CountryScope.of(context).strings;
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-    final isDark = theme.brightness == Brightness.dark;
+    final p = _LoginPalette.of(context);
     return Form(
       key: _formKey,
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          const SizedBox(height: 24),
-          Text(
-            s.get('welcomeLogin'),
-            style: GoogleFonts.notoSansKr(
-              fontSize: 26,
-              fontWeight: FontWeight.w700,
-              color: cs.onSurface,
-              height: 1.3,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            s.get('loginSubtitle'),
-            style: GoogleFonts.notoSansKr(
-              fontSize: 15,
-              color: cs.onSurfaceVariant,
-            ),
-          ),
-          const SizedBox(height: 40),
-          TextFormField(
-            controller: _emailController,
-            keyboardType: TextInputType.emailAddress,
-            style: GoogleFonts.notoSansKr(fontSize: 16, color: cs.onSurface),
-            decoration: InputDecoration(
-              labelText: s.get('email'),
-              hintText: 'example@email.com',
-              hintStyle: GoogleFonts.notoSansKr(color: cs.onSurfaceVariant),
-              filled: true,
-              fillColor: isDark ? cs.surfaceContainerHighest : Colors.white,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(16),
-                borderSide: BorderSide.none,
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(16),
-                borderSide: BorderSide(color: isDark ? cs.outline : Colors.grey.shade200),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(16),
-                borderSide: BorderSide(color: isDark ? cs.outline : AppColors.accent, width: isDark ? 1 : 2),
-              ),
-              labelStyle: GoogleFonts.notoSansKr(color: cs.onSurfaceVariant),
-              floatingLabelStyle: GoogleFonts.notoSansKr(
-                fontSize: 12,
-                color: isDark ? Colors.white : AppColors.accent,
-              ),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-            ),
-            validator: (value) {
-              if (value == null || value.isEmpty) return s.get('enterEmail');
-              if (!value.contains('@')) return s.get('validEmail');
-              return null;
-            },
-          ),
-          const SizedBox(height: 16),
-          TextFormField(
-            controller: _passwordController,
-            obscureText: _obscurePassword,
-            style: GoogleFonts.notoSansKr(fontSize: 16, color: cs.onSurface),
-            decoration: InputDecoration(
-              labelText: s.get('password'),
-              hintText: '비밀번호를 입력하세요',
-              hintStyle: GoogleFonts.notoSansKr(color: cs.onSurfaceVariant),
-              filled: true,
-              fillColor: isDark ? cs.surfaceContainerHighest : Colors.white,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(16),
-                borderSide: BorderSide.none,
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(16),
-                borderSide: BorderSide(color: isDark ? cs.outline : Colors.grey.shade200),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(16),
-                borderSide: BorderSide(color: isDark ? cs.outline : AppColors.accent, width: isDark ? 1 : 2),
-              ),
-              labelStyle: GoogleFonts.notoSansKr(color: cs.onSurfaceVariant),
-              floatingLabelStyle: GoogleFonts.notoSansKr(
-                fontSize: 12,
-                color: isDark ? Colors.white : AppColors.accent,
-              ),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-              suffixIcon: IconButton(
-                icon: Icon(
-                  _obscurePassword ? LucideIcons.eye_off : LucideIcons.eye,
-                  color: cs.onSurfaceVariant,
-                ),
-                onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
-              ),
-            ),
-            validator: (value) {
-              if (value == null || value.isEmpty) return s.get('enterPassword');
-              if (value.length < 6) return s.get('passwordMin');
-              return null;
-            },
-          ),
-          const SizedBox(height: 32),
-          FilledButton(
-            onPressed: _isLoading ? null : _onLogin,
-            style: FilledButton.styleFrom(
-              backgroundColor: AppColors.accent,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 18),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              elevation: 0,
-            ),
-            child: _isLoading
-                ? const SizedBox(
-                    height: 24,
-                    width: 24,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                    ),
-                  )
-                : Text(
-                    s.get('login'),
+          Expanded(
+            child: Center(
+              child: SingleChildScrollView(
+                physics: const ClampingScrollPhysics(),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 400),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                  TextFormField(
+                    controller: _emailController,
+                    keyboardType: TextInputType.emailAddress,
                     style: GoogleFonts.notoSansKr(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
+                      fontSize: 15,
+                      color: p.text,
+                      fontWeight: FontWeight.w400,
                     ),
+                    decoration: _fieldDecoration(p, hint: s.get('email')),
+                    validator: (value) {
+                      if (value == null || value.isEmpty) return s.get('enterEmail');
+                      if (!value.contains('@')) return s.get('validEmail');
+                      return null;
+                    },
                   ),
-          ),
-          const SizedBox(height: 24),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                s.get('noAccount'),
-                style: GoogleFonts.notoSansKr(
-                  fontSize: 14,
-                  color: AppColors.mediumGrey,
-                ),
-              ),
-              TextButton(
-                onPressed: () async {
-                  final title = AppStrings(LocaleService.instance.locale).get('language');
-                  final ok = await Navigator.push<bool>(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => LanguageSelectScreen(
-                        title: title,
-                        showCloseButton: true,
+                  const SizedBox(height: 10),
+                  TextFormField(
+                    controller: _passwordController,
+                    obscureText: _obscurePassword,
+                    style: GoogleFonts.notoSansKr(
+                      fontSize: 15,
+                      color: p.text,
+                      fontWeight: FontWeight.w400,
+                    ),
+                    decoration: _fieldDecoration(
+                      p,
+                      hint: s.get('password'),
+                      suffixIcon: IconButton(
+                        icon: Icon(
+                          _obscurePassword ? LucideIcons.eye_off : LucideIcons.eye,
+                          size: 20,
+                          color: p.muted,
+                        ),
+                        onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
                       ),
                     ),
-                  );
-                  if (context.mounted && ok == true) {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => const SignupPage()),
-                    );
-                  }
-                },
-                style: TextButton.styleFrom(
-                  padding: EdgeInsets.zero,
-                  minimumSize: Size.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-                child: Text(
-                  s.get('signUp'),
-                  style: GoogleFonts.notoSansKr(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.linkBlue,
+                    validator: (value) {
+                      if (value == null || value.isEmpty) return s.get('enterPassword');
+                      if (value.length < 6) return s.get('passwordMin');
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 18),
+                  FilledButton(
+                    onPressed: _isLoading ? null : _onLogin,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.accent,
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: AppColors.accent.withValues(alpha: 0.45),
+                      padding: const EdgeInsets.symmetric(vertical: 15),
+                      shape: const StadiumBorder(),
+                      elevation: 0,
+                    ),
+                    child: _isLoading
+                        ? const SizedBox(
+                            height: 22,
+                            width: 22,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                            ),
+                          )
+                        : Text(
+                            s.get('login'),
+                            style: GoogleFonts.notoSansKr(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                  ),
+                  const SizedBox(height: 22),
+                  Row(
+                    children: [
+                      Expanded(child: Divider(color: p.border, thickness: 1)),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Text(
+                          s.get('loginDividerOr'),
+                          style: GoogleFonts.notoSansKr(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: p.muted,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                      ),
+                      Expanded(child: Divider(color: p.border, thickness: 1)),
+                    ],
+                  ),
+                  const SizedBox(height: 18),
+                  OutlinedButton(
+                    onPressed: _isLoading ? null : _onGoogleLogin,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: p.text,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      side: BorderSide(color: p.border, width: 1),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        _GoogleGlyph(palette: p),
+                        const SizedBox(width: 10),
+                        Text(
+                          s.get('loginWithGoogle'),
+                          style: GoogleFonts.notoSansKr(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                    ],
                   ),
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 24),
-          OutlinedButton.icon(
-            onPressed: _isLoading ? null : _onGoogleLogin,
-            icon: Icon(Icons.g_mobiledata, size: 24, color: Theme.of(context).colorScheme.onSurface),
-            label: Text(
-              s.get('loginWithGoogle'),
-              style: GoogleFonts.notoSansKr(fontSize: 16, fontWeight: FontWeight.w600),
             ),
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              side: BorderSide(color: Colors.grey.shade300),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          ),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 400),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                  Text(
+                    s.get('noAccount'),
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.notoSansKr(
+                      fontSize: 13,
+                      color: p.muted,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  OutlinedButton(
+                    onPressed: _isLoading ? null : _openSignUp,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.accent,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      side: const BorderSide(color: AppColors.accent, width: 1.1),
+                      shape: const StadiumBorder(),
+                    ),
+                    child: Text(
+                      s.get('signUp'),
+                      style: GoogleFonts.notoSansKr(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+              ],
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _GoogleGlyph extends StatelessWidget {
+  const _GoogleGlyph({required this.palette});
+
+  final _LoginPalette palette;
+
+  static const double _size = 22;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: _size,
+      height: _size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: palette.fieldFill,
+        shape: BoxShape.circle,
+        border: Border.all(color: palette.border),
+      ),
+      child: Text(
+        'G',
+        style: GoogleFonts.roboto(
+          fontSize: _size * 0.52,
+          fontWeight: FontWeight.w700,
+          color: const Color(0xFF4285F4),
+          height: 1,
+        ),
       ),
     );
   }

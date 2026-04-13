@@ -467,7 +467,7 @@ class _FeedPostCardState extends State<FeedPostCard> {
                                   style: GoogleFonts.notoSansKr(
                                     fontSize: 13,
                                     color: cs.onSurface,
-                                    fontWeight: FontWeight.w500,
+                                    fontWeight: FontWeight.w700,
                                   ),
                                   overflow: TextOverflow.ellipsis,
                                 ),
@@ -495,7 +495,7 @@ class _FeedPostCardState extends State<FeedPostCard> {
                           style: GoogleFonts.notoSansKr(
                             fontSize: 11,
                             color: AppColors.mediumGrey.withOpacity(0.7),
-                            fontWeight: FontWeight.w400,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ],

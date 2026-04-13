@@ -39,11 +39,16 @@ const List<PostSearchScope> postSearchScopeOrder = [
 String postSearchScopeLabel(PostSearchScope s, BuildContext context) {
   final str = CountryScope.of(context).strings;
   switch (s) {
-    case PostSearchScope.titleAndBody: return str.get('searchScopeTitleAndBody');
-    case PostSearchScope.title: return str.get('searchScopeTitle');
-    case PostSearchScope.body: return str.get('searchScopeBody');
-    case PostSearchScope.comment: return str.get('searchScopeComment');
-    case PostSearchScope.nickname: return str.get('searchScopeNickname');
+    case PostSearchScope.titleAndBody:
+      return str.get('searchScopeTitleAndBody');
+    case PostSearchScope.title:
+      return str.get('searchScopeTitle');
+    case PostSearchScope.body:
+      return str.get('searchScopeBody');
+    case PostSearchScope.comment:
+      return str.get('searchScopeComment');
+    case PostSearchScope.nickname:
+      return str.get('searchScopeNickname');
   }
 }
 
@@ -69,8 +74,10 @@ class PopularPostsTab extends StatefulWidget {
     this.shrinkWrap = false,
     this.useReviewLayout = false,
     this.listTabLabel,
+
     /// [useReviewLayout]이 true일 때만 적용. 커뮤니티 홈 Reviews 탭 Letterboxd 스타일.
     this.useLetterboxdReviewLayout = false,
+
     /// true면 피드 내 검색·페이지네이션 숨기고 [feedScrollController]로 무한 스크롤
     this.useSimpleFeedLayout = false,
     this.feedScrollController,
@@ -84,18 +91,23 @@ class PopularPostsTab extends StatefulWidget {
   final String? error;
   final String? currentUserAuthor;
   final Future<void> Function() onRefresh;
+
   /// 글상세 DramaFeed 섹션에서는 false로 설정
   final bool enablePullToRefresh;
+
   /// 글상세에서 상위 스크롤과 연동하려면 true (중첩 스크롤 방지)
   final bool shrinkWrap;
   final void Function(Post)? onPostUpdated;
   final void Function(Post)? onPostDeleted;
   final void Function(Post)? onPostTap;
   final VoidCallback? onUserBlocked;
+
   /// true면 리뷰 전용 카드·빈 화면 문구
   final bool useReviewLayout;
+
   /// Feed 카드에 넘기는 탭 이름 (저장/공유 등). null이면 리뷰 레이아웃일 때 tabReviews, 아니면 tabHot
   final String? listTabLabel;
+
   /// true면 `type == 'review'` 게시글을 구분선 리스트(Letterboxd 스타일)로 표시
   final bool useLetterboxdReviewLayout;
   final bool useSimpleFeedLayout;
@@ -126,6 +138,7 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
 
   final Set<String> _inlineLikeBusy = {};
   final Set<String> _inlineCommentSubmitting = {};
+
   /// 리뷰 본문 탭 시 아래에 댓글 목록 펼침(Letterboxd 인라인 피드).
   final Set<String> _expandedReviewComments = {};
   final Map<String, TextEditingController> _inlineCommentControllers = {};
@@ -172,7 +185,10 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
 
   Future<void> _inlineToggleLike(Post post) async {
     if (!AuthService.instance.isLoggedIn.value) {
-      await Navigator.push<void>(context, MaterialPageRoute(builder: (_) => const LoginPage()));
+      await Navigator.push<void>(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginPage()),
+      );
       if (!mounted) return;
       if (!AuthService.instance.isLoggedIn.value) return;
     }
@@ -193,7 +209,8 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
     var nextLikeCount = p.likeCount;
     var nextDislikeCount = p.dislikeCount;
     if (!liked) {
-      if (p.dislikedBy.contains(uid)) nextDislikeCount = (nextDislikeCount - 1).clamp(0, 999999);
+      if (p.dislikedBy.contains(uid))
+        nextDislikeCount = (nextDislikeCount - 1).clamp(0, 999999);
       nextLikeCount += 1;
     } else {
       nextLikeCount = (nextLikeCount - 1).clamp(0, 999999);
@@ -201,7 +218,9 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
     final optimistic = p.copyWith(
       votes: p.votes + likeVoteDelta,
       likedBy: newLikedBy,
-      dislikedBy: !liked ? p.dislikedBy.where((u) => u != uid).toList() : p.dislikedBy,
+      dislikedBy: !liked
+          ? p.dislikedBy.where((u) => u != uid).toList()
+          : p.dislikedBy,
       likeCount: nextLikeCount,
       dislikeCount: nextDislikeCount,
     );
@@ -223,7 +242,10 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
 
   Future<void> _openReviewCommentOverlay(Post post) async {
     if (!AuthService.instance.isLoggedIn.value) {
-      await Navigator.push<void>(context, MaterialPageRoute(builder: (_) => const LoginPage()));
+      await Navigator.push<void>(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginPage()),
+      );
       if (!mounted) return;
       if (!AuthService.instance.isLoggedIn.value) return;
     }
@@ -242,7 +264,8 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
             opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
             child: _ReviewCommentComposerOverlay(
               controller: _inlineCommentControllers[id]!,
-              onSend: (overlayCtx) => _submitInlineComment(post, successPopContext: overlayCtx),
+              onSend: (overlayCtx) =>
+                  _submitInlineComment(post, successPopContext: overlayCtx),
             ),
           );
         },
@@ -250,14 +273,20 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
     );
   }
 
-  Future<void> _submitInlineComment(Post post, {BuildContext? successPopContext}) async {
+  Future<void> _submitInlineComment(
+    Post post, {
+    BuildContext? successPopContext,
+  }) async {
     final id = post.id;
     final ctrl = _inlineCommentControllers[id];
     if (ctrl == null) return;
     final text = ctrl.text.trim();
     if (text.isEmpty) return;
     if (!AuthService.instance.isLoggedIn.value) {
-      await Navigator.push<void>(context, MaterialPageRoute(builder: (_) => const LoginPage()));
+      await Navigator.push<void>(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginPage()),
+      );
       if (!mounted) return;
       if (!AuthService.instance.isLoggedIn.value) return;
     }
@@ -271,7 +300,9 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
     final email = AuthService.instance.currentUser.value?.email;
     var author = nickname?.trim().isNotEmpty == true
         ? nickname!.trim()
-        : (displayName?.trim().isNotEmpty == true ? displayName!.trim() : (email != null ? email.split('@').first : ''));
+        : (displayName?.trim().isNotEmpty == true
+              ? displayName!.trim()
+              : (email != null ? email.split('@').first : ''));
     if (author.isEmpty) author = '익명';
     final p = _latestPost(post);
     final newComment = PostComment(
@@ -282,14 +313,18 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
       votes: 0,
       replies: const [],
       authorPhotoUrl: UserProfileService.instance.profileImageUrlNotifier.value,
-      authorAvatarColorIndex: UserProfileService.instance.avatarColorNotifier.value,
+      authorAvatarColorIndex:
+          UserProfileService.instance.avatarColorNotifier.value,
     );
     final err = await PostService.instance.addComment(id, p, newComment);
     if (!mounted) return;
     if (err != null) {
       setState(() => _inlineCommentSubmitting.remove(id));
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(err, style: GoogleFonts.notoSansKr()), behavior: SnackBarBehavior.floating),
+        SnackBar(
+          content: Text(err, style: GoogleFonts.notoSansKr()),
+          behavior: SnackBarBehavior.floating,
+        ),
       );
       return;
     }
@@ -307,7 +342,9 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
       for (final d in DramaListService.instance.listNotifier.value) {
         if (d.id == rawId) return d;
       }
-      final titleSource = post.dramaTitle?.trim().isNotEmpty == true ? post.dramaTitle! : post.title;
+      final titleSource = post.dramaTitle?.trim().isNotEmpty == true
+          ? post.dramaTitle!
+          : post.title;
       final resolved = DramaListService.instance.getDisplayTitle(rawId, locale);
       return DramaItem(
         id: rawId,
@@ -315,10 +352,14 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
         subtitle: '',
         views: '0',
         rating: post.rating ?? 0,
-        imageUrl: (post.dramaThumbnail?.trim().isNotEmpty == true) ? post.dramaThumbnail!.trim() : null,
+        imageUrl: (post.dramaThumbnail?.trim().isNotEmpty == true)
+            ? post.dramaThumbnail!.trim()
+            : null,
       );
     }
-    final titleGuess = post.dramaTitle?.trim().isNotEmpty == true ? post.dramaTitle! : post.title;
+    final titleGuess = post.dramaTitle?.trim().isNotEmpty == true
+        ? post.dramaTitle!
+        : post.title;
     if (titleGuess.trim().isEmpty) return null;
     final tg = titleGuess.trim();
     for (final d in DramaListService.instance.listNotifier.value) {
@@ -350,7 +391,8 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
     if (!context.mounted) return;
     await Navigator.of(context).push<void>(
       CupertinoPageRoute<void>(
-        builder: (_) => DramaDetailPage(detail: detail, scrollToRatings: scrollToReviews),
+        builder: (_) =>
+            DramaDetailPage(detail: detail, scrollToRatings: scrollToReviews),
       ),
     );
   }
@@ -386,19 +428,30 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
               Expanded(
                 child: Text(
                   c.author.startsWith('u/') ? c.author.substring(2) : c.author,
-                  style: GoogleFonts.notoSansKr(fontSize: 13, fontWeight: FontWeight.w700, color: cs.onSurface),
+                  style: GoogleFonts.notoSansKr(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: cs.onSurface,
+                  ),
                 ),
               ),
               Text(
                 c.displayTimeAgo,
-                style: GoogleFonts.notoSansKr(fontSize: 11, color: cs.onSurfaceVariant),
+                style: GoogleFonts.notoSansKr(
+                  fontSize: 11,
+                  color: cs.onSurfaceVariant,
+                ),
               ),
             ],
           ),
           const SizedBox(height: 4),
           Text(
             c.text,
-            style: GoogleFonts.notoSansKr(fontSize: 13, height: 1.4, color: cs.onSurfaceVariant),
+            style: GoogleFonts.notoSansKr(
+              fontSize: 13,
+              height: 1.4,
+              color: cs.onSurfaceVariant,
+            ),
           ),
         ],
       ),
@@ -448,7 +501,11 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
                   const SizedBox(width: 4),
                   Text(
                     formatCompactCount(p.likeCount),
-                    style: GoogleFonts.notoSansKr(fontSize: 10, fontWeight: FontWeight.w600, color: cs.onSurfaceVariant),
+                    style: GoogleFonts.notoSansKr(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      color: cs.onSurfaceVariant,
+                    ),
                   ),
                 ],
               ),
@@ -463,11 +520,19 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(LucideIcons.message_circle, size: iconSize, color: cs.onSurfaceVariant),
+                  Icon(
+                    LucideIcons.message_circle,
+                    size: iconSize,
+                    color: cs.onSurfaceVariant,
+                  ),
                   const SizedBox(width: 4),
                   Text(
                     formatCompactCount(p.comments),
-                    style: GoogleFonts.notoSansKr(fontSize: 10, fontWeight: FontWeight.w600, color: cs.onSurfaceVariant),
+                    style: GoogleFonts.notoSansKr(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      color: cs.onSurfaceVariant,
+                    ),
                   ),
                 ],
               ),
@@ -478,18 +543,27 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
     );
   }
 
-  void _submitSearch() => setState(() => _searchQuery = _searchController.text.trim().toLowerCase());
+  void _submitSearch() => setState(
+    () => _searchQuery = _searchController.text.trim().toLowerCase(),
+  );
 
   bool _postMatchesQuery(Post p, String q) {
     final title = p.title.toLowerCase();
     final body = (p.body ?? '').toLowerCase();
-    final author = (p.author.startsWith('u/') ? p.author.substring(2) : p.author).toLowerCase();
+    final author =
+        (p.author.startsWith('u/') ? p.author.substring(2) : p.author)
+            .toLowerCase();
     switch (_searchScope) {
-      case PostSearchScope.titleAndBody: return title.contains(q) || body.contains(q);
-      case PostSearchScope.title: return title.contains(q);
-      case PostSearchScope.body: return body.contains(q);
-      case PostSearchScope.comment: return p.commentsList.any((c) => commentContainsQuery(c, q));
-      case PostSearchScope.nickname: return author.contains(q);
+      case PostSearchScope.titleAndBody:
+        return title.contains(q) || body.contains(q);
+      case PostSearchScope.title:
+        return title.contains(q);
+      case PostSearchScope.body:
+        return body.contains(q);
+      case PostSearchScope.comment:
+        return p.commentsList.any((c) => commentContainsQuery(c, q));
+      case PostSearchScope.nickname:
+        return author.contains(q);
     }
   }
 
@@ -506,7 +580,8 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
         final bT = b.popularAt ?? DateTime.fromMillisecondsSinceEpoch(0);
         return bT.compareTo(aT);
       });
-    if (_searchQuery.isNotEmpty) list = list.where((p) => _postMatchesQuery(p, _searchQuery)).toList();
+    if (_searchQuery.isNotEmpty)
+      list = list.where((p) => _postMatchesQuery(p, _searchQuery)).toList();
     _cachedFiltered = list;
     _lastPosts = widget.posts;
     _lastSearchQuery = _searchQuery;
@@ -539,7 +614,11 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
         children: [
           Padding(
             padding: const EdgeInsets.only(left: 14),
-            child: Icon(LucideIcons.search, size: 17, color: cs.onSurfaceVariant.withOpacity(0.8)),
+            child: Icon(
+              LucideIcons.search,
+              size: 17,
+              color: cs.onSurfaceVariant.withOpacity(0.8),
+            ),
           ),
           const SizedBox(width: 8),
           Expanded(
@@ -548,7 +627,11 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
               textAlignVertical: TextAlignVertical.center,
               decoration: InputDecoration(
                 hintText: CountryScope.of(context).strings.get('search'),
-                hintStyle: GoogleFonts.notoSansKr(fontSize: 14, color: cs.onSurfaceVariant.withOpacity(0.7), fontWeight: FontWeight.w400),
+                hintStyle: GoogleFonts.notoSansKr(
+                  fontSize: 14,
+                  color: cs.onSurfaceVariant.withOpacity(0.7),
+                  fontWeight: FontWeight.w400,
+                ),
                 filled: false,
                 border: InputBorder.none,
                 enabledBorder: InputBorder.none,
@@ -556,48 +639,93 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
                 isCollapsed: true,
                 contentPadding: EdgeInsets.zero,
               ),
-              style: GoogleFonts.notoSansKr(fontSize: 14, fontWeight: FontWeight.w400, color: cs.onSurface),
+              style: GoogleFonts.notoSansKr(
+                fontSize: 14,
+                fontWeight: FontWeight.w400,
+                color: cs.onSurface,
+              ),
               onSubmitted: (_) => _submitSearch(),
             ),
           ),
           if (_searchController.text.isNotEmpty)
             GestureDetector(
-              onTap: () { _searchController.clear(); setState(() => _searchQuery = ''); },
+              onTap: () {
+                _searchController.clear();
+                setState(() => _searchQuery = '');
+              },
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: Icon(LucideIcons.x, size: 16, color: cs.onSurfaceVariant.withOpacity(0.8)),
+                child: Icon(
+                  LucideIcons.x,
+                  size: 16,
+                  color: cs.onSurfaceVariant.withOpacity(0.8),
+                ),
               ),
             ),
-          Container(width: 1, height: 22, color: cs.onSurface.withOpacity(0.08)),
+          Container(
+            width: 1,
+            height: 22,
+            color: cs.onSurface.withOpacity(0.08),
+          ),
           GestureDetector(
             key: _filterKey,
             onTap: () async {
-              final RenderBox btn = _filterKey.currentContext!.findRenderObject() as RenderBox;
+              final RenderBox btn =
+                  _filterKey.currentContext!.findRenderObject() as RenderBox;
               final Offset btnOffset = btn.localToGlobal(Offset.zero);
               final Size screenSize = MediaQuery.of(context).size;
               final selected = await showMenu<PostSearchScope>(
                 context: context,
                 position: RelativeRect.fromRect(
-                  Rect.fromLTWH(btnOffset.dx, btnOffset.dy, btn.size.width, btn.size.height),
+                  Rect.fromLTWH(
+                    btnOffset.dx,
+                    btnOffset.dy,
+                    btn.size.width,
+                    btn.size.height,
+                  ),
                   Offset.zero & screenSize,
                 ),
                 elevation: 8,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
                 items: postSearchScopeOrder.map((scope) {
                   final isSelected = scope == _searchScope;
                   return PopupMenuItem<PostSearchScope>(
                     value: scope,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 2,
+                    ),
                     child: Row(
                       children: [
-                        Text(postSearchScopeLabel(scope, context), style: GoogleFonts.notoSansKr(fontSize: 14, fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400, color: isSelected ? cs.onSurface : cs.onSurfaceVariant)),
-                        if (isSelected) ...[const Spacer(), Icon(LucideIcons.check, size: 14, color: cs.onSurface)],
+                        Text(
+                          postSearchScopeLabel(scope, context),
+                          style: GoogleFonts.notoSansKr(
+                            fontSize: 14,
+                            fontWeight: isSelected
+                                ? FontWeight.w600
+                                : FontWeight.w400,
+                            color: isSelected
+                                ? cs.onSurface
+                                : cs.onSurfaceVariant,
+                          ),
+                        ),
+                        if (isSelected) ...[
+                          const Spacer(),
+                          Icon(
+                            LucideIcons.check,
+                            size: 14,
+                            color: cs.onSurface,
+                          ),
+                        ],
                       ],
                     ),
                   );
                 }).toList(),
               );
-              if (selected != null && mounted) setState(() => _searchScope = selected);
+              if (selected != null && mounted)
+                setState(() => _searchScope = selected);
             },
             child: Container(
               height: 44,
@@ -605,9 +733,20 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(postSearchScopeLabel(_searchScope, context), style: GoogleFonts.notoSansKr(fontSize: 13, fontWeight: FontWeight.w500, color: cs.onSurface)),
+                  Text(
+                    postSearchScopeLabel(_searchScope, context),
+                    style: GoogleFonts.notoSansKr(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: cs.onSurface,
+                    ),
+                  ),
                   const SizedBox(width: 3),
-                  Icon(LucideIcons.chevron_down, size: 13, color: cs.onSurfaceVariant),
+                  Icon(
+                    LucideIcons.chevron_down,
+                    size: 13,
+                    color: cs.onSurfaceVariant,
+                  ),
                 ],
               ),
             ),
@@ -617,7 +756,11 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
     );
   }
 
-  Widget _buildMinimalPagination(ColorScheme cs, int totalPages, int totalCount) {
+  Widget _buildMinimalPagination(
+    ColorScheme cs,
+    int totalPages,
+    int totalCount,
+  ) {
     if (totalCount == 0 || totalPages == 0) return const SizedBox.shrink();
     final c = _currentPage;
     return Padding(
@@ -626,24 +769,46 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           GestureDetector(
-            onTap: c > 0 ? () => setState(() { _currentPage = c - 1; _showPageInput = false; }) : null,
-            child: Padding(padding: const EdgeInsets.all(8), child: Icon(LucideIcons.chevron_left, size: 22, color: c > 0 ? cs.onSurface.withOpacity(0.75) : cs.onSurface.withOpacity(0.18))),
+            onTap: c > 0
+                ? () => setState(() {
+                    _currentPage = c - 1;
+                    _showPageInput = false;
+                  })
+                : null,
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Icon(
+                LucideIcons.chevron_left,
+                size: 22,
+                color: c > 0
+                    ? cs.onSurface.withOpacity(0.75)
+                    : cs.onSurface.withOpacity(0.18),
+              ),
+            ),
           ),
           const SizedBox(width: 12),
           GestureDetector(
-            onTap: () => setState(() { _showPageInput = !_showPageInput; if (_showPageInput) _pageInputController.clear(); }),
+            onTap: () => setState(() {
+              _showPageInput = !_showPageInput;
+              if (_showPageInput) _pageInputController.clear();
+            }),
             child: AnimatedSwitcher(
               duration: const Duration(milliseconds: 180),
               child: _showPageInput
                   ? Container(
                       key: const ValueKey('input'),
-                      width: 80, height: 34,
+                      width: 80,
+                      height: 34,
                       decoration: BoxDecoration(
                         color: cs.onSurface.withOpacity(0.05),
                         borderRadius: BorderRadius.circular(10),
                         border: Border.all(
-                          color: Theme.of(context).brightness == Brightness.dark ? cs.outline : const Color(0xFFFF6B35),
-                          width: Theme.of(context).brightness == Brightness.dark ? 1 : 1.2,
+                          color: Theme.of(context).brightness == Brightness.dark
+                              ? cs.outline
+                              : const Color(0xFFFF6B35),
+                          width: Theme.of(context).brightness == Brightness.dark
+                              ? 1
+                              : 1.2,
                         ),
                       ),
                       child: Center(
@@ -655,34 +820,73 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
                           textAlignVertical: TextAlignVertical.center,
                           decoration: InputDecoration(
                             hintText: '페이지',
-                            hintStyle: GoogleFonts.notoSansKr(fontSize: 12, color: cs.onSurfaceVariant),
+                            hintStyle: GoogleFonts.notoSansKr(
+                              fontSize: 12,
+                              color: cs.onSurfaceVariant,
+                            ),
                             border: InputBorder.none,
                             enabledBorder: InputBorder.none,
                             focusedBorder: InputBorder.none,
                             isCollapsed: true,
                             contentPadding: EdgeInsets.zero,
                           ),
-                          style: GoogleFonts.notoSansKr(fontSize: 13, color: cs.onSurface),
+                          style: GoogleFonts.notoSansKr(
+                            fontSize: 13,
+                            color: cs.onSurface,
+                          ),
                           onSubmitted: (val) {
                             final n = int.tryParse(val);
-                            if (n != null && n >= 1 && n <= totalPages) setState(() { _currentPage = n - 1; _showPageInput = false; });
-                            else setState(() => _showPageInput = false);
+                            if (n != null && n >= 1 && n <= totalPages)
+                              setState(() {
+                                _currentPage = n - 1;
+                                _showPageInput = false;
+                              });
+                            else
+                              setState(() => _showPageInput = false);
                           },
                         ),
                       ),
                     )
                   : Container(
                       key: const ValueKey('label'),
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                      decoration: BoxDecoration(color: cs.onSurface.withOpacity(0.05), borderRadius: BorderRadius.circular(20)),
-                      child: Text('${c + 1} / $totalPages', style: GoogleFonts.notoSansKr(fontSize: 13, fontWeight: FontWeight.w500, color: cs.onSurfaceVariant, letterSpacing: 0.2)),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: cs.onSurface.withOpacity(0.05),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        '${c + 1} / $totalPages',
+                        style: GoogleFonts.notoSansKr(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: cs.onSurfaceVariant,
+                          letterSpacing: 0.2,
+                        ),
+                      ),
                     ),
             ),
           ),
           const SizedBox(width: 12),
           GestureDetector(
-            onTap: c < totalPages - 1 ? () => setState(() { _currentPage = c + 1; _showPageInput = false; }) : null,
-            child: Padding(padding: const EdgeInsets.all(8), child: Icon(LucideIcons.chevron_right, size: 22, color: c < totalPages - 1 ? cs.onSurface.withOpacity(0.75) : cs.onSurface.withOpacity(0.18))),
+            onTap: c < totalPages - 1
+                ? () => setState(() {
+                    _currentPage = c + 1;
+                    _showPageInput = false;
+                  })
+                : null,
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Icon(
+                LucideIcons.chevron_right,
+                size: 22,
+                color: c < totalPages - 1
+                    ? cs.onSurface.withOpacity(0.75)
+                    : cs.onSurface.withOpacity(0.18),
+              ),
+            ),
           ),
         ],
       ),
@@ -691,7 +895,11 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
 
   Widget _wrapRefresh(Widget child) {
     if (widget.enablePullToRefresh) {
-      return BlindRefreshIndicator(onRefresh: widget.onRefresh, spinnerOffsetDown: 17.0, child: child);
+      return BlindRefreshIndicator(
+        onRefresh: widget.onRefresh,
+        spinnerOffsetDown: 17.0,
+        child: child,
+      );
     }
     return child;
   }
@@ -715,60 +923,120 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
           padding: const EdgeInsets.symmetric(vertical: 48),
-          children: const [Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator()))],
+          children: const [
+            Center(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: CircularProgressIndicator(),
+              ),
+            ),
+          ],
         );
       }
       return const Center(child: CircularProgressIndicator());
     }
     if (error != null && posts.isEmpty) {
-      return _wrapRefresh(ListView(
-        shrinkWrap: widget.shrinkWrap,
-        physics: widget.shrinkWrap ? const NeverScrollableScrollPhysics() : const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.fromLTRB(24, 48, 24, _listBottomPadding(context)),
-        children: [
-          const SizedBox(height: 8),
-          Icon(LucideIcons.cloud_off, size: 56, color: cs.error.withOpacity(0.6)),
-          const SizedBox(height: 20),
-          Text('글을 불러오지 못했어요', textAlign: TextAlign.center, style: GoogleFonts.notoSansKr(fontSize: 16, fontWeight: FontWeight.w600, color: cs.onSurface)),
-          const SizedBox(height: 8),
-          Text(error, textAlign: TextAlign.center, style: GoogleFonts.notoSansKr(fontSize: 12, color: cs.error, height: 1.5)),
-          const SizedBox(height: 20),
-          TextButton(onPressed: onRefresh, child: Text('다시 시도', style: GoogleFonts.notoSansKr(fontSize: 14, color: cs.primary))),
-        ],
-      ));
+      return _wrapRefresh(
+        ListView(
+          shrinkWrap: widget.shrinkWrap,
+          physics: widget.shrinkWrap
+              ? const NeverScrollableScrollPhysics()
+              : const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.fromLTRB(24, 48, 24, _listBottomPadding(context)),
+          children: [
+            const SizedBox(height: 8),
+            Icon(
+              LucideIcons.cloud_off,
+              size: 56,
+              color: cs.error.withOpacity(0.6),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              '글을 불러오지 못했어요',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.notoSansKr(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: cs.onSurface,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              error,
+              textAlign: TextAlign.center,
+              style: GoogleFonts.notoSansKr(
+                fontSize: 12,
+                color: cs.error,
+                height: 1.5,
+              ),
+            ),
+            const SizedBox(height: 20),
+            TextButton(
+              onPressed: onRefresh,
+              child: Text(
+                '다시 시도',
+                style: GoogleFonts.notoSansKr(fontSize: 14, color: cs.primary),
+              ),
+            ),
+          ],
+        ),
+      );
     }
     if (posts.isEmpty) {
-      return _wrapRefresh(ListView(
-        shrinkWrap: widget.shrinkWrap,
-        physics: widget.shrinkWrap ? const NeverScrollableScrollPhysics() : const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.fromLTRB(24, 48, 24, _listBottomPadding(context)),
-        children: [
-          const SizedBox(height: 8),
-          Icon(
-            widget.useReviewLayout ? LucideIcons.star : LucideIcons.trending_up,
-            size: 64,
-            color: cs.onSurfaceVariant.withOpacity(0.4),
-          ),
-          const SizedBox(height: 24),
-          Text(s.get('postSoon'), textAlign: TextAlign.center, style: GoogleFonts.notoSansKr(fontSize: 16, fontWeight: FontWeight.w600, color: cs.onSurface)),
-          const SizedBox(height: 8),
-          Text(
-            widget.useReviewLayout ? s.get('reviewsTabEmpty') : s.get('trendTabHint'),
-            textAlign: TextAlign.center,
-            style: GoogleFonts.notoSansKr(fontSize: 13, color: cs.onSurfaceVariant),
-          ),
-        ],
-      ));
+      return _wrapRefresh(
+        ListView(
+          shrinkWrap: widget.shrinkWrap,
+          physics: widget.shrinkWrap
+              ? const NeverScrollableScrollPhysics()
+              : const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.fromLTRB(24, 48, 24, _listBottomPadding(context)),
+          children: [
+            const SizedBox(height: 8),
+            Icon(
+              widget.useReviewLayout
+                  ? LucideIcons.star
+                  : LucideIcons.trending_up,
+              size: 64,
+              color: cs.onSurfaceVariant.withOpacity(0.4),
+            ),
+            const SizedBox(height: 24),
+            Text(
+              s.get('postSoon'),
+              textAlign: TextAlign.center,
+              style: GoogleFonts.notoSansKr(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: cs.onSurface,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              widget.useReviewLayout
+                  ? s.get('reviewsTabEmpty')
+                  : s.get('trendTabHint'),
+              textAlign: TextAlign.center,
+              style: GoogleFonts.notoSansKr(
+                fontSize: 13,
+                color: cs.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      );
     }
 
-    final tabName = widget.listTabLabel ?? (widget.useReviewLayout ? s.get('tabReviews') : s.get('tabHot'));
+    final tabName =
+        widget.listTabLabel ??
+        (widget.useReviewLayout ? s.get('tabReviews') : s.get('tabHot'));
     bool isTypedReview(Post p) => p.type?.trim().toLowerCase() == 'review';
     final useLb = widget.useReviewLayout && widget.useLetterboxdReviewLayout;
     final footerCount = (widget.feedLoadingMore && widget.feedHasMore) ? 1 : 0;
     final listView = ListView.builder(
       controller: widget.feedScrollController,
       shrinkWrap: widget.shrinkWrap,
-      physics: widget.shrinkWrap ? const NeverScrollableScrollPhysics() : const AlwaysScrollableScrollPhysics(),
+      physics: widget.shrinkWrap
+          ? const NeverScrollableScrollPhysics()
+          : const AlwaysScrollableScrollPhysics(),
       padding: EdgeInsets.zero,
       cacheExtent: 400,
       itemCount: posts.length + footerCount + 1,
@@ -778,7 +1046,9 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
           if (useLb && isTypedReview(post)) {
             final inline = widget.reviewLetterboxdInlineFeed;
             return RepaintBoundary(
-              key: ValueKey('lb_${post.id}_${inline && _expandedReviewComments.contains(post.id)}'),
+              key: ValueKey(
+                'lb_${post.id}_${inline && _expandedReviewComments.contains(post.id)}',
+              ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -790,11 +1060,25 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
                     ),
                   FeedReviewLetterboxdTile(
                     post: post,
-                    onTap: (!inline && widget.onPostTap != null) ? () => widget.onPostTap!(post) : null,
-                    thumbTrailingActions: inline ? _buildReviewInlineActionBar(post, cs, s) : null,
-                    onDramaTap: inline ? () => _openDramaDetailForPost(context, post) : null,
-                    onReviewBodyTap: inline ? () => _toggleReviewBodyComments(post) : null,
-                    onRatingTap: inline ? () => _openDramaDetailForPost(context, post, scrollToReviews: true) : null,
+                    onTap: (!inline && widget.onPostTap != null)
+                        ? () => widget.onPostTap!(post)
+                        : null,
+                    thumbTrailingActions: inline
+                        ? _buildReviewInlineActionBar(post, cs, s)
+                        : null,
+                    onDramaTap: inline
+                        ? () => _openDramaDetailForPost(context, post)
+                        : null,
+                    onReviewBodyTap: inline
+                        ? () => _toggleReviewBodyComments(post)
+                        : null,
+                    onRatingTap: inline
+                        ? () => _openDramaDetailForPost(
+                            context,
+                            post,
+                            scrollToReviews: true,
+                          )
+                        : null,
                     currentUserAuthor: currentUserAuthor,
                     onPostUpdated: onPostUpdated,
                     onPostDeleted: onPostDeleted,
@@ -817,7 +1101,9 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
                     onPostUpdated: onPostUpdated,
                     onPostDeleted: onPostDeleted,
                     tabName: tabName,
-                    onTap: widget.onPostTap != null ? () => widget.onPostTap!(post) : null,
+                    onTap: widget.onPostTap != null
+                        ? () => widget.onPostTap!(post)
+                        : null,
                     onUserBlocked: widget.onUserBlocked,
                   )
                 : FeedPostCard(
@@ -827,7 +1113,9 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
                     onPostUpdated: onPostUpdated,
                     onPostDeleted: onPostDeleted,
                     tabName: tabName,
-                    onTap: widget.onPostTap != null ? () => widget.onPostTap!(post) : null,
+                    onTap: widget.onPostTap != null
+                        ? () => widget.onPostTap!(post)
+                        : null,
                     onUserBlocked: widget.onUserBlocked,
                   ),
           );
@@ -835,10 +1123,21 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
         if (footerCount == 1 && index == posts.length) {
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 16),
-            child: Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: cs.primary))),
+            child: Center(
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: cs.primary,
+                ),
+              ),
+            ),
           );
         }
-        return SizedBox(height: widget.shrinkWrap ? 24 : _listBottomPadding(context));
+        return SizedBox(
+          height: widget.shrinkWrap ? 24 : _listBottomPadding(context),
+        );
       },
     );
     return GestureDetector(
@@ -861,7 +1160,17 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
     final onPostDeleted = widget.onPostDeleted;
 
     if (widget.useSimpleFeedLayout) {
-      return _buildSimplePopularFeed(context, cs, posts, isLoading, error, onRefresh, currentUserAuthor, onPostUpdated, onPostDeleted);
+      return _buildSimplePopularFeed(
+        context,
+        cs,
+        posts,
+        isLoading,
+        error,
+        onRefresh,
+        currentUserAuthor,
+        onPostUpdated,
+        onPostDeleted,
+      );
     }
 
     if (isLoading) {
@@ -870,80 +1179,150 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
           padding: const EdgeInsets.symmetric(vertical: 48),
-          children: [const Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator()))],
+          children: [
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: CircularProgressIndicator(),
+              ),
+            ),
+          ],
         );
       }
       return const Center(child: CircularProgressIndicator());
     }
     if (error != null) {
-      return _wrapRefresh(ListView(
-        shrinkWrap: widget.shrinkWrap,
-        physics: widget.shrinkWrap ? const NeverScrollableScrollPhysics() : const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.fromLTRB(24, 48, 24, _listBottomPadding(context)),
-        children: [
-          const SizedBox(height: 8),
-          Icon(LucideIcons.cloud_off, size: 56, color: cs.error.withOpacity(0.6)),
-          const SizedBox(height: 20),
-          Text('글을 불러오지 못했어요', textAlign: TextAlign.center, style: GoogleFonts.notoSansKr(fontSize: 16, fontWeight: FontWeight.w600, color: cs.onSurface)),
-          const SizedBox(height: 8),
-          Text(error!, textAlign: TextAlign.center, style: GoogleFonts.notoSansKr(fontSize: 12, color: cs.error, height: 1.5)),
-          const SizedBox(height: 20),
-          TextButton(onPressed: onRefresh, child: Text('다시 시도', style: GoogleFonts.notoSansKr(fontSize: 14, color: cs.primary))),
-        ],
-      ));
+      return _wrapRefresh(
+        ListView(
+          shrinkWrap: widget.shrinkWrap,
+          physics: widget.shrinkWrap
+              ? const NeverScrollableScrollPhysics()
+              : const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.fromLTRB(24, 48, 24, _listBottomPadding(context)),
+          children: [
+            const SizedBox(height: 8),
+            Icon(
+              LucideIcons.cloud_off,
+              size: 56,
+              color: cs.error.withOpacity(0.6),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              '글을 불러오지 못했어요',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.notoSansKr(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: cs.onSurface,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              error!,
+              textAlign: TextAlign.center,
+              style: GoogleFonts.notoSansKr(
+                fontSize: 12,
+                color: cs.error,
+                height: 1.5,
+              ),
+            ),
+            const SizedBox(height: 20),
+            TextButton(
+              onPressed: onRefresh,
+              child: Text(
+                '다시 시도',
+                style: GoogleFonts.notoSansKr(fontSize: 14, color: cs.primary),
+              ),
+            ),
+          ],
+        ),
+      );
     }
     if (posts.isEmpty) {
-      return _wrapRefresh(ListView(
-        shrinkWrap: widget.shrinkWrap,
-        physics: widget.shrinkWrap ? const NeverScrollableScrollPhysics() : const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.fromLTRB(24, 48, 24, _listBottomPadding(context)),
-        children: [
-          const SizedBox(height: 8),
-          Icon(
-            widget.useReviewLayout ? LucideIcons.star : LucideIcons.trending_up,
-            size: 64,
-            color: cs.onSurfaceVariant.withOpacity(0.4),
-          ),
-          const SizedBox(height: 24),
-          Text(s.get('postSoon'), textAlign: TextAlign.center, style: GoogleFonts.notoSansKr(fontSize: 16, fontWeight: FontWeight.w600, color: cs.onSurface)),
-          const SizedBox(height: 8),
-          Text(
-            widget.useReviewLayout ? s.get('reviewsTabEmpty') : s.get('trendTabHint'),
-            textAlign: TextAlign.center,
-            style: GoogleFonts.notoSansKr(fontSize: 13, color: cs.onSurfaceVariant),
-          ),
-        ],
-      ));
+      return _wrapRefresh(
+        ListView(
+          shrinkWrap: widget.shrinkWrap,
+          physics: widget.shrinkWrap
+              ? const NeverScrollableScrollPhysics()
+              : const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.fromLTRB(24, 48, 24, _listBottomPadding(context)),
+          children: [
+            const SizedBox(height: 8),
+            Icon(
+              widget.useReviewLayout
+                  ? LucideIcons.star
+                  : LucideIcons.trending_up,
+              size: 64,
+              color: cs.onSurfaceVariant.withOpacity(0.4),
+            ),
+            const SizedBox(height: 24),
+            Text(
+              s.get('postSoon'),
+              textAlign: TextAlign.center,
+              style: GoogleFonts.notoSansKr(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: cs.onSurface,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              widget.useReviewLayout
+                  ? s.get('reviewsTabEmpty')
+                  : s.get('trendTabHint'),
+              textAlign: TextAlign.center,
+              style: GoogleFonts.notoSansKr(
+                fontSize: 13,
+                color: cs.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      );
     }
 
     final filtered = _filteredPosts;
     final start = _currentPage * _postsPerPage;
-    final paginated = start >= filtered.length ? <Post>[] : filtered.sublist(start, (start + _postsPerPage).clamp(0, filtered.length));
-    final totalPages = filtered.isEmpty ? 0 : (filtered.length / _postsPerPage).ceil();
+    final paginated = start >= filtered.length
+        ? <Post>[]
+        : filtered.sublist(
+            start,
+            (start + _postsPerPage).clamp(0, filtered.length),
+          );
+    final totalPages = filtered.isEmpty
+        ? 0
+        : (filtered.length / _postsPerPage).ceil();
     if (_currentPage >= totalPages && _currentPage > 0) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) setState(() => _currentPage = (totalPages - 1).clamp(0, 999999));
+        if (mounted)
+          setState(() => _currentPage = (totalPages - 1).clamp(0, 999999));
       });
     }
 
-    final tabName = widget.listTabLabel ??
+    final tabName =
+        widget.listTabLabel ??
         (widget.useReviewLayout ? s.get('tabReviews') : s.get('tabHot'));
     bool isTypedReview(Post p) => p.type?.trim().toLowerCase() == 'review';
 
     final listView = ListView.builder(
       shrinkWrap: widget.shrinkWrap,
-      physics: widget.shrinkWrap ? const NeverScrollableScrollPhysics() : const AlwaysScrollableScrollPhysics(),
+      physics: widget.shrinkWrap
+          ? const NeverScrollableScrollPhysics()
+          : const AlwaysScrollableScrollPhysics(),
       padding: EdgeInsets.zero,
       cacheExtent: 400,
       itemCount: paginated.length + 4,
       itemBuilder: (context, index) {
         if (index < paginated.length) {
           final post = paginated[index];
-          final useLb = widget.useReviewLayout && widget.useLetterboxdReviewLayout;
+          final useLb =
+              widget.useReviewLayout && widget.useLetterboxdReviewLayout;
           if (useLb && isTypedReview(post)) {
             final inline = widget.reviewLetterboxdInlineFeed;
             return RepaintBoundary(
-              key: ValueKey('lb_${post.id}_${inline && _expandedReviewComments.contains(post.id)}'),
+              key: ValueKey(
+                'lb_${post.id}_${inline && _expandedReviewComments.contains(post.id)}',
+              ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -955,11 +1334,25 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
                     ),
                   FeedReviewLetterboxdTile(
                     post: post,
-                    onTap: (!inline && widget.onPostTap != null) ? () => widget.onPostTap!(post) : null,
-                    thumbTrailingActions: inline ? _buildReviewInlineActionBar(post, cs, s) : null,
-                    onDramaTap: inline ? () => _openDramaDetailForPost(context, post) : null,
-                    onReviewBodyTap: inline ? () => _toggleReviewBodyComments(post) : null,
-                    onRatingTap: inline ? () => _openDramaDetailForPost(context, post, scrollToReviews: true) : null,
+                    onTap: (!inline && widget.onPostTap != null)
+                        ? () => widget.onPostTap!(post)
+                        : null,
+                    thumbTrailingActions: inline
+                        ? _buildReviewInlineActionBar(post, cs, s)
+                        : null,
+                    onDramaTap: inline
+                        ? () => _openDramaDetailForPost(context, post)
+                        : null,
+                    onReviewBodyTap: inline
+                        ? () => _toggleReviewBodyComments(post)
+                        : null,
+                    onRatingTap: inline
+                        ? () => _openDramaDetailForPost(
+                            context,
+                            post,
+                            scrollToReviews: true,
+                          )
+                        : null,
                     currentUserAuthor: currentUserAuthor,
                     onPostUpdated: onPostUpdated,
                     onPostDeleted: onPostDeleted,
@@ -982,7 +1375,9 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
                     onPostUpdated: onPostUpdated,
                     onPostDeleted: onPostDeleted,
                     tabName: tabName,
-                    onTap: widget.onPostTap != null ? () => widget.onPostTap!(post) : null,
+                    onTap: widget.onPostTap != null
+                        ? () => widget.onPostTap!(post)
+                        : null,
                     onUserBlocked: widget.onUserBlocked,
                   )
                 : FeedPostCard(
@@ -992,19 +1387,31 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
                     onPostUpdated: onPostUpdated,
                     onPostDeleted: onPostDeleted,
                     tabName: tabName,
-                    onTap: widget.onPostTap != null ? () => widget.onPostTap!(post) : null,
+                    onTap: widget.onPostTap != null
+                        ? () => widget.onPostTap!(post)
+                        : null,
                     onUserBlocked: widget.onUserBlocked,
                   ),
           );
         }
         if (index == paginated.length) return const SizedBox(height: 16);
-        if (index == paginated.length + 1) return Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: _buildSearchBar(cs));
-        if (index == paginated.length + 2) return _buildMinimalPagination(cs, totalPages, filtered.length);
-        return SizedBox(height: widget.shrinkWrap ? 24 : _listBottomPadding(context));
+        if (index == paginated.length + 1)
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: _buildSearchBar(cs),
+          );
+        if (index == paginated.length + 2)
+          return _buildMinimalPagination(cs, totalPages, filtered.length);
+        return SizedBox(
+          height: widget.shrinkWrap ? 24 : _listBottomPadding(context),
+        );
       },
     );
     return GestureDetector(
-      onTap: () { FocusScope.of(context).unfocus(); if (_showPageInput) setState(() => _showPageInput = false); },
+      onTap: () {
+        FocusScope.of(context).unfocus();
+        if (_showPageInput) setState(() => _showPageInput = false);
+      },
       behavior: HitTestBehavior.translucent,
       child: _wrapRefresh(listView),
     );
@@ -1022,10 +1429,12 @@ class _ReviewCommentComposerOverlay extends StatefulWidget {
   final Future<void> Function(BuildContext overlayContext) onSend;
 
   @override
-  State<_ReviewCommentComposerOverlay> createState() => _ReviewCommentComposerOverlayState();
+  State<_ReviewCommentComposerOverlay> createState() =>
+      _ReviewCommentComposerOverlayState();
 }
 
-class _ReviewCommentComposerOverlayState extends State<_ReviewCommentComposerOverlay> {
+class _ReviewCommentComposerOverlayState
+    extends State<_ReviewCommentComposerOverlay> {
   bool _sending = false;
 
   static const Color _sendBlue = Color(0xFF0A84FF);
@@ -1039,7 +1448,11 @@ class _ReviewCommentComposerOverlayState extends State<_ReviewCommentComposerOve
         shape: BoxShape.circle,
       ),
       child: Center(
-        child: Icon(Icons.person, size: size * 0.55, color: UserProfileService.iconColorFromIndex(colorIdx)),
+        child: Icon(
+          Icons.person,
+          size: size * 0.55,
+          color: UserProfileService.iconColorFromIndex(colorIdx),
+        ),
       ),
     );
   }
@@ -1059,7 +1472,8 @@ class _ReviewCommentComposerOverlayState extends State<_ReviewCommentComposerOve
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
-    final sendLabel = CountryScope.maybeOf(context)?.strings.get('replySubmit') ?? '';
+    final sendLabel =
+        CountryScope.maybeOf(context)?.strings.get('replySubmit') ?? '';
 
     return Material(
       color: Colors.transparent,
@@ -1097,9 +1511,17 @@ class _ReviewCommentComposerOverlayState extends State<_ReviewCommentComposerOve
                         UserProfileService.instance.avatarColorNotifier,
                       ]),
                       builder: (context, _) {
-                        final rawUrl = UserProfileService.instance.profileImageUrlNotifier.value;
+                        final rawUrl = UserProfileService
+                            .instance
+                            .profileImageUrlNotifier
+                            .value;
                         final url = rawUrl?.trim();
-                        final colorIdx = UserProfileService.instance.avatarColorNotifier.value ?? 0;
+                        final colorIdx =
+                            UserProfileService
+                                .instance
+                                .avatarColorNotifier
+                                .value ??
+                            0;
                         final Widget avatar = (url != null && url.isNotEmpty)
                             ? ClipOval(
                                 child: OptimizedNetworkImage.avatar(
@@ -1120,28 +1542,47 @@ class _ReviewCommentComposerOverlayState extends State<_ReviewCommentComposerOve
                                 autofocus: true,
                                 minLines: 1,
                                 maxLines: 6,
-                                style: GoogleFonts.notoSansKr(fontSize: 15, height: 1.35),
+                                style: GoogleFonts.notoSansKr(
+                                  fontSize: 15,
+                                  height: 1.35,
+                                ),
                                 decoration: InputDecoration(
                                   filled: true,
                                   fillColor: theme.brightness == Brightness.dark
                                       ? cs.surfaceContainerHigh
                                       : cs.surface,
                                   isDense: true,
-                                  contentPadding: const EdgeInsets.fromLTRB(16, 12, 6, 12),
+                                  contentPadding: const EdgeInsets.fromLTRB(
+                                    16,
+                                    12,
+                                    6,
+                                    12,
+                                  ),
                                   border: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(26),
-                                    borderSide: BorderSide(color: cs.outline.withValues(alpha: 0.28)),
+                                    borderSide: BorderSide(
+                                      color: cs.outline.withValues(alpha: 0.28),
+                                    ),
                                   ),
                                   enabledBorder: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(26),
-                                    borderSide: BorderSide(color: cs.outline.withValues(alpha: 0.28)),
+                                    borderSide: BorderSide(
+                                      color: cs.outline.withValues(alpha: 0.28),
+                                    ),
                                   ),
                                   focusedBorder: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(26),
-                                    borderSide: BorderSide(color: cs.outline.withValues(alpha: 0.45)),
+                                    borderSide: BorderSide(
+                                      color: cs.outline.withValues(alpha: 0.45),
+                                    ),
                                   ),
                                   suffixIcon: Padding(
-                                    padding: const EdgeInsets.fromLTRB(0, 6, 6, 6),
+                                    padding: const EdgeInsets.fromLTRB(
+                                      0,
+                                      6,
+                                      6,
+                                      6,
+                                    ),
                                     child: Material(
                                       color: _sendBlue,
                                       shape: const CircleBorder(),
@@ -1160,10 +1601,11 @@ class _ReviewCommentComposerOverlayState extends State<_ReviewCommentComposerOve
                                                 ? const SizedBox(
                                                     width: 18,
                                                     height: 18,
-                                                    child: CircularProgressIndicator(
-                                                      strokeWidth: 2,
-                                                      color: Colors.white,
-                                                    ),
+                                                    child:
+                                                        CircularProgressIndicator(
+                                                          strokeWidth: 2,
+                                                          color: Colors.white,
+                                                        ),
                                                   )
                                                 : Icon(
                                                     Icons.arrow_upward,
@@ -1176,7 +1618,10 @@ class _ReviewCommentComposerOverlayState extends State<_ReviewCommentComposerOve
                                       ),
                                     ),
                                   ),
-                                  suffixIconConstraints: const BoxConstraints(minWidth: 46, minHeight: 46),
+                                  suffixIconConstraints: const BoxConstraints(
+                                    minWidth: 46,
+                                    minHeight: 46,
+                                  ),
                                 ),
                               ),
                             ),
@@ -1273,18 +1718,27 @@ class _FreeBoardTabState extends State<FreeBoardTab> {
     super.dispose();
   }
 
-  void _submitSearch() => setState(() => _searchQuery = _searchController.text.trim().toLowerCase());
+  void _submitSearch() => setState(
+    () => _searchQuery = _searchController.text.trim().toLowerCase(),
+  );
 
   bool _postMatchesQuery(Post p, String q) {
     final title = p.title.toLowerCase();
     final body = (p.body ?? '').toLowerCase();
-    final author = (p.author.startsWith('u/') ? p.author.substring(2) : p.author).toLowerCase();
+    final author =
+        (p.author.startsWith('u/') ? p.author.substring(2) : p.author)
+            .toLowerCase();
     switch (_searchScope) {
-      case PostSearchScope.titleAndBody: return title.contains(q) || body.contains(q);
-      case PostSearchScope.title: return title.contains(q);
-      case PostSearchScope.body: return body.contains(q);
-      case PostSearchScope.comment: return p.commentsList.any((c) => commentContainsQuery(c, q));
-      case PostSearchScope.nickname: return author.contains(q);
+      case PostSearchScope.titleAndBody:
+        return title.contains(q) || body.contains(q);
+      case PostSearchScope.title:
+        return title.contains(q);
+      case PostSearchScope.body:
+        return body.contains(q);
+      case PostSearchScope.comment:
+        return p.commentsList.any((c) => commentContainsQuery(c, q));
+      case PostSearchScope.nickname:
+        return author.contains(q);
     }
   }
 
@@ -1296,7 +1750,8 @@ class _FreeBoardTabState extends State<FreeBoardTab> {
       return _cachedFiltered!;
     }
     var list = widget.posts;
-    if (_searchQuery.isNotEmpty) list = list.where((p) => _postMatchesQuery(p, _searchQuery)).toList();
+    if (_searchQuery.isNotEmpty)
+      list = list.where((p) => _postMatchesQuery(p, _searchQuery)).toList();
     _cachedFiltered = list;
     _lastPosts = widget.posts;
     _lastSearchQuery = _searchQuery;
@@ -1329,7 +1784,11 @@ class _FreeBoardTabState extends State<FreeBoardTab> {
         children: [
           Padding(
             padding: const EdgeInsets.only(left: 14),
-            child: Icon(LucideIcons.search, size: 17, color: cs.onSurfaceVariant.withOpacity(0.8)),
+            child: Icon(
+              LucideIcons.search,
+              size: 17,
+              color: cs.onSurfaceVariant.withOpacity(0.8),
+            ),
           ),
           const SizedBox(width: 8),
           Expanded(
@@ -1338,7 +1797,11 @@ class _FreeBoardTabState extends State<FreeBoardTab> {
               textAlignVertical: TextAlignVertical.center,
               decoration: InputDecoration(
                 hintText: CountryScope.of(context).strings.get('search'),
-                hintStyle: GoogleFonts.notoSansKr(fontSize: 14, color: cs.onSurfaceVariant.withOpacity(0.7), fontWeight: FontWeight.w400),
+                hintStyle: GoogleFonts.notoSansKr(
+                  fontSize: 14,
+                  color: cs.onSurfaceVariant.withOpacity(0.7),
+                  fontWeight: FontWeight.w400,
+                ),
                 filled: false,
                 border: InputBorder.none,
                 enabledBorder: InputBorder.none,
@@ -1346,48 +1809,93 @@ class _FreeBoardTabState extends State<FreeBoardTab> {
                 isCollapsed: true,
                 contentPadding: EdgeInsets.zero,
               ),
-              style: GoogleFonts.notoSansKr(fontSize: 14, fontWeight: FontWeight.w400, color: cs.onSurface),
+              style: GoogleFonts.notoSansKr(
+                fontSize: 14,
+                fontWeight: FontWeight.w400,
+                color: cs.onSurface,
+              ),
               onSubmitted: (_) => _submitSearch(),
             ),
           ),
           if (_searchController.text.isNotEmpty)
             GestureDetector(
-              onTap: () { _searchController.clear(); setState(() => _searchQuery = ''); },
+              onTap: () {
+                _searchController.clear();
+                setState(() => _searchQuery = '');
+              },
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: Icon(LucideIcons.x, size: 16, color: cs.onSurfaceVariant.withOpacity(0.8)),
+                child: Icon(
+                  LucideIcons.x,
+                  size: 16,
+                  color: cs.onSurfaceVariant.withOpacity(0.8),
+                ),
               ),
             ),
-          Container(width: 1, height: 22, color: cs.onSurface.withOpacity(0.08)),
+          Container(
+            width: 1,
+            height: 22,
+            color: cs.onSurface.withOpacity(0.08),
+          ),
           GestureDetector(
             key: _filterKey,
             onTap: () async {
-              final RenderBox btn = _filterKey.currentContext!.findRenderObject() as RenderBox;
+              final RenderBox btn =
+                  _filterKey.currentContext!.findRenderObject() as RenderBox;
               final Offset btnOffset = btn.localToGlobal(Offset.zero);
               final Size screenSize = MediaQuery.of(context).size;
               final selected = await showMenu<PostSearchScope>(
                 context: context,
                 position: RelativeRect.fromRect(
-                  Rect.fromLTWH(btnOffset.dx, btnOffset.dy, btn.size.width, btn.size.height),
+                  Rect.fromLTWH(
+                    btnOffset.dx,
+                    btnOffset.dy,
+                    btn.size.width,
+                    btn.size.height,
+                  ),
                   Offset.zero & screenSize,
                 ),
                 elevation: 8,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
                 items: postSearchScopeOrder.map((scope) {
                   final isSelected = scope == _searchScope;
                   return PopupMenuItem<PostSearchScope>(
                     value: scope,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 2,
+                    ),
                     child: Row(
                       children: [
-                        Text(postSearchScopeLabel(scope, context), style: GoogleFonts.notoSansKr(fontSize: 14, fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400, color: isSelected ? cs.onSurface : cs.onSurfaceVariant)),
-                        if (isSelected) ...[const Spacer(), Icon(LucideIcons.check, size: 14, color: cs.onSurface)],
+                        Text(
+                          postSearchScopeLabel(scope, context),
+                          style: GoogleFonts.notoSansKr(
+                            fontSize: 14,
+                            fontWeight: isSelected
+                                ? FontWeight.w600
+                                : FontWeight.w400,
+                            color: isSelected
+                                ? cs.onSurface
+                                : cs.onSurfaceVariant,
+                          ),
+                        ),
+                        if (isSelected) ...[
+                          const Spacer(),
+                          Icon(
+                            LucideIcons.check,
+                            size: 14,
+                            color: cs.onSurface,
+                          ),
+                        ],
                       ],
                     ),
                   );
                 }).toList(),
               );
-              if (selected != null && mounted) setState(() => _searchScope = selected);
+              if (selected != null && mounted)
+                setState(() => _searchScope = selected);
             },
             child: Container(
               height: 44,
@@ -1395,9 +1903,20 @@ class _FreeBoardTabState extends State<FreeBoardTab> {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(postSearchScopeLabel(_searchScope, context), style: GoogleFonts.notoSansKr(fontSize: 13, fontWeight: FontWeight.w500, color: cs.onSurface)),
+                  Text(
+                    postSearchScopeLabel(_searchScope, context),
+                    style: GoogleFonts.notoSansKr(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: cs.onSurface,
+                    ),
+                  ),
                   const SizedBox(width: 3),
-                  Icon(LucideIcons.chevron_down, size: 13, color: cs.onSurfaceVariant),
+                  Icon(
+                    LucideIcons.chevron_down,
+                    size: 13,
+                    color: cs.onSurfaceVariant,
+                  ),
                 ],
               ),
             ),
@@ -1407,7 +1926,11 @@ class _FreeBoardTabState extends State<FreeBoardTab> {
     );
   }
 
-  Widget _buildMinimalPagination(ColorScheme cs, int totalPages, int totalCount) {
+  Widget _buildMinimalPagination(
+    ColorScheme cs,
+    int totalPages,
+    int totalCount,
+  ) {
     if (totalCount == 0 || totalPages == 0) return const SizedBox.shrink();
     final c = _currentPage;
     return Padding(
@@ -1416,24 +1939,46 @@ class _FreeBoardTabState extends State<FreeBoardTab> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           GestureDetector(
-            onTap: c > 0 ? () => setState(() { _currentPage = c - 1; _showPageInput = false; }) : null,
-            child: Padding(padding: const EdgeInsets.all(8), child: Icon(LucideIcons.chevron_left, size: 22, color: c > 0 ? cs.onSurface.withOpacity(0.75) : cs.onSurface.withOpacity(0.18))),
+            onTap: c > 0
+                ? () => setState(() {
+                    _currentPage = c - 1;
+                    _showPageInput = false;
+                  })
+                : null,
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Icon(
+                LucideIcons.chevron_left,
+                size: 22,
+                color: c > 0
+                    ? cs.onSurface.withOpacity(0.75)
+                    : cs.onSurface.withOpacity(0.18),
+              ),
+            ),
           ),
           const SizedBox(width: 12),
           GestureDetector(
-            onTap: () => setState(() { _showPageInput = !_showPageInput; if (_showPageInput) _pageInputController.clear(); }),
+            onTap: () => setState(() {
+              _showPageInput = !_showPageInput;
+              if (_showPageInput) _pageInputController.clear();
+            }),
             child: AnimatedSwitcher(
               duration: const Duration(milliseconds: 180),
               child: _showPageInput
                   ? Container(
                       key: const ValueKey('input'),
-                      width: 80, height: 34,
+                      width: 80,
+                      height: 34,
                       decoration: BoxDecoration(
                         color: cs.onSurface.withOpacity(0.05),
                         borderRadius: BorderRadius.circular(10),
                         border: Border.all(
-                          color: Theme.of(context).brightness == Brightness.dark ? cs.outline : const Color(0xFFFF6B35),
-                          width: Theme.of(context).brightness == Brightness.dark ? 1 : 1.2,
+                          color: Theme.of(context).brightness == Brightness.dark
+                              ? cs.outline
+                              : const Color(0xFFFF6B35),
+                          width: Theme.of(context).brightness == Brightness.dark
+                              ? 1
+                              : 1.2,
                         ),
                       ),
                       child: Center(
@@ -1445,34 +1990,73 @@ class _FreeBoardTabState extends State<FreeBoardTab> {
                           textAlignVertical: TextAlignVertical.center,
                           decoration: InputDecoration(
                             hintText: '페이지',
-                            hintStyle: GoogleFonts.notoSansKr(fontSize: 12, color: cs.onSurfaceVariant),
+                            hintStyle: GoogleFonts.notoSansKr(
+                              fontSize: 12,
+                              color: cs.onSurfaceVariant,
+                            ),
                             border: InputBorder.none,
                             enabledBorder: InputBorder.none,
                             focusedBorder: InputBorder.none,
                             isCollapsed: true,
                             contentPadding: EdgeInsets.zero,
                           ),
-                          style: GoogleFonts.notoSansKr(fontSize: 13, color: cs.onSurface),
+                          style: GoogleFonts.notoSansKr(
+                            fontSize: 13,
+                            color: cs.onSurface,
+                          ),
                           onSubmitted: (val) {
                             final n = int.tryParse(val);
-                            if (n != null && n >= 1 && n <= totalPages) setState(() { _currentPage = n - 1; _showPageInput = false; });
-                            else setState(() => _showPageInput = false);
+                            if (n != null && n >= 1 && n <= totalPages)
+                              setState(() {
+                                _currentPage = n - 1;
+                                _showPageInput = false;
+                              });
+                            else
+                              setState(() => _showPageInput = false);
                           },
                         ),
                       ),
                     )
                   : Container(
                       key: const ValueKey('label'),
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                      decoration: BoxDecoration(color: cs.onSurface.withOpacity(0.05), borderRadius: BorderRadius.circular(20)),
-                      child: Text('${c + 1} / $totalPages', style: GoogleFonts.notoSansKr(fontSize: 13, fontWeight: FontWeight.w500, color: cs.onSurfaceVariant, letterSpacing: 0.2)),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: cs.onSurface.withOpacity(0.05),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        '${c + 1} / $totalPages',
+                        style: GoogleFonts.notoSansKr(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: cs.onSurfaceVariant,
+                          letterSpacing: 0.2,
+                        ),
+                      ),
                     ),
             ),
           ),
           const SizedBox(width: 12),
           GestureDetector(
-            onTap: c < totalPages - 1 ? () => setState(() { _currentPage = c + 1; _showPageInput = false; }) : null,
-            child: Padding(padding: const EdgeInsets.all(8), child: Icon(LucideIcons.chevron_right, size: 22, color: c < totalPages - 1 ? cs.onSurface.withOpacity(0.75) : cs.onSurface.withOpacity(0.18))),
+            onTap: c < totalPages - 1
+                ? () => setState(() {
+                    _currentPage = c + 1;
+                    _showPageInput = false;
+                  })
+                : null,
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Icon(
+                LucideIcons.chevron_right,
+                size: 22,
+                color: c < totalPages - 1
+                    ? cs.onSurface.withOpacity(0.75)
+                    : cs.onSurface.withOpacity(0.18),
+              ),
+            ),
           ),
         ],
       ),
@@ -1481,7 +2065,11 @@ class _FreeBoardTabState extends State<FreeBoardTab> {
 
   Widget _wrapRefresh(Widget child) {
     if (widget.enablePullToRefresh) {
-      return BlindRefreshIndicator(onRefresh: widget.onRefresh, spinnerOffsetDown: 17.0, child: child);
+      return BlindRefreshIndicator(
+        onRefresh: widget.onRefresh,
+        spinnerOffsetDown: 17.0,
+        child: child,
+      );
     }
     return child;
   }
@@ -1504,47 +2092,102 @@ class _FreeBoardTabState extends State<FreeBoardTab> {
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
           padding: const EdgeInsets.symmetric(vertical: 48),
-          children: const [Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator()))],
+          children: const [
+            Center(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: CircularProgressIndicator(),
+              ),
+            ),
+          ],
         );
       }
       return const Center(child: CircularProgressIndicator());
     }
     if (error != null && posts.isEmpty) {
-      return _wrapRefresh(ListView(
-        shrinkWrap: widget.shrinkWrap,
-        physics: widget.shrinkWrap ? const NeverScrollableScrollPhysics() : const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.fromLTRB(24, 48, 24, _listBottomPadding(context)),
-        children: [
-          const SizedBox(height: 8),
-          Icon(LucideIcons.cloud_off, size: 56, color: cs.error.withOpacity(0.6)),
-          const SizedBox(height: 20),
-          Text('글을 불러오지 못했어요', textAlign: TextAlign.center, style: GoogleFonts.notoSansKr(fontSize: 16, fontWeight: FontWeight.w600, color: cs.onSurface)),
-          const SizedBox(height: 8),
-          Text(error, textAlign: TextAlign.center, style: GoogleFonts.notoSansKr(fontSize: 12, color: cs.error, height: 1.5)),
-          const SizedBox(height: 20),
-          TextButton(onPressed: onRefresh, child: Text('다시 시도', style: GoogleFonts.notoSansKr(fontSize: 14, color: cs.primary))),
-        ],
-      ));
+      return _wrapRefresh(
+        ListView(
+          shrinkWrap: widget.shrinkWrap,
+          physics: widget.shrinkWrap
+              ? const NeverScrollableScrollPhysics()
+              : const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.fromLTRB(24, 48, 24, _listBottomPadding(context)),
+          children: [
+            const SizedBox(height: 8),
+            Icon(
+              LucideIcons.cloud_off,
+              size: 56,
+              color: cs.error.withOpacity(0.6),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              '글을 불러오지 못했어요',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.notoSansKr(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: cs.onSurface,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              error,
+              textAlign: TextAlign.center,
+              style: GoogleFonts.notoSansKr(
+                fontSize: 12,
+                color: cs.error,
+                height: 1.5,
+              ),
+            ),
+            const SizedBox(height: 20),
+            TextButton(
+              onPressed: onRefresh,
+              child: Text(
+                '다시 시도',
+                style: GoogleFonts.notoSansKr(fontSize: 14, color: cs.primary),
+              ),
+            ),
+          ],
+        ),
+      );
     }
     if (posts.isEmpty) {
-      return _wrapRefresh(ListView(
-        shrinkWrap: widget.shrinkWrap,
-        physics: widget.shrinkWrap ? const NeverScrollableScrollPhysics() : const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.fromLTRB(24, 48, 24, _listBottomPadding(context)),
-        children: [
-          const SizedBox(height: 8),
-          Icon(LucideIcons.message_square_plus, size: 64, color: cs.onSurfaceVariant.withOpacity(0.4)),
-          const SizedBox(height: 24),
-          Text(s.get('postSoon'), textAlign: TextAlign.center, style: GoogleFonts.notoSansKr(fontSize: 16, fontWeight: FontWeight.w600, color: cs.onSurface)),
-        ],
-      ));
+      return _wrapRefresh(
+        ListView(
+          shrinkWrap: widget.shrinkWrap,
+          physics: widget.shrinkWrap
+              ? const NeverScrollableScrollPhysics()
+              : const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.fromLTRB(24, 48, 24, _listBottomPadding(context)),
+          children: [
+            const SizedBox(height: 8),
+            Icon(
+              LucideIcons.message_square_plus,
+              size: 64,
+              color: cs.onSurfaceVariant.withOpacity(0.4),
+            ),
+            const SizedBox(height: 24),
+            Text(
+              s.get('postSoon'),
+              textAlign: TextAlign.center,
+              style: GoogleFonts.notoSansKr(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: cs.onSurface,
+              ),
+            ),
+          ],
+        ),
+      );
     }
     final tabName = s.get('tabGeneral');
     final footerCount = (widget.feedLoadingMore && widget.feedHasMore) ? 1 : 0;
     final listView = ListView.builder(
       controller: widget.feedScrollController,
       shrinkWrap: widget.shrinkWrap,
-      physics: widget.shrinkWrap ? const NeverScrollableScrollPhysics() : const AlwaysScrollableScrollPhysics(),
+      physics: widget.shrinkWrap
+          ? const NeverScrollableScrollPhysics()
+          : const AlwaysScrollableScrollPhysics(),
       padding: EdgeInsets.zero,
       cacheExtent: 400,
       itemCount: posts.length + footerCount + 1,
@@ -1559,7 +2202,9 @@ class _FreeBoardTabState extends State<FreeBoardTab> {
               onPostUpdated: onPostUpdated,
               onPostDeleted: onPostDeleted,
               tabName: tabName,
-              onTap: widget.onPostTap != null ? () => widget.onPostTap!(post) : null,
+              onTap: widget.onPostTap != null
+                  ? () => widget.onPostTap!(post)
+                  : null,
               onUserBlocked: widget.onUserBlocked,
             ),
           );
@@ -1567,10 +2212,21 @@ class _FreeBoardTabState extends State<FreeBoardTab> {
         if (footerCount == 1 && index == posts.length) {
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 16),
-            child: Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: cs.primary))),
+            child: Center(
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: cs.primary,
+                ),
+              ),
+            ),
           );
         }
-        return SizedBox(height: widget.shrinkWrap ? 24 : _listBottomPadding(context));
+        return SizedBox(
+          height: widget.shrinkWrap ? 24 : _listBottomPadding(context),
+        );
       },
     );
     return GestureDetector(
@@ -1593,7 +2249,17 @@ class _FreeBoardTabState extends State<FreeBoardTab> {
     final onPostDeleted = widget.onPostDeleted;
 
     if (widget.useSimpleFeedLayout) {
-      return _buildSimpleFreeFeed(context, cs, posts, isLoading, error, onRefresh, currentUserAuthor, onPostUpdated, onPostDeleted);
+      return _buildSimpleFreeFeed(
+        context,
+        cs,
+        posts,
+        isLoading,
+        error,
+        onRefresh,
+        currentUserAuthor,
+        onPostUpdated,
+        onPostDeleted,
+      );
     }
 
     if (isLoading) {
@@ -1602,56 +2268,119 @@ class _FreeBoardTabState extends State<FreeBoardTab> {
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
           padding: const EdgeInsets.symmetric(vertical: 48),
-          children: [const Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator()))],
+          children: [
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: CircularProgressIndicator(),
+              ),
+            ),
+          ],
         );
       }
       return const Center(child: CircularProgressIndicator());
     }
     if (error != null) {
-      return _wrapRefresh(ListView(
-        shrinkWrap: widget.shrinkWrap,
-        physics: widget.shrinkWrap ? const NeverScrollableScrollPhysics() : const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.fromLTRB(24, 48, 24, _listBottomPadding(context)),
-        children: [
-          const SizedBox(height: 8),
-          Icon(LucideIcons.cloud_off, size: 56, color: cs.error.withOpacity(0.6)),
-          const SizedBox(height: 20),
-          Text('글을 불러오지 못했어요', textAlign: TextAlign.center, style: GoogleFonts.notoSansKr(fontSize: 16, fontWeight: FontWeight.w600, color: cs.onSurface)),
-          const SizedBox(height: 8),
-          Text(error!, textAlign: TextAlign.center, style: GoogleFonts.notoSansKr(fontSize: 12, color: cs.error, height: 1.5)),
-          const SizedBox(height: 20),
-          TextButton(onPressed: onRefresh, child: Text('다시 시도', style: GoogleFonts.notoSansKr(fontSize: 14, color: cs.primary))),
-        ],
-      ));
+      return _wrapRefresh(
+        ListView(
+          shrinkWrap: widget.shrinkWrap,
+          physics: widget.shrinkWrap
+              ? const NeverScrollableScrollPhysics()
+              : const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.fromLTRB(24, 48, 24, _listBottomPadding(context)),
+          children: [
+            const SizedBox(height: 8),
+            Icon(
+              LucideIcons.cloud_off,
+              size: 56,
+              color: cs.error.withOpacity(0.6),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              '글을 불러오지 못했어요',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.notoSansKr(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: cs.onSurface,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              error!,
+              textAlign: TextAlign.center,
+              style: GoogleFonts.notoSansKr(
+                fontSize: 12,
+                color: cs.error,
+                height: 1.5,
+              ),
+            ),
+            const SizedBox(height: 20),
+            TextButton(
+              onPressed: onRefresh,
+              child: Text(
+                '다시 시도',
+                style: GoogleFonts.notoSansKr(fontSize: 14, color: cs.primary),
+              ),
+            ),
+          ],
+        ),
+      );
     }
     if (posts.isEmpty) {
-      return _wrapRefresh(ListView(
-        shrinkWrap: widget.shrinkWrap,
-        physics: widget.shrinkWrap ? const NeverScrollableScrollPhysics() : const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.fromLTRB(24, 48, 24, _listBottomPadding(context)),
-        children: [
-          const SizedBox(height: 8),
-          Icon(LucideIcons.message_square_plus, size: 64, color: cs.onSurfaceVariant.withOpacity(0.4)),
-          const SizedBox(height: 24),
-          Text(s.get('postSoon'), textAlign: TextAlign.center, style: GoogleFonts.notoSansKr(fontSize: 16, fontWeight: FontWeight.w600, color: cs.onSurface)),
-        ],
-      ));
+      return _wrapRefresh(
+        ListView(
+          shrinkWrap: widget.shrinkWrap,
+          physics: widget.shrinkWrap
+              ? const NeverScrollableScrollPhysics()
+              : const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.fromLTRB(24, 48, 24, _listBottomPadding(context)),
+          children: [
+            const SizedBox(height: 8),
+            Icon(
+              LucideIcons.message_square_plus,
+              size: 64,
+              color: cs.onSurfaceVariant.withOpacity(0.4),
+            ),
+            const SizedBox(height: 24),
+            Text(
+              s.get('postSoon'),
+              textAlign: TextAlign.center,
+              style: GoogleFonts.notoSansKr(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: cs.onSurface,
+              ),
+            ),
+          ],
+        ),
+      );
     }
 
     final filtered = _filteredPosts;
     final start = _currentPage * _postsPerPage;
-    final paginated = start >= filtered.length ? <Post>[] : filtered.sublist(start, (start + _postsPerPage).clamp(0, filtered.length));
-    final totalPages = filtered.isEmpty ? 0 : (filtered.length / _postsPerPage).ceil();
+    final paginated = start >= filtered.length
+        ? <Post>[]
+        : filtered.sublist(
+            start,
+            (start + _postsPerPage).clamp(0, filtered.length),
+          );
+    final totalPages = filtered.isEmpty
+        ? 0
+        : (filtered.length / _postsPerPage).ceil();
     if (_currentPage >= totalPages && _currentPage > 0) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) setState(() => _currentPage = (totalPages - 1).clamp(0, 999999));
+        if (mounted)
+          setState(() => _currentPage = (totalPages - 1).clamp(0, 999999));
       });
     }
 
     final tabName = CountryScope.of(context).strings.get('tabGeneral');
     final listView = ListView.builder(
       shrinkWrap: widget.shrinkWrap,
-      physics: widget.shrinkWrap ? const NeverScrollableScrollPhysics() : const AlwaysScrollableScrollPhysics(),
+      physics: widget.shrinkWrap
+          ? const NeverScrollableScrollPhysics()
+          : const AlwaysScrollableScrollPhysics(),
       padding: EdgeInsets.zero,
       cacheExtent: 400,
       itemCount: paginated.length + 4,
@@ -1666,19 +2395,31 @@ class _FreeBoardTabState extends State<FreeBoardTab> {
               onPostUpdated: onPostUpdated,
               onPostDeleted: onPostDeleted,
               tabName: tabName,
-              onTap: widget.onPostTap != null ? () => widget.onPostTap!(post) : null,
+              onTap: widget.onPostTap != null
+                  ? () => widget.onPostTap!(post)
+                  : null,
               onUserBlocked: widget.onUserBlocked,
             ),
           );
         }
         if (index == paginated.length) return const SizedBox(height: 16);
-        if (index == paginated.length + 1) return Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: _buildSearchBar(cs));
-        if (index == paginated.length + 2) return _buildMinimalPagination(cs, totalPages, filtered.length);
-        return SizedBox(height: widget.shrinkWrap ? 24 : _listBottomPadding(context));
+        if (index == paginated.length + 1)
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: _buildSearchBar(cs),
+          );
+        if (index == paginated.length + 2)
+          return _buildMinimalPagination(cs, totalPages, filtered.length);
+        return SizedBox(
+          height: widget.shrinkWrap ? 24 : _listBottomPadding(context),
+        );
       },
     );
     return GestureDetector(
-      onTap: () { FocusScope.of(context).unfocus(); if (_showPageInput) setState(() => _showPageInput = false); },
+      onTap: () {
+        FocusScope.of(context).unfocus();
+        if (_showPageInput) setState(() => _showPageInput = false);
+      },
       behavior: HitTestBehavior.translucent,
       child: _wrapRefresh(listView),
     );

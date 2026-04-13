@@ -784,12 +784,7 @@ class _DramaScreenState extends State<DramaScreen> {
 
   Widget _posterPlaceholder(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return Container(
-      color: cs.surfaceContainerHighest,
-      child: Center(
-        child: Icon(LucideIcons.tv, size: 28, color: cs.onSurfaceVariant),
-      ),
-    );
+    return ColoredBox(color: cs.surfaceContainerHighest);
   }
 }
 
@@ -824,7 +819,7 @@ class _PopularGrid extends StatelessWidget {
   }
 }
 
-/// 인기/신작/카테고리 공통: 30개씩 페이지네이션 + 홈탭과 동일한 페이지 UI
+/// 인기/신작/카테고리 공통: 무한 스크롤 드라마 그리드
 class _DramaGridWithPagination extends StatefulWidget {
   const _DramaGridWithPagination({
     required this.list,
@@ -848,176 +843,44 @@ class _DramaGridWithPagination extends StatefulWidget {
 }
 
 class _DramaGridWithPaginationState extends State<_DramaGridWithPagination> {
-  int _currentPage = 0;
-  bool _showPageInput = false;
-  final TextEditingController _pageInputController = TextEditingController();
+  static const _pageSize = 12;
 
-  @override
-  void dispose() {
-    _pageInputController.dispose();
-    super.dispose();
+  int _displayCount = _pageSize;
+  bool _isLoadingMore = false;
+
+  Future<void> _loadMore() async {
+    if (_isLoadingMore) return;
+    if (_displayCount >= widget.list.length) return;
+    setState(() => _isLoadingMore = true);
+    await Future.delayed(const Duration(milliseconds: 80));
+    if (!mounted) return;
+    setState(() {
+      _displayCount = (_displayCount + _pageSize).clamp(0, widget.list.length);
+      _isLoadingMore = false;
+    });
   }
 
-  Widget _buildMinimalPagination(
-    ColorScheme cs,
-    int currentPage,
-    int totalPages,
-    int totalCount,
-  ) {
-    if (totalCount == 0 || totalPages == 0) return const SizedBox.shrink();
-    final c = currentPage;
-    return Padding(
-      padding: const EdgeInsets.only(top: 2),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          GestureDetector(
-            onTap: c > 0
-                ? () => setState(() {
-                    _currentPage = c - 1;
-                    _showPageInput = false;
-                  })
-                : null,
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: Icon(
-                LucideIcons.chevron_left,
-                size: 22,
-                color: c > 0
-                    ? cs.onSurface.withOpacity(0.75)
-                    : cs.onSurface.withOpacity(0.18),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          GestureDetector(
-            onTap: () => setState(() {
-              _showPageInput = !_showPageInput;
-              if (_showPageInput) _pageInputController.clear();
-            }),
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 180),
-              child: _showPageInput
-                  ? Container(
-                      key: const ValueKey('input'),
-                      width: 80,
-                      height: 34,
-                      decoration: BoxDecoration(
-                        color: cs.onSurface.withOpacity(0.05),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(
-                          color: Theme.of(context).brightness == Brightness.dark
-                              ? cs.outline
-                              : const Color(0xFFFF6B35),
-                          width: Theme.of(context).brightness == Brightness.dark
-                              ? 1
-                              : 1.2,
-                        ),
-                      ),
-                      child: Center(
-                        child: TextField(
-                          controller: _pageInputController,
-                          autofocus: true,
-                          keyboardType: TextInputType.number,
-                          textAlign: TextAlign.center,
-                          textAlignVertical: TextAlignVertical.center,
-                          decoration: InputDecoration(
-                            hintText: '페이지',
-                            hintStyle: GoogleFonts.notoSansKr(
-                              fontSize: 12,
-                              color: cs.onSurfaceVariant,
-                            ),
-                            border: InputBorder.none,
-                            enabledBorder: InputBorder.none,
-                            focusedBorder: InputBorder.none,
-                            isCollapsed: true,
-                            contentPadding: EdgeInsets.zero,
-                          ),
-                          style: GoogleFonts.notoSansKr(
-                            fontSize: 13,
-                            color: cs.onSurface,
-                          ),
-                          onSubmitted: (val) {
-                            final n = int.tryParse(val);
-                            if (n != null && n >= 1 && n <= totalPages)
-                              setState(() {
-                                _currentPage = n - 1;
-                                _showPageInput = false;
-                              });
-                            else
-                              setState(() => _showPageInput = false);
-                          },
-                        ),
-                      ),
-                    )
-                  : Container(
-                      key: const ValueKey('label'),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: cs.onSurface.withOpacity(0.05),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(
-                        '${c + 1} / $totalPages',
-                        style: GoogleFonts.notoSansKr(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                          color: cs.onSurfaceVariant,
-                          letterSpacing: 0.2,
-                        ),
-                      ),
-                    ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          GestureDetector(
-            onTap: c < totalPages - 1
-                ? () => setState(() {
-                    _currentPage = c + 1;
-                    _showPageInput = false;
-                  })
-                : null,
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: Icon(
-                LucideIcons.chevron_right,
-                size: 22,
-                color: c < totalPages - 1
-                    ? cs.onSurface.withOpacity(0.75)
-                    : cs.onSurface.withOpacity(0.18),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
+  bool _onScrollNotification(ScrollNotification n) {
+    if (n is ScrollUpdateNotification) {
+      final m = n.metrics;
+      if (m.pixels >= m.maxScrollExtent - 250) _loadMore();
+    }
+    return false;
   }
 
   @override
   Widget build(BuildContext context) {
     final list = widget.list;
-    final totalCount = list.length;
-    final totalPages = totalCount == 0
-        ? 0
-        : (totalCount / _dramaCardsPerPage).ceil();
-    final effectivePage = totalPages == 0
-        ? 0
-        : _currentPage.clamp(0, totalPages - 1);
-    if (effectivePage != _currentPage && mounted) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) setState(() => _currentPage = effectivePage);
-      });
-    }
-    final start = effectivePage * _dramaCardsPerPage;
-    final end = (start + _dramaCardsPerPage).clamp(0, totalCount);
-    final pageList = list.sublist(start, end);
+    // list 레퍼런스가 바뀌어도 take()가 알아서 clamp하므로 별도 리셋 불필요
+    final visibleCount = _displayCount.clamp(0, list.length);
+    final visibleList = list.take(visibleCount).toList();
+    final hasMore = visibleCount < list.length;
 
     final cs = Theme.of(context).colorScheme;
     final r = dramaGridScreenScale(context);
-    return CustomScrollView(
+    return NotificationListener<ScrollNotification>(
+      onNotification: _onScrollNotification,
+      child: CustomScrollView(
       primary: true,
       slivers: [
         SliverPadding(
@@ -1030,7 +893,7 @@ class _DramaGridWithPaginationState extends State<_DramaGridWithPagination> {
               mainAxisSpacing: 0,
             ),
             delegate: SliverChildBuilderDelegate((context, index) {
-              final item = pageList[index];
+              final item = visibleList[index];
               final displayTitle = DramaListService.instance.getDisplayTitle(
                 item.id,
                 widget.country,
@@ -1059,21 +922,28 @@ class _DramaGridWithPaginationState extends State<_DramaGridWithPagination> {
                 onTap: () => widget.onTapCard(item),
                 posterPlaceholder: widget.posterPlaceholder(context),
               );
-            }, childCount: pageList.length),
+            }, childCount: visibleList.length),
           ),
         ),
         SliverToBoxAdapter(
-          child: _buildMinimalPagination(
-            cs,
-            effectivePage,
-            totalPages,
-            totalCount,
-          ),
-        ),
-        SliverToBoxAdapter(
-          child: SizedBox(height: MediaQuery.of(context).padding.bottom + 22),
+          child: hasMore
+              ? Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 18),
+                  child: Center(
+                    child: SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.2,
+                        color: cs.onSurfaceVariant.withOpacity(0.5),
+                      ),
+                    ),
+                  ),
+                )
+              : SizedBox(height: MediaQuery.of(context).padding.bottom + 22),
         ),
       ],
+      ),
     );
   }
 }

@@ -270,7 +270,11 @@ class _MyReviewsScreenState extends State<MyReviewsScreen> {
               color: cs.outline.withValues(alpha: 0.12),
             ),
             itemBuilder: (context, index) {
-              return LetterboxdMyReviewTile(item: list[index]);
+              return LetterboxdMyReviewTile(
+                item: list[index],
+                dramaTitleOnSurfaceAlpha: 0.8,
+                reviewBodyFontSize: 12.5,
+              );
             },
           );
         },
@@ -500,6 +504,10 @@ class LetterboxdMyReviewTile extends StatelessWidget {
     this.onDelete,
     /// letterboxdActivityAuthorRow일 때 오른쪽 닉네임 글자 크기. null이면 15.
     this.activityAuthorNameFontSize,
+    /// 드라마 제목 색 (`onSurface` 알파). null이면 0.66 (프로필 리뷰 목록 등에서 더 밝게 지정 가능).
+    this.dramaTitleOnSurfaceAlpha,
+    /// 리뷰 본문 글자 크기. null이면 14.
+    this.reviewBodyFontSize,
   });
 
   final MyReviewItem item;
@@ -514,6 +522,8 @@ class LetterboxdMyReviewTile extends StatelessWidget {
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
   final double? activityAuthorNameFontSize;
+  final double? dramaTitleOnSurfaceAlpha;
+  final double? reviewBodyFontSize;
 
   static const double _verticalPadding = 14;
 
@@ -535,8 +545,10 @@ class LetterboxdMyReviewTile extends StatelessWidget {
     final detail = _detailFromReview(context, item);
     final r = item.rating.clamp(0.0, 5.0);
     final rawComment = item.comment.replaceAll(RegExp(r'\s+'), ' ').trim();
+    final bodyFontSize = reviewBodyFontSize ?? 14.0;
+    final titleAlpha = dramaTitleOnSurfaceAlpha ?? 0.66;
     final bodyStyle = GoogleFonts.notoSansKr(
-      fontSize: 14,
+      fontSize: bodyFontSize,
       height: 1.45,
       color: cs.onSurfaceVariant.withValues(alpha: 0.88),
       fontWeight: FontWeight.w400,
@@ -544,7 +556,7 @@ class LetterboxdMyReviewTile extends StatelessWidget {
     final titleStyle = GoogleFonts.notoSansKr(
       fontSize: 13.5,
       fontWeight: FontWeight.w600,
-      color: cs.onSurface.withValues(alpha: 0.66),
+      color: cs.onSurface.withValues(alpha: titleAlpha.clamp(0.0, 1.0)),
       height: 1.15,
     );
 

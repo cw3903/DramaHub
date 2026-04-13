@@ -41,6 +41,7 @@ class DramaGridCard extends StatelessWidget {
     required this.rating,
     required this.onTap,
     required this.posterPlaceholder,
+
     /// true면 포스터 아래 **제목만**(별·장르 줄 없음). 즐겨찾기 픽 등.
     this.titleOnly = false,
   });
@@ -61,8 +62,8 @@ class DramaGridCard extends StatelessWidget {
     final greyColor = isDark ? cs.onSurfaceVariant : Colors.grey.shade500;
     final r = dramaGridScreenScale(context);
     final titleFontSize = (12 * r).roundToDouble();
-    final metaFontSize = (11 * r).roundToDouble();
-    final starSize = 12 * r;
+    final metaFontSize = (9 * r).roundToDouble();
+    final starSize = 11 * r;
     final genreColor = isDark ? cs.onSurfaceVariant : Colors.grey.shade600;
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -83,8 +84,8 @@ class DramaGridCard extends StatelessWidget {
                       ? OptimizedNetworkImage(
                           imageUrl: imageUrl!,
                           fit: BoxFit.cover,
-                          memCacheWidth: 320,
-                          memCacheHeight: 448,
+                          memCacheWidth: 160,
+                          memCacheHeight: 224,
                           placeholder: posterPlaceholder,
                           errorWidget: posterPlaceholder,
                         )

@@ -2523,7 +2523,7 @@ class _PostDetailPageState extends State<PostDetailPage>
                                                               fontSize: 13,
                                                               fontWeight:
                                                                   FontWeight
-                                                                      .w600,
+                                                                      .w700,
                                                               color:
                                                                   cs.onSurface,
                                                             ),
@@ -2535,8 +2535,13 @@ class _PostDetailPageState extends State<PostDetailPage>
                                                       style:
                                                           GoogleFonts.notoSansKr(
                                                             fontSize: 11,
-                                                            color: cs
-                                                                .onSurfaceVariant,
+                                                            color: AppColors
+                                                                .mediumGrey
+                                                                .withOpacity(
+                                                                  0.7,
+                                                                ),
+                                                            fontWeight:
+                                                                FontWeight.w600,
                                                           ),
                                                     ),
                                                   ],
@@ -2998,7 +3003,7 @@ class _PostDetailPageState extends State<PostDetailPage>
                                               ),
                                             ],
                                           ),
-                                          const SizedBox(height: 28),
+                                          const SizedBox(height: 16),
                                           Text(
                                             post.title,
                                             style: GoogleFonts.notoSansKr(
@@ -4185,16 +4190,20 @@ class _MorePostsSectionState extends State<_MorePostsSection>
             ),
           ),
         ),
-        // 탭바 (홈탭과 동일한 스타일)
+        // 탭바 — 홈탭과 완전 동일한 스타일
         Container(
           color: theme.scaffoldBackgroundColor,
           padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
           child: AnimatedBuilder(
             animation: _tabController.animation!,
             builder: (context, _) {
-              const tabW = 60.0;
-              const tabH = 26.0;
-              const tabGap = 5.0;
+              final r = (MediaQuery.sizeOf(context).width / 360).clamp(
+                0.85,
+                1.15,
+              );
+              final tabW = 60.0 * r;
+              final tabH = 26.0 * r;
+              final tabGap = 5.0 * r;
               final animValue =
                   _tabController.animation?.value ??
                   _tabController.index.toDouble();
@@ -4216,7 +4225,7 @@ class _MorePostsSectionState extends State<_MorePostsSection>
                           height: tabH,
                           decoration: BoxDecoration(
                             color: cs.inverseSurface,
-                            borderRadius: BorderRadius.circular(6),
+                            borderRadius: BorderRadius.circular(6 * r),
                           ),
                         ),
                       ),
@@ -4234,10 +4243,10 @@ class _MorePostsSectionState extends State<_MorePostsSection>
                                 alignment: Alignment.center,
                                 decoration: BoxDecoration(
                                   border: Border.all(
-                                    color: cs.outline.withOpacity(0.6),
-                                    width: 0.7,
+                                    color: cs.outline,
+                                    width: 1.25 * r,
                                   ),
-                                  borderRadius: BorderRadius.circular(6),
+                                  borderRadius: BorderRadius.circular(6 * r),
                                 ),
                                 child: Text(
                                   [
@@ -4245,20 +4254,21 @@ class _MorePostsSectionState extends State<_MorePostsSection>
                                     s.get('tabGeneral'),
                                     s.get('tabQnA'),
                                   ][i],
-                                  strutStyle: const StrutStyle(
-                                    forceStrutHeight: true,
-                                    height: 1.15,
-                                    fontSize: 10,
-                                    leadingDistribution:
-                                        TextLeadingDistribution.even,
+                                  textHeightBehavior: const TextHeightBehavior(
+                                    applyHeightToFirstAscent: false,
+                                    applyHeightToLastDescent: false,
                                   ),
                                   style: GoogleFonts.notoSansKr(
-                                    fontSize: 10,
-                                    height: 1.15,
-                                    fontWeight: FontWeight.w700,
-                                    color: idx == i
-                                        ? cs.onInverseSurface
-                                        : cs.onSurfaceVariant,
+                                    fontSize: 10 * r,
+                                    height: 1.0,
+                                    fontWeight: FontWeight.w900,
+                                    letterSpacing: -0.2,
+                                    foreground: Paint()
+                                      ..style = PaintingStyle.fill
+                                      ..strokeWidth = 0.4
+                                      ..color = (idx == i
+                                          ? cs.onInverseSurface
+                                          : cs.onSurfaceVariant),
                                   ),
                                 ),
                               ),

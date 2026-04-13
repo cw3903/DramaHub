@@ -430,6 +430,163 @@ void _showThemeSheet(BuildContext context, dynamic s) {
   );
 }
 
+// ─── 내가 쓴 글 / 댓글 / 팔로우 카드 ────────────────────────────────────────
+// FutureBuilder 를 StatefulWidget 내부에서 한 번만 생성해 캐시 → 탭 이동 시 재로딩 없음.
+typedef _PostCommentData = ({
+  String postAuthor,
+  String commentAuthor,
+  int postCount,
+  int commentCount,
+});
+
+class _ProfileStatRow extends StatefulWidget {
+  const _ProfileStatRow({required this.cs, required this.strings});
+  final ColorScheme cs;
+  final dynamic strings;
+
+  @override
+  State<_ProfileStatRow> createState() => _ProfileStatRowState();
+}
+
+class _ProfileStatRowState extends State<_ProfileStatRow> {
+  late Future<_PostCommentData> _statsFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _statsFuture = _load();
+    _profileStatsRefreshNotifier.addListener(_onRefresh);
+  }
+
+  @override
+  void dispose() {
+    _profileStatsRefreshNotifier.removeListener(_onRefresh);
+    super.dispose();
+  }
+
+  void _onRefresh() {
+    if (mounted) setState(() => _statsFuture = _load());
+  }
+
+  Future<_PostCommentData> _load() async {
+    final base = await UserProfileService.instance.getAuthorBaseName();
+    final postAuthor =
+        await UserProfileService.instance.getAuthorForPost();
+    final posts = await PostService.instance.getPostsByAuthor(postAuthor);
+    final comments = await PostService.instance.getCommentsByAuthor(base);
+    return (
+      postAuthor: postAuthor,
+      commentAuthor: base,
+      postCount: posts.length,
+      commentCount: comments.length,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = widget.cs;
+    final s = widget.strings;
+    return Row(
+      children: [
+        // ── My posts ──
+        Expanded(
+          child: FutureBuilder<_PostCommentData>(
+            future: _statsFuture,
+            builder: (context, snap) {
+              final postCount = snap.data?.postCount ?? 0;
+              final postAuthor = snap.data?.postAuthor ?? 'u/익명';
+              return _StatCard(
+                icon: LucideIcons.file_text,
+                label: s.get('myPosts'),
+                count: postCount,
+                loading: snap.connectionState == ConnectionState.waiting,
+                onTap: () => Navigator.push(
+                  context,
+                  CupertinoPageRoute(
+                    builder: (_) => UserPostsScreen(authorName: postAuthor),
+                  ),
+                ),
+                isLight: true,
+              );
+            },
+          ),
+        ),
+        Container(width: 1, height: 28, color: cs.outline.withOpacity(0.4)),
+        // ── Comments ──
+        Expanded(
+          child: FutureBuilder<_PostCommentData>(
+            future: _statsFuture,
+            builder: (context, snap) {
+              final commentCount = snap.data?.commentCount ?? 0;
+              final commentAuthor = snap.data?.commentAuthor ?? '익명';
+              return _StatCard(
+                icon: LucideIcons.message_circle,
+                label: s.get('comments'),
+                count: commentCount,
+                loading: snap.connectionState == ConnectionState.waiting,
+                onTap: () => Navigator.push(
+                  context,
+                  CupertinoPageRoute(
+                    builder: (_) =>
+                        UserCommentsScreen(authorName: commentAuthor),
+                  ),
+                ),
+                isLight: true,
+              );
+            },
+          ),
+        ),
+        Container(width: 1, height: 28, color: cs.outline.withOpacity(0.4)),
+        // ── Follow (실시간 notifier) ──
+        Expanded(
+          child: ValueListenableBuilder<int>(
+            valueListenable: FollowService.instance.followingCountNotifier,
+            builder: (context, followCount, _) {
+              return _StatCard(
+                icon: LucideIcons.user_plus,
+                label: s.get('profileStatFollow'),
+                count: followCount,
+                onTap: () async {
+                  await UserProfileService.instance.loadIfNeeded();
+                  if (!context.mounted) return;
+                  final uid =
+                      AuthService.instance.currentUser.value?.uid;
+                  if (uid == null) return;
+                  final nick = UserProfileService
+                      .instance
+                      .nicknameNotifier
+                      .value
+                      ?.trim();
+                  final disp = nick != null && nick.isNotEmpty
+                      ? nick
+                      : (AuthService
+                                .instance
+                                .currentUser
+                                .value
+                                ?.displayName
+                                ?.trim() ??
+                            'Member');
+                  if (!context.mounted) return;
+                  Navigator.push<void>(
+                    context,
+                    CupertinoPageRoute<void>(
+                      builder: (_) => FollowScreen(
+                        networkOwnerUid: uid,
+                        ownerDisplayName: disp,
+                      ),
+                    ),
+                  );
+                },
+                isLight: true,
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 /// 프로필 탭 - 로그인 후 표시 (UX 중심)
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key, this.favoritesReadOnly = false});
@@ -632,149 +789,7 @@ class ProfileScreen extends StatelessWidget {
                             ),
                           ],
                         ),
-                        child: ListenableBuilder(
-                          listenable: Listenable.merge([
-                            FollowService.instance.followingCountNotifier,
-                            _profileStatsRefreshNotifier,
-                          ]),
-                          builder: (context, child) {
-                            final followCount = FollowService
-                                .instance
-                                .followingCountNotifier
-                                .value;
-                            return FutureBuilder<
-                              ({
-                                String postAuthor,
-                                String commentAuthor,
-                                int postCount,
-                                int commentCount,
-                              })
-                            >(
-                              future: () async {
-                                final base = await UserProfileService.instance
-                                    .getAuthorBaseName();
-                                final postAuthor = await UserProfileService
-                                    .instance
-                                    .getAuthorForPost();
-                                final posts = await PostService.instance
-                                    .getPostsByAuthor(postAuthor);
-                                final comments = await PostService.instance
-                                    .getCommentsByAuthor(base);
-                                return (
-                                  postAuthor: postAuthor,
-                                  commentAuthor: base,
-                                  postCount: posts.length,
-                                  commentCount: comments.length,
-                                );
-                              }(),
-                              builder: (context, snap) {
-                                final postCount = snap.data?.postCount ?? 0;
-                                final commentCount =
-                                    snap.data?.commentCount ?? 0;
-                                final postAuthor =
-                                    snap.data?.postAuthor ?? 'u/익명';
-                                final commentAuthor =
-                                    snap.data?.commentAuthor ?? '익명';
-                                return Row(
-                                  children: [
-                                    Expanded(
-                                      child: _StatCard(
-                                        icon: LucideIcons.file_text,
-                                        label: s.get('myPosts'),
-                                        count: postCount,
-                                        loading:
-                                            snap.connectionState ==
-                                            ConnectionState.waiting,
-                                        onTap: () => Navigator.push(
-                                          context,
-                                          CupertinoPageRoute(
-                                            builder: (_) => UserPostsScreen(
-                                              authorName: postAuthor,
-                                            ),
-                                          ),
-                                        ),
-                                        isLight: true,
-                                      ),
-                                    ),
-                                    Container(
-                                      width: 1,
-                                      height: 28,
-                                      color: cs.outline.withOpacity(0.4),
-                                    ),
-                                    Expanded(
-                                      child: _StatCard(
-                                        icon: LucideIcons.message_circle,
-                                        label: s.get('comments'),
-                                        count: commentCount,
-                                        loading:
-                                            snap.connectionState ==
-                                            ConnectionState.waiting,
-                                        onTap: () => Navigator.push(
-                                          context,
-                                          CupertinoPageRoute(
-                                            builder: (_) => UserCommentsScreen(
-                                              authorName: commentAuthor,
-                                            ),
-                                          ),
-                                        ),
-                                        isLight: true,
-                                      ),
-                                    ),
-                                    Container(
-                                      width: 1,
-                                      height: 28,
-                                      color: cs.outline.withOpacity(0.4),
-                                    ),
-                                    Expanded(
-                                      child: _StatCard(
-                                        icon: LucideIcons.user_plus,
-                                        label: s.get('profileStatFollow'),
-                                        count: followCount,
-                                        onTap: () async {
-                                          await UserProfileService.instance
-                                              .loadIfNeeded();
-                                          if (!context.mounted) return;
-                                          final uid = AuthService
-                                              .instance
-                                              .currentUser
-                                              .value
-                                              ?.uid;
-                                          if (uid == null) return;
-                                          final nick = UserProfileService
-                                              .instance
-                                              .nicknameNotifier
-                                              .value
-                                              ?.trim();
-                                          final disp =
-                                              nick != null && nick.isNotEmpty
-                                              ? nick
-                                              : (AuthService
-                                                        .instance
-                                                        .currentUser
-                                                        .value
-                                                        ?.displayName
-                                                        ?.trim() ??
-                                                    'Member');
-                                          if (!context.mounted) return;
-                                          Navigator.push<void>(
-                                            context,
-                                            CupertinoPageRoute<void>(
-                                              builder: (_) => FollowScreen(
-                                                networkOwnerUid: uid,
-                                                ownerDisplayName: disp,
-                                              ),
-                                            ),
-                                          );
-                                        },
-                                        isLight: true,
-                                      ),
-                                    ),
-                                  ],
-                                );
-                              },
-                            );
-                          },
-                        ),
+                        child: _ProfileStatRow(cs: cs, strings: s),
                       ),
                     ],
                   ),

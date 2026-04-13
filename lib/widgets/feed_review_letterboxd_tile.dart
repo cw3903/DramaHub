@@ -62,58 +62,32 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
   static Color _reviewTapSplash(ColorScheme cs) => cs.primary.withValues(alpha: 0.14);
   static Color _reviewTapHighlight(ColorScheme cs) => cs.primary.withValues(alpha: 0.08);
 
-  /// 반점 표기 — 위 1 · 사선 · 아래 2 (별 높이에 맞춤).
-  static Widget _halfFractionLabel({
+  /// 프로필 RATINGS 막대 탭 시 별줄과 동일 — Unicode `½` (`\u00BD`), [_profileRecentHalfGlyphLabel]과 같은 타이포.
+  static Widget _halfGlyphLabel({
     required TextStyle halfLabelStyle,
     required double iconSize,
   }) {
     final color = halfLabelStyle.color ?? _starOrange;
-    final digitSize = (iconSize * 0.40).clamp(11.0, 12.5);
-    final slashSize = (iconSize * 0.58).clamp(15.0, 18.0);
-
-    TextStyle digitStyle() => halfLabelStyle.copyWith(
-          fontSize: digitSize,
-          height: 1.0,
-          fontWeight: FontWeight.w800,
-          color: color,
-        );
-
-    TextStyle slashStyle() => halfLabelStyle.copyWith(
-          fontSize: slashSize,
-          height: 1.0,
-          fontWeight: FontWeight.w700,
-          color: color,
-        );
-
+    final fontSize = (iconSize * 12 / 11).clamp(11.0, 16.0);
     return SizedBox(
-      width: iconSize * 0.78,
-      height: iconSize,
-      child: Stack(
-        clipBehavior: Clip.none,
-        alignment: Alignment.center,
-        children: [
-          Positioned(
-            left: 0,
-            top: iconSize * 0.02,
-            child: Text('1', style: digitStyle()),
+      height: iconSize * 1.05,
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          '\u00BD',
+          style: halfLabelStyle.copyWith(
+            fontSize: fontSize,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.2,
+            height: 1.0,
+            color: color,
           ),
-          Center(
-            child: Transform.rotate(
-              angle: -0.92,
-              child: Text('/', style: slashStyle()),
-            ),
-          ),
-          Positioned(
-            right: 0,
-            bottom: iconSize * 0.04,
-            child: Text('2', style: digitStyle()),
-          ),
-        ],
+        ),
       ),
     );
   }
 
-  /// 채워진 별만 표시(빈 테두리 별 없음). 0.5점은 반별 아이콘 대신 `1/2` 텍스트만 붙임.
+  /// 채워진 별만 표시(빈 테두리 별 없음). 0.5점은 프로필과 동일 `½` 글리프.
   static Widget _starRow(
     double rating,
     double thumbWidth, {
@@ -150,14 +124,15 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
         : const SizedBox.shrink();
 
     if (!hasHalf) return starsOnly;
+    final gapBeforeHalf = (iconSize * 0.1).clamp(2.0, 5.0);
     return Row(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         if (starCount > 0) starsOnly,
         Padding(
-          padding: EdgeInsets.only(left: starCount > 0 ? 1 : 0),
-          child: _halfFractionLabel(
+          padding: EdgeInsets.only(left: starCount > 0 ? gapBeforeHalf : 0),
+          child: _halfGlyphLabel(
             halfLabelStyle: halfLabelStyle,
             iconSize: iconSize,
           ),
@@ -516,11 +491,11 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
             Expanded(
               child: Align(
                 alignment: Alignment.centerLeft,
-                child: dramaTitleWidget,
+                child: _NoHighlight(child: dramaTitleWidget),
               ),
             ),
             const SizedBox(width: 8),
-            authorRow,
+            _NoHighlight(child: authorRow),
           ],
         ),
         if (ownerEditDeleteRow != null && thumbTrailingActions == null)
@@ -528,7 +503,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
             padding: const EdgeInsets.only(top: 4),
             child: Align(
               alignment: Alignment.centerRight,
-              child: ownerEditDeleteRow,
+              child: _NoHighlight(child: ownerEditDeleteRow!),
             ),
           ),
       ],
@@ -559,7 +534,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
 
     final Widget ratingRow = Align(
       alignment: Alignment.centerLeft,
-      child: starRowWidget,
+      child: _NoHighlight(child: starRowWidget),
     );
 
     final Widget rightColumnBody = thumbTrailingActions != null
@@ -579,7 +554,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      thumbTrailingActions!,
+                      _NoHighlight(child: thumbTrailingActions!),
                       if (post.tags.isNotEmpty) ...[
                         const SizedBox(width: 6),
                         Expanded(
@@ -602,7 +577,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
                       ],
                       if (ownerEditDeleteRow != null) ...[
                         const SizedBox(width: 8),
-                        ownerEditDeleteRow,
+                        _NoHighlight(child: ownerEditDeleteRow!),
                       ],
                     ],
                   ),
@@ -624,7 +599,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              thumbBlock,
+              _NoHighlight(child: thumbBlock),
               const SizedBox(width: 12),
               Expanded(child: rightColumnBody),
             ],
@@ -635,23 +610,10 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
 
     // 카드 대부분 탭 → 댓글 펼침. 제목·별·썸네일·하트·댓글은 각각 안쪽 InkWell이 먼저 소비.
     if (onReviewBodyTap != null) {
-      final hoverFill = cs.onSurface.withValues(alpha: 0.06);
-      final pressFill = cs.onSurface.withValues(alpha: 0.1);
-      content = Material(
-        type: MaterialType.transparency,
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onReviewBodyTap,
-          splashFactory: NoSplash.splashFactory,
-          splashColor: Colors.transparent,
-          // M3에서는 highlightColor/hoverColor 대신 overlayColor가 적용되는 경우가 많음
-          overlayColor: WidgetStateProperty.resolveWith((states) {
-            if (states.contains(WidgetState.pressed)) return pressFill;
-            if (states.contains(WidgetState.hovered)) return hoverFill;
-            return null;
-          }),
-          child: content,
-        ),
+      content = _TapHighlight(
+        onTap: onReviewBodyTap!,
+        pressColor: cs.onSurface.withValues(alpha: 0.12),
+        child: content,
       );
     }
 
@@ -719,6 +681,107 @@ class _LetterboxdAuthorAvatar extends StatelessWidget {
           Icons.person,
           size: size * 0.58,
           color: UserProfileService.iconColorFromIndex(idx),
+        ),
+      ),
+    );
+  }
+}
+
+// --------------- 탭 하이라이트 인프라 ---------------
+
+/// [_TapHighlight] 내부에서 특정 자식이 눌렸을 때 하이라이트를 억제하기 위한 스코프.
+class _SuppressScope extends InheritedWidget {
+  const _SuppressScope({required this.onPress, required super.child});
+  final VoidCallback onPress;
+
+  static _SuppressScope? maybeOf(BuildContext context) =>
+      context.getInheritedWidgetOfExactType<_SuppressScope>();
+
+  @override
+  bool updateShouldNotify(_SuppressScope old) => false;
+}
+
+/// 이 위젯으로 감싸면, 해당 자식을 눌러도 부모 [_TapHighlight]의 배경 하이라이트가 나타나지 않는다.
+class _NoHighlight extends StatelessWidget {
+  const _NoHighlight({required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final scope = _SuppressScope.maybeOf(context);
+    if (scope == null) return child;
+    // 내부 Listener가 먼저 발화(Flutter 이벤트 순서: 내부→외부)하므로
+    // onPointerDown 시 _suppressed 플래그가 외부 onPointerDown보다 먼저 세팅된다.
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (_) => scope.onPress(),
+      child: child,
+    );
+  }
+}
+
+/// 탭 시 배경색이 바뀌는 래퍼.
+/// [_NoHighlight]로 감싼 자식(제목·별점·썸네일·하트·댓글·수정·삭제·프로필 등)을
+/// 눌렀을 때는 색이 나타나지 않는다.
+class _TapHighlight extends StatefulWidget {
+  const _TapHighlight({
+    required this.onTap,
+    required this.pressColor,
+    required this.child,
+  });
+
+  final VoidCallback onTap;
+  final Color pressColor;
+  final Widget child;
+
+  @override
+  State<_TapHighlight> createState() => _TapHighlightState();
+}
+
+class _TapHighlightState extends State<_TapHighlight> {
+  bool _pressed = false;
+  bool _suppressed = false;
+  Offset? _downPosition;
+
+  void _suppress() => _suppressed = true;
+
+  @override
+  Widget build(BuildContext context) {
+    return _SuppressScope(
+      onPress: _suppress,
+      // GestureDetector를 쓰지 않아 내부 InkWell과 제스처 아레나 경쟁이 없다.
+      // Listener는 아레나에 참여하지 않으므로 내부 위젯 탭 인식을 방해하지 않는다.
+      child: Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (e) {
+          _downPosition = e.localPosition;
+          setState(() => _pressed = true);
+        },
+        onPointerUp: (e) {
+          final down = _downPosition;
+          final wasPressed = _pressed;
+          final wasSuppressed = _suppressed;
+          setState(() {
+            _pressed = false;
+            _suppressed = false;
+          });
+          _downPosition = null;
+          // 손가락이 거의 안 움직인 경우에만 탭으로 인정 (스크롤과 구분)
+          if (wasPressed && !wasSuppressed && down != null) {
+            final dist = (e.localPosition - down).distance;
+            if (dist < 18) widget.onTap();
+          }
+        },
+        onPointerCancel: (_) {
+          setState(() {
+            _pressed = false;
+            _suppressed = false;
+          });
+          _downPosition = null;
+        },
+        child: ColoredBox(
+          color: (_pressed && !_suppressed) ? widget.pressColor : Colors.transparent,
+          child: widget.child,
         ),
       ),
     );
