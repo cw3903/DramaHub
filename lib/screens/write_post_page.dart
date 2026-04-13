@@ -25,6 +25,12 @@ import '../widgets/review_arrow_tag_chip.dart';
 const int _maxTitleLength = 80;
 const int _maxPhotos = 4;
 
+/// 하단 만들기 FAB·강조 액션과 동일 계열
+const Color _kWriteAccentOrange = Color(0xFFFF4500);
+
+/// DramaFeed 리뷰 탭 별과 동일 톤
+const Color _kWriteStarYellow = Color(0xFFFFB020);
+
 class _PickFromFiles {
   const _PickFromFiles();
 }
@@ -786,25 +792,27 @@ class _WritePostPageState extends State<WritePostPage> {
       resizeToAvoidBottomInset: true,
       backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
-        backgroundColor: cs.surface,
+        backgroundColor: theme.scaffoldBackgroundColor,
         elevation: 0,
         surfaceTintColor: Colors.transparent,
+        shadowColor: Colors.transparent,
         leading: IconButton(
-          icon: Icon(LucideIcons.x, size: 24, color: cs.onSurface),
+          icon: Icon(LucideIcons.x, size: 22, color: cs.onSurfaceVariant),
           onPressed: () => Navigator.pop(context),
         ),
         title: Text(
           _isEditMode ? s.get('editPost') : s.get('writePost'),
           style: GoogleFonts.notoSansKr(
-            fontSize: 18,
-            fontWeight: FontWeight.w600,
+            fontSize: 17,
+            fontWeight: FontWeight.w700,
             color: cs.onSurface,
+            letterSpacing: -0.2,
           ),
         ),
         centerTitle: true,
         actions: [
           Padding(
-            padding: const EdgeInsets.only(right: 8),
+            padding: const EdgeInsets.only(right: 4),
             child: _isSubmitting
                 ? Padding(
                     padding: const EdgeInsets.all(12),
@@ -813,7 +821,7 @@ class _WritePostPageState extends State<WritePostPage> {
                       height: 24,
                       child: CircularProgressIndicator(
                         strokeWidth: 2,
-                        color: cs.primary,
+                        color: _kWriteAccentOrange,
                       ),
                     ),
                   )
@@ -822,9 +830,10 @@ class _WritePostPageState extends State<WritePostPage> {
                     child: Text(
                       _isEditMode ? s.get('edit') : s.get('postSubmit'),
                       style: GoogleFonts.notoSansKr(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: cs.primary,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: _kWriteAccentOrange,
+                        letterSpacing: 0.2,
                       ),
                     ),
                   ),
@@ -931,15 +940,21 @@ class _WritePostPageState extends State<WritePostPage> {
                 fillColor: cs.surfaceContainerHighest.withOpacity(0.5),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
                 focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  borderSide: BorderSide(color: cs.primary, width: 1.5),
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(
+                    color: cs.outline.withValues(alpha: 0.55),
+                    width: 1.35,
+                  ),
                 ),
                 enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  borderSide: BorderSide(color: cs.outline.withOpacity(0.3)),
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(
+                    color: cs.outline.withValues(alpha: 0.32),
+                    width: 1.15,
+                  ),
                 ),
                 errorBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
+                  borderRadius: BorderRadius.circular(14),
                   borderSide: BorderSide(color: cs.error),
                 ),
               ),
@@ -982,15 +997,21 @@ class _WritePostPageState extends State<WritePostPage> {
                 fillColor: cs.surfaceContainerHighest.withOpacity(0.5),
                 contentPadding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
                 focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  borderSide: BorderSide(color: cs.primary, width: 1.5),
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(
+                    color: cs.outline.withValues(alpha: 0.55),
+                    width: 1.35,
+                  ),
                 ),
                 enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  borderSide: BorderSide(color: cs.outline.withOpacity(0.3)),
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(
+                    color: cs.outline.withValues(alpha: 0.32),
+                    width: 1.15,
+                  ),
                 ),
                 errorBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
+                  borderRadius: BorderRadius.circular(14),
                   borderSide: BorderSide(color: cs.error),
                 ),
               ),
@@ -1019,21 +1040,27 @@ class _WritePostPageState extends State<WritePostPage> {
               children: [
                 OutlinedButton.icon(
                   onPressed: _isVideoMode ? null : _showImageSourceChoice,
-                  icon: Icon(LucideIcons.image, size: 20, color: cs.primary),
+                  icon: Icon(LucideIcons.image, size: 20, color: cs.onSurfaceVariant),
                   label: Text(s.get('addPhoto'), style: GoogleFonts.notoSansKr(fontSize: 14)),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: cs.primary,
-                    side: BorderSide(color: cs.outline.withOpacity(0.5)),
+                    foregroundColor: cs.onSurfaceVariant,
+                    side: BorderSide(
+                      color: cs.outline.withValues(alpha: 0.38),
+                      width: 1.15,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 12),
                 OutlinedButton.icon(
                   onPressed: _isVideoMode ? null : _onVideoTap,
-                  icon: Icon(LucideIcons.video, size: 20, color: cs.primary),
+                  icon: Icon(LucideIcons.video, size: 20, color: cs.onSurfaceVariant),
                   label: Text(s.get('addVideo'), style: GoogleFonts.notoSansKr(fontSize: 14)),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: cs.primary,
-                    side: BorderSide(color: cs.outline.withOpacity(0.5)),
+                    foregroundColor: cs.onSurfaceVariant,
+                    side: BorderSide(
+                      color: cs.outline.withValues(alpha: 0.38),
+                      width: 1.15,
+                    ),
                   ),
                 ),
               ],
@@ -1176,7 +1203,7 @@ class _WritePostPageState extends State<WritePostPage> {
           child: SizedBox(
             width: slotW,
             height: 40,
-            child: Icon(icon, size: 32, color: const Color(0xFFFFB020)),
+            child: Icon(icon, size: 32, color: _kWriteStarYellow),
           ),
         );
       }),
@@ -1191,20 +1218,31 @@ class _WritePostPageState extends State<WritePostPage> {
 
     InputDecoration deco(String hint) => InputDecoration(
           hintText: hint,
-          hintStyle: GoogleFonts.notoSansKr(fontSize: 15, color: cs.onSurfaceVariant.withOpacity(0.65)),
+          hintStyle: GoogleFonts.notoSansKr(
+            fontSize: 15,
+            color: cs.onSurfaceVariant.withValues(alpha: 0.62),
+          ),
           filled: true,
-          fillColor: cs.surfaceContainerHighest.withOpacity(0.45),
+          fillColor: theme.brightness == Brightness.dark
+              ? cs.surfaceContainerHighest.withValues(alpha: 0.35)
+              : cs.surfaceContainerHighest.withValues(alpha: 0.55),
           border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: BorderSide(color: cs.outline.withOpacity(0.25)),
+            borderRadius: BorderRadius.circular(10),
+            borderSide: BorderSide(
+              color: cs.outline.withValues(alpha: 0.32),
+              width: 1.2,
+            ),
           ),
           enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: BorderSide(color: cs.outline.withOpacity(0.25)),
+            borderRadius: BorderRadius.circular(10),
+            borderSide: BorderSide(
+              color: cs.outline.withValues(alpha: 0.32),
+              width: 1.2,
+            ),
           ),
           focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: BorderSide(color: cs.primary, width: 1.4),
+            borderRadius: BorderRadius.circular(10),
+            borderSide: BorderSide(color: cs.outline.withValues(alpha: 0.55), width: 1.35),
           ),
           contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         );
@@ -1505,9 +1543,10 @@ class _SectionLabel extends StatelessWidget {
     return Text(
       label,
       style: GoogleFonts.notoSansKr(
-        fontSize: 14,
+        fontSize: 13,
         fontWeight: FontWeight.w600,
-        color: cs.onSurface,
+        letterSpacing: 0.15,
+        color: cs.onSurfaceVariant.withValues(alpha: 0.88),
       ),
     );
   }
@@ -1580,31 +1619,49 @@ class _CategoryPill extends StatelessWidget {
   final VoidCallback onTap;
   final ColorScheme cs;
 
+  static const double _borderW = 1.22;
+
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: BoxDecoration(
-          color: selected ? cs.primary : cs.surfaceContainerHighest.withOpacity(0.6),
-          borderRadius: BorderRadius.circular(24),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 16, color: selected ? cs.onPrimary : cs.onSurface.withOpacity(0.6)),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: GoogleFonts.notoSansKr(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: selected ? cs.onPrimary : cs.onSurface.withOpacity(0.6),
+    final dim = cs.onSurfaceVariant.withValues(alpha: 0.78);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        splashColor: cs.primary.withValues(alpha: 0.08),
+        highlightColor: cs.primary.withValues(alpha: 0.04),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+          decoration: BoxDecoration(
+            color: selected ? cs.inverseSurface : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+            border: selected
+                ? null
+                : Border.all(color: cs.outline, width: _borderW),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 15,
+                color: selected ? cs.onInverseSurface : dim,
               ),
-            ),
-          ],
+              const SizedBox(width: 5),
+              Text(
+                label,
+                style: GoogleFonts.notoSansKr(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  height: 1.0,
+                  color: selected ? cs.onInverseSurface : dim,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

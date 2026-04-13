@@ -69,6 +69,7 @@ class DramaReview {
     this.likeCount,
     this.replies = const [],
     this.authorPhotoUrl,
+    this.writtenAt,
   });
   final String userName;
   final double rating;
@@ -78,6 +79,8 @@ class DramaReview {
   final String? id;
   /// 좋아요 수 (null이면 0으로 처리)
   final int? likeCount;
+  /// 최신순·스포트라이트용 (없으면 timeAgo만으로는 정렬 불가)
+  final DateTime? writtenAt;
   /// 리뷰에 대한 댓글 목록
   final List<DramaReviewReply> replies;
   /// 작성자 프로필 사진 URL (회원 아이콘용)

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -19,6 +20,7 @@ class MyReviewItem {
     required this.writtenAt,
     this.authorName,
     this.modifiedAt,
+    this.feedPostId,
   });
 
   final String id;
@@ -30,6 +32,8 @@ class MyReviewItem {
   final String? authorName;
   /// 수정 시각 (null이면 미수정)
   final DateTime? modifiedAt;
+  /// DramaFeed `posts` 문서 id (삭제 시 해당 글만 제거)
+  final String? feedPostId;
 
   Map<String, dynamic> toMap() => {
         'id': id,
@@ -40,6 +44,7 @@ class MyReviewItem {
         'writtenAt': writtenAt.millisecondsSinceEpoch,
         'authorName': authorName,
         'modifiedAt': modifiedAt?.millisecondsSinceEpoch,
+        if (feedPostId != null) 'feedPostId': feedPostId,
       };
 
   static MyReviewItem fromMap(Map<String, dynamic> map) {
@@ -56,6 +61,7 @@ class MyReviewItem {
       ),
       authorName: map['authorName'] as String?,
       modifiedAt: modifiedMs != null ? DateTime.fromMillisecondsSinceEpoch(modifiedMs, isUtc: false) : null,
+      feedPostId: map['feedPostId'] as String?,
     );
   }
 }
@@ -115,7 +121,7 @@ class ReviewService {
             .whereType<MyReviewItem>()
             .toList();
         for (final r in fromFirestore) {
-          list.removeWhere((e) => e.dramaId == r.dramaId);
+          list.removeWhere((e) => e.id == r.id);
           list.insert(0, r);
         }
         if (list.length > _maxItems) list = list.sublist(0, _maxItems);
@@ -151,6 +157,7 @@ class ReviewService {
       writtenAt: written,
       authorName: data['authorName'] as String?,
       modifiedAt: modified,
+      feedPostId: data['feedPostId'] as String?,
     );
   }
 
@@ -164,16 +171,29 @@ class ReviewService {
     await _load();
   }
 
-  /// 리뷰 추가 (같은 dramaId면 덮어쓰기). 로그인 시 Firestore에도 저장.
-  Future<void> add({
+  String _newReviewDocId(String? uid, String dramaId) {
+    if (uid == null) {
+      return 'review-$dramaId-${DateTime.now().millisecondsSinceEpoch}';
+    }
+    final salt = Random().nextInt(1 << 30);
+    return '${uid}_${dramaId}_${DateTime.now().millisecondsSinceEpoch}_$salt';
+  }
+
+  /// 리뷰 추가. 같은 작품에 여러 건 가능. 로그인 시 Firestore `drama_reviews/{id}` 저장.
+  /// [documentId]·[feedPostId]는 피드 글과 1:1 맞출 때 사용.
+  Future<String> add({
     required String dramaId,
     required String dramaTitle,
     required double rating,
     required String comment,
     String? authorName,
+    String? documentId,
+    String? feedPostId,
   }) async {
     final uid = _uid;
-    final id = uid != null ? '${uid}_$dramaId' : 'review-$dramaId-${DateTime.now().millisecondsSinceEpoch}';
+    final id = (documentId != null && documentId.isNotEmpty)
+        ? documentId
+        : _newReviewDocId(uid, dramaId);
     final now = DateTime.now();
     final item = MyReviewItem(
       id: id,
@@ -183,9 +203,10 @@ class ReviewService {
       comment: comment,
       writtenAt: now,
       authorName: authorName,
+      feedPostId: feedPostId,
     );
     var list = List<MyReviewItem>.from(listNotifier.value);
-    list.removeWhere((e) => e.dramaId == dramaId);
+    list.removeWhere((e) => e.id == id);
     list.insert(0, item);
     if (list.length > _maxItems) {
       list = list.sublist(0, _maxItems);
@@ -195,7 +216,7 @@ class ReviewService {
 
     if (uid != null) {
       try {
-        await _firestore.collection(_collection).doc(id).set({
+        final data = <String, dynamic>{
           'uid': uid,
           'dramaId': dramaId,
           'dramaTitle': dramaTitle,
@@ -203,29 +224,47 @@ class ReviewService {
           'comment': comment,
           'writtenAt': Timestamp.fromDate(now),
           'authorName': authorName,
-        });
+        };
+        if (feedPostId != null && feedPostId.isNotEmpty) {
+          data['feedPostId'] = feedPostId;
+        }
+        await _firestore.collection(_collection).doc(id).set(data);
       } catch (e) {
         debugPrint('ReviewService add Firestore: $e');
       }
     }
+    return id;
   }
 
-  /// dramaId에 해당하는 내 리뷰 반환 (없으면 null)
-  MyReviewItem? getByDramaId(String dramaId) {
+  MyReviewItem? getById(String id) {
+    if (id.isEmpty) return null;
     try {
-      return listNotifier.value.firstWhere((e) => e.dramaId == dramaId);
+      return listNotifier.value.firstWhere((e) => e.id == id);
     } catch (_) {
       return null;
     }
   }
 
-  /// 리뷰 수정 (같은 dramaId). 로그인 시 Firestore에도 반영.
-  Future<void> update({
-    required String dramaId,
+  /// dramaId에 해당하는 **가장 최근** 내 리뷰 (목록·별점 표시용). 없으면 null.
+  MyReviewItem? getByDramaId(String dramaId) {
+    final matches =
+        listNotifier.value.where((e) => e.dramaId == dramaId).toList();
+    if (matches.isEmpty) return null;
+    matches.sort((a, b) {
+      final tb = b.modifiedAt ?? b.writtenAt;
+      final ta = a.modifiedAt ?? a.writtenAt;
+      return tb.compareTo(ta);
+    });
+    return matches.first;
+  }
+
+  /// 리뷰 수정. 로그인 시 Firestore `drama_reviews/{id}` 반영.
+  Future<void> updateById({
+    required String id,
     required double rating,
     required String comment,
   }) async {
-    final idx = listNotifier.value.indexWhere((e) => e.dramaId == dramaId);
+    final idx = listNotifier.value.indexWhere((e) => e.id == id);
     if (idx < 0) return;
     final old = listNotifier.value[idx];
     final now = DateTime.now();
@@ -238,6 +277,7 @@ class ReviewService {
       writtenAt: old.writtenAt,
       authorName: old.authorName,
       modifiedAt: now,
+      feedPostId: old.feedPostId,
     );
     final list = List<MyReviewItem>.from(listNotifier.value);
     list[idx] = item;
@@ -245,44 +285,109 @@ class ReviewService {
     await _persist(list);
 
     final uid = _uid;
-    if (uid != null && (old.id.startsWith('${uid}_') || old.id.startsWith('review-'))) {
+    if (uid != null) {
       try {
-        final docId = old.id.startsWith('${uid}_') ? old.id : '${uid}_$dramaId';
-        await _firestore.collection(_collection).doc(docId).set({
+        final data = <String, dynamic>{
           'uid': uid,
-          'dramaId': dramaId,
+          'dramaId': old.dramaId,
           'dramaTitle': old.dramaTitle,
           'rating': rating,
           'comment': comment,
           'writtenAt': Timestamp.fromDate(old.writtenAt),
           'authorName': old.authorName,
           'modifiedAt': Timestamp.fromDate(now),
-        }, SetOptions(merge: true));
+        };
+        if (old.feedPostId != null && old.feedPostId!.isNotEmpty) {
+          data['feedPostId'] = old.feedPostId;
+        }
+        await _firestore
+            .collection(_collection)
+            .doc(id)
+            .set(data, SetOptions(merge: true));
       } catch (e) {
         debugPrint('ReviewService update Firestore: $e');
       }
     }
   }
 
-  /// 리뷰 삭제. 로그인 시 Firestore에서도 삭제.
-  Future<void> delete(String dramaId) async {
+  /// DramaFeed 글 id를 리뷰 문서에 연결 (신규 리뷰 저장 직후).
+  Future<void> setFeedPostId({
+    required String reviewId,
+    required String feedPostId,
+  }) async {
+    await loadIfNeeded();
+    final idx = listNotifier.value.indexWhere((e) => e.id == reviewId);
+    if (idx < 0) return;
+    final old = listNotifier.value[idx];
+    final item = MyReviewItem(
+      id: old.id,
+      dramaId: old.dramaId,
+      dramaTitle: old.dramaTitle,
+      rating: old.rating,
+      comment: old.comment,
+      writtenAt: old.writtenAt,
+      authorName: old.authorName,
+      modifiedAt: old.modifiedAt,
+      feedPostId: feedPostId,
+    );
+    final list = List<MyReviewItem>.from(listNotifier.value);
+    list[idx] = item;
+    listNotifier.value = list;
+    await _persist(list);
     final uid = _uid;
-    final docId = uid != null ? '${uid}_$dramaId' : null;
-    final list = listNotifier.value.where((e) => e.dramaId != dramaId).toList();
+    if (uid != null) {
+      try {
+        await _firestore.collection(_collection).doc(reviewId).set(
+              {'feedPostId': feedPostId},
+              SetOptions(merge: true),
+            );
+      } catch (e) {
+        debugPrint('ReviewService setFeedPostId: $e');
+      }
+    }
+  }
+
+  /// 리뷰 한 건 삭제. 연결된 피드 글이 있으면 해당 글만 삭제.
+  Future<void> deleteById(String id) async {
+    if (id.isEmpty) return;
+    final uid = _uid;
+    MyReviewItem? found;
+    for (final e in listNotifier.value) {
+      if (e.id == id) {
+        found = e;
+        break;
+      }
+    }
+    if (found == null) return;
+    final list = listNotifier.value.where((e) => e.id != id).toList();
     listNotifier.value = list;
     await _persist(list);
 
-    if (uid != null && docId != null) {
+    if (uid == null) return;
+
+    try {
+      await _firestore.collection(_collection).doc(id).delete();
+    } catch (e) {
+      debugPrint('ReviewService delete Firestore: $e');
+    }
+
+    final removedIds = <String>[];
+    final fp = found.feedPostId?.trim();
+    if (fp != null && fp.isNotEmpty) {
       try {
-        await _firestore.collection(_collection).doc(docId).delete();
-      } catch (e) {
-        debugPrint('ReviewService delete Firestore: $e');
+        await _firestore.collection('posts').doc(fp).delete();
+        removedIds.add(fp);
+      } catch (e, st) {
+        debugPrint('ReviewService delete linked post: $e\n$st');
       }
-      final removedIds = await _deleteLinkedFeedReviewPosts(dramaId: dramaId, uid: uid);
-      if (removedIds.isNotEmpty) {
-        _lastDeletedFeedPostIds = removedIds;
-        reviewFeedPostsDeletedTick.value++;
-      }
+    } else {
+      removedIds.addAll(
+        await _deleteLinkedFeedReviewPosts(dramaId: found.dramaId, uid: uid),
+      );
+    }
+    if (removedIds.isNotEmpty) {
+      _lastDeletedFeedPostIds = removedIds;
+      reviewFeedPostsDeletedTick.value++;
     }
   }
 
@@ -346,8 +451,16 @@ class ReviewService {
     if (authorName.isEmpty) authorName = '익명';
 
     await loadIfNeeded();
-    if (getByDramaId(dramaId) != null) {
-      await update(dramaId: dramaId, rating: rating, comment: comment);
+    final postId = post.id.trim();
+    if (postId.isEmpty) return;
+    final existing = getById(postId);
+    if (existing != null) {
+      await updateById(id: postId, rating: rating, comment: comment);
+      final cur = getById(postId);
+      if (cur != null &&
+          (cur.feedPostId == null || cur.feedPostId!.isEmpty)) {
+        await setFeedPostId(reviewId: postId, feedPostId: postId);
+      }
     } else {
       await add(
         dramaId: dramaId,
@@ -355,6 +468,8 @@ class ReviewService {
         rating: rating,
         comment: comment,
         authorName: authorName,
+        documentId: postId,
+        feedPostId: postId,
       );
     }
   }
@@ -402,7 +517,10 @@ class ReviewService {
           rating: (d['rating'] as num?)?.toDouble() ?? 0,
           comment: d['comment'] as String? ?? '',
           timeAgo: formatTimeAgo(at),
-          likeCount: 0,
+          likeCount: (d['likeCount'] as num?)?.toInt() ??
+              (d['likes'] as num?)?.toInt() ??
+              0,
+          writtenAt: at,
         ));
       }
       return list;

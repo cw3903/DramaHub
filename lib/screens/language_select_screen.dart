@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../services/locale_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/app_bar_back_icon_button.dart';
 
 /// 표시 언어 4가지: EN / 한국어 / 日本語 / 中文
 const Map<String, String> _localeLabels = {
@@ -40,8 +41,7 @@ class LanguageSelectScreen extends StatelessWidget {
         backgroundColor: theme.scaffoldBackgroundColor,
         elevation: 0,
         leading: showCloseButton
-            ? IconButton(
-                icon: const Icon(Icons.arrow_back_ios_new),
+            ? AppBarBackIconButton(
                 onPressed: () => Navigator.pop(context, false),
               )
             : null,

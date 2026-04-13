@@ -1,3 +1,5 @@
+import 'dart:math' show Random;
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
@@ -7,7 +9,7 @@ import '../services/drama_list_service.dart';
 import '../services/drama_search_stats_service.dart';
 import '../services/review_service.dart';
 import '../widgets/country_scope.dart';
-import '../widgets/optimized_network_image.dart';
+import '../widgets/drama_grid_card.dart';
 import 'drama_detail_page.dart';
 
 /// 리뷰(드라마) 탭 검색창 탭 시 — 실제 드라마 목록(dramas.json) 기준 제목·장르 검색
@@ -22,6 +24,8 @@ class DramaSearchScreen extends StatefulWidget {
 }
 
 class _DramaSearchScreenState extends State<DramaSearchScreen> {
+  static const int _kPickModeRandomCount = 32;
+
   final _searchController = TextEditingController();
   final _searchFocusNode = FocusNode();
   /// 입력(엔터) 눌렀을 때만 반영되는 검색어. 글자 입력만으로는 검색 안 함.
@@ -37,9 +41,12 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
   void initState() {
     super.initState();
     DramaListService.instance.loadFromAsset();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _searchFocusNode.requestFocus();
-    });
+    // 즐겨찾기 등 pick 모드는 들어가자마자 키보드 올리지 않음.
+    if (!widget.pickMode) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _searchFocusNode.requestFocus();
+      });
+    }
   }
 
   @override
@@ -47,6 +54,20 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
     _searchController.dispose();
     _searchFocusNode.dispose();
     super.dispose();
+  }
+
+  /// 즐겨찾기 픽: 전체 목록에서 매 빌드마다 동일한 32편(카탈로그 시드 기준 의사 랜덤).
+  List<DramaItem> _pickModeRandomDisplay(List<DramaItem> all) {
+    if (all.isEmpty) return [];
+    if (all.length <= _kPickModeRandomCount) return List<DramaItem>.of(all);
+    final seed = Object.hash(
+      all.length,
+      all.first.id,
+      all.length > 1 ? all.last.id : '',
+    );
+    final rng = Random(seed);
+    final order = List<int>.generate(all.length, (i) => i)..shuffle(rng);
+    return [for (var k = 0; k < _kPickModeRandomCount; k++) all[order[k]]];
   }
 
   @override
@@ -131,10 +152,11 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
               ),
             );
           }
-          // 검색어 있음: 필터 결과 상위 10개 / 검색어 없음: 선택 기간별 인기 순위 상위 10개
+          // 검색어 있음: 필터 결과(일반 10개 / 픽 모드 최대 32개)
           if (_submittedQuery.isNotEmpty) {
-            final displayList = filteredList.take(10).toList();
-            return _buildRankList(
+            final cap = widget.pickMode ? _kPickModeRandomCount : 10;
+            final displayList = filteredList.take(cap).toList();
+            return _buildDramaGrid(
               context,
               displayList,
               country,
@@ -142,6 +164,22 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
               s,
               sectionTitle: s.get('searchResults'),
               onReturnFromDetail: null,
+              titleOnly: widget.pickMode,
+            );
+          }
+          // 즐겨찾기 픽 + 검색어 없음: 인기 API 없이 카탈로그에서 랜덤 32편.
+          if (widget.pickMode) {
+            final displayList = _pickModeRandomDisplay(allList);
+            return _buildDramaGrid(
+              context,
+              displayList,
+              country,
+              cs,
+              s,
+              sectionTitle: null,
+              onReturnFromDetail: null,
+              titleOnly: true,
+              gridChildAspectRatio: 0.58,
             );
           }
           return FutureBuilder<List<String>>(
@@ -174,7 +212,7 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
                 children: [
                   _buildPeriodSelector(cs, s),
                   Expanded(
-                    child: _buildRankList(
+                    child: _buildDramaGrid(
                       context,
                       displayList,
                       country,
@@ -239,7 +277,18 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
     );
   }
 
-  Widget _buildRankList(
+  Widget _searchGridPosterPlaceholder(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      color: cs.surfaceContainerHighest,
+      child: Center(
+        child: Icon(LucideIcons.tv, size: 24, color: cs.onSurfaceVariant),
+      ),
+    );
+  }
+
+  /// 드라마 탭 그리드와 동일 카드 — 검색 화면만 **4열**.
+  Widget _buildDramaGrid(
     BuildContext context,
     List<DramaItem> displayList,
     String? country,
@@ -247,141 +296,83 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
     dynamic s, {
     String? sectionTitle,
     VoidCallback? onReturnFromDetail,
+    bool titleOnly = false,
+    double? gridChildAspectRatio,
   }) {
     final title = sectionTitle ?? s.get('popularSearch');
+    final r = dramaGridScreenScale(context);
+    final gap = 8 * r;
+    final aspect = gridChildAspectRatio ?? (titleOnly ? 0.58 : 0.47);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-          child: Text(
-            title,
-            style: GoogleFonts.notoSansKr(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: cs.onSurface,
+        if (sectionTitle != null && sectionTitle.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.fromLTRB(16 * r, 8 * r, 16 * r, 10 * r),
+            child: Text(
+              title,
+              style: GoogleFonts.notoSansKr(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: cs.onSurface,
+              ),
             ),
           ),
-        ),
         Expanded(
-          child: ListView.builder(
+          child: GridView.builder(
             padding: EdgeInsets.fromLTRB(
-              16,
-              0,
-              16,
+              gap,
+              sectionTitle != null && sectionTitle.isNotEmpty ? 0 : 8 * r,
+              gap,
               24 + MediaQuery.of(context).padding.bottom,
+            ),
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 4,
+              // 제목+별+장르 줄이면 0.47, 제목만이면 세로 여유로 0.58 근처.
+              childAspectRatio: aspect,
+              crossAxisSpacing: gap,
+              mainAxisSpacing: 6 * r,
             ),
             itemCount: displayList.length,
             itemBuilder: (context, index) {
               final item = displayList[index];
-              final rank = index + 1;
-              final displayTitle = DramaListService.instance.getDisplayTitle(item.id, country);
-              final displaySubtitle = DramaListService.instance.getDisplaySubtitle(item.id, country);
-              final imageUrl = DramaListService.instance.getDisplayImageUrl(item.id, country) ?? item.imageUrl;
-              final rating = ReviewService.instance.getByDramaId(item.id)?.rating ?? item.rating;
-              return Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: () async {
-                    await DramaSearchStatsService.instance.incrementClick(item.id);
-                    if (!mounted) return;
-                    if (widget.pickMode) {
-                      Navigator.pop(context, item);
-                      return;
-                    }
-                    final detail = DramaListService.instance.buildDetailForItem(item, country);
-                    await Navigator.push(
-                      context,
-                      CupertinoPageRoute(
-                        builder: (_) => DramaDetailPage(detail: detail),
-                      ),
-                    );
-                    if (mounted && onReturnFromDetail != null) onReturnFromDetail();
-                  },
-                  borderRadius: BorderRadius.circular(12),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        SizedBox(
-                          width: 32,
-                          child: Text(
-                            '$rank',
-                            style: GoogleFonts.notoSansKr(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                              color: cs.onSurfaceVariant,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(10),
-                          child: imageUrl != null && imageUrl.isNotEmpty && imageUrl.startsWith('http')
-                              ? OptimizedNetworkImage(
-                                  imageUrl: imageUrl,
-                                  width: 72,
-                                  height: 96,
-                                  fit: BoxFit.cover,
-                                )
-                              : Container(
-                                  width: 72,
-                                  height: 96,
-                                  color: cs.surfaceContainerHighest,
-                                  child: Icon(LucideIcons.tv, size: 28, color: cs.onSurfaceVariant),
-                                ),
-                        ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                displayTitle.isNotEmpty ? displayTitle : item.title,
-                                style: GoogleFonts.notoSansKr(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                  color: cs.onSurface,
-                                ),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              if (displaySubtitle.isNotEmpty) ...[
-                                const SizedBox(height: 4),
-                                Text(
-                                  displaySubtitle,
-                                  style: GoogleFonts.notoSansKr(
-                                    fontSize: 13,
-                                    color: cs.onSurfaceVariant,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ],
-                              const SizedBox(height: 6),
-                              Row(
-                                children: [
-                                  Icon(Icons.star_rounded, size: 16, color: Colors.amber),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    rating.toStringAsFixed(1),
-                                    style: GoogleFonts.notoSansKr(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600,
-                                      color: cs.onSurface,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                        Icon(LucideIcons.chevron_right, size: 20, color: cs.onSurfaceVariant),
-                      ],
+              final displayTitle =
+                  DramaListService.instance.getDisplayTitle(item.id, country);
+              final displaySubtitle =
+                  DramaListService.instance.getDisplaySubtitle(item.id, country);
+              final imageUrl = DramaListService.instance
+                      .getDisplayImageUrl(item.id, country) ??
+                  item.imageUrl;
+              final rating =
+                  ReviewService.instance.getByDramaId(item.id)?.rating ??
+                      item.rating;
+              return DramaGridCard(
+                displayTitle:
+                    displayTitle.isNotEmpty ? displayTitle : item.title,
+                displaySubtitle: displaySubtitle,
+                imageUrl: imageUrl,
+                rating: rating,
+                posterPlaceholder: _searchGridPosterPlaceholder(context),
+                titleOnly: titleOnly,
+                onTap: () async {
+                  await DramaSearchStatsService.instance.incrementClick(item.id);
+                  if (!mounted) return;
+                  if (widget.pickMode) {
+                    Navigator.pop(context, item);
+                    return;
+                  }
+                  final detail =
+                      DramaListService.instance.buildDetailForItem(item, country);
+                  await Navigator.push<void>(
+                    context,
+                    CupertinoPageRoute<void>(
+                      builder: (_) => DramaDetailPage(detail: detail),
                     ),
-                  ),
-                ),
+                  );
+                  if (mounted) {
+                    onReturnFromDetail?.call();
+                  }
+                },
               );
             },
           ),

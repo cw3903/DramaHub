@@ -19,8 +19,13 @@ class CountryScope extends InheritedWidget {
     return scope!;
   }
 
+  /// [of]와 달리 위젯을 CountryScope 변경에 **구독시키지 않음**.
+  /// `AnimatedBuilder` 등 중첩 빌더 안에서 `dependOn`을 쓰면 ancestor 검증 assertion이 날 수 있어
+  /// 조회만 수행한다.
   static CountryScope? maybeOf(BuildContext context) {
-    return context.dependOnInheritedWidgetOfExactType<CountryScope>();
+    final element =
+        context.getElementForInheritedWidgetOfExactType<CountryScope>();
+    return element?.widget as CountryScope?;
   }
 
   @override

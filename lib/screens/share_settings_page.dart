@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../services/share_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/app_bar_back_icon_button.dart';
 import '../widgets/country_scope.dart';
 
 /// 공유 설정 - 국가별 공유 메시지/앱 우선순위
@@ -54,8 +55,8 @@ class _ShareSettingsPageState extends State<ShareSettingsPage> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 20),
+        leading: AppBarBackIconButton(
+          iconColor: Colors.white,
           onPressed: () => Navigator.pop(context),
         ),
         title: Text(

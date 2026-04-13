@@ -33,6 +33,8 @@ class _MainScreenState extends State<MainScreen> {
 
   final _shortsIsActive = ValueNotifier<bool>(false);
   final _writeNotifier = ValueNotifier<int>(0);
+  /// 홈이 아닌 탭에서 [+] 누를 때 글쓰기 `initialBoard`를 리뷰로 고정하기 위한 플래그.
+  final ValueNotifier<bool> _writeOpenAsReview = ValueNotifier<bool>(false);
 
   GlobalKey<NavigatorState> _keyForIndex(int i) {
     if (!MainScreen.showShortsTab) {
@@ -61,6 +63,8 @@ class _MainScreenState extends State<MainScreen> {
     if (index == -1) {
       // 만들기 버튼: 홈 탭으로 이동 후 CommunityScreen의 _openWritePost 호출
       _shortsIsActive.value = false;
+      // 드라마 리스트·프로필 등 홈 외 탭에서는 리뷰 글쓰기로 통일
+      _writeOpenAsReview.value = _selectedIndex != 0;
       setState(() => _selectedIndex = 0);
       HomeTabVisibility.isHomeMainTabSelected.value = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -92,6 +96,7 @@ class _MainScreenState extends State<MainScreen> {
     PlayToShortsService.instance.request.removeListener(_onPlayToShortsRequest);
     _shortsIsActive.dispose();
     _writeNotifier.dispose();
+    _writeOpenAsReview.dispose();
     super.dispose();
   }
 
@@ -128,6 +133,7 @@ class _MainScreenState extends State<MainScreen> {
                 builder: (_) => CommunityScreen(
                   onProfileTap: _goToProfile,
                   writeNotifier: _writeNotifier,
+                  writeOpenAsReview: _writeOpenAsReview,
                 ),
               ),
             ),
@@ -299,17 +305,12 @@ class _BottomNavContent extends StatelessWidget {
     final color = selected ? cs.onSurface : cs.onSurfaceVariant;
     final icon = iconIndex ?? index;
     return Expanded(
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () => onTap(index),
-          borderRadius: BorderRadius.circular(30),
-          splashColor: cs.onSurface.withOpacity(0.06),
-          highlightColor: cs.onSurface.withOpacity(0.04),
-          child: Padding(
-            padding: const EdgeInsets.only(top: 6, bottom: 18),
-            child: _buildNavIcon(icon, selected, color),
-          ),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => onTap(index),
+        child: Padding(
+          padding: const EdgeInsets.only(top: 6, bottom: 18),
+          child: _buildNavIcon(icon, selected, color),
         ),
       ),
     );

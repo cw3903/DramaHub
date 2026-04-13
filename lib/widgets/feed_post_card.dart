@@ -7,7 +7,6 @@ import '../models/post.dart';
 import '../services/auth_service.dart';
 import '../services/block_service.dart';
 import '../services/post_service.dart';
-import '../services/saved_service.dart';
 import '../services/user_profile_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/format_utils.dart';
@@ -109,14 +108,12 @@ class _FeedPostCardState extends State<FeedPostCard> {
   int _voteState = 0;
   late int _displayCount;
   bool _votePending = false;
-  bool _isSaved = false;
 
   @override
   void initState() {
     super.initState();
     _displayCount = widget.post.votes;
     _syncVoteStateFromPost();
-    _isSaved = SavedService.instance.isSaved(widget.post.id);
   }
 
   @override
@@ -442,95 +439,66 @@ class _FeedPostCardState extends State<FeedPostCard> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // 상단: 작성자 + ···
+              // 상단: 작성자
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 아바타 + 닉네임 (닉네임 탭 시 메뉴)
+                  _AuthorAvatar(
+                    photoUrl: post.authorPhotoUrl,
+                    author: post.author,
+                    colorIndex: post.authorAvatarColorIndex,
+                    size: 38,
+                  ),
+                  const SizedBox(width: 10),
                   Expanded(
-                    child: Row(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        _AuthorAvatar(
-                          photoUrl: post.authorPhotoUrl,
-                          author: post.author,
-                          colorIndex: post.authorAvatarColorIndex,
-                          size: 38,
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                        GestureDetector(
+                          onTapDown: (details) => _showAuthorMenu(context, post.author, details),
+                          behavior: HitTestBehavior.opaque,
+                          child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              GestureDetector(
-                                onTapDown: (details) => _showAuthorMenu(context, post.author, details),
-                                behavior: HitTestBehavior.opaque,
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Flexible(
-                                      child: Text(
-                                        post.author.startsWith('u/') ? post.author.substring(2) : post.author,
-                                        style: GoogleFonts.notoSansKr(
-                                          fontSize: 13,
-                                          color: cs.onSurface,
-                                          fontWeight: FontWeight.w500,
-                                        ),
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ),
-                                    if (widget.currentUserAuthor != null && post.author == widget.currentUserAuthor) ...[
-                                      const SizedBox(width: 6),
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                        decoration: BoxDecoration(
-                                          color: cs.secondary,
-                                          borderRadius: BorderRadius.circular(4),
-                                        ),
-                                        child: Text(
-                                          CountryScope.of(context).strings.get('myPostBadge'),
-                                          style: GoogleFonts.notoSansKr(fontSize: 10, fontWeight: FontWeight.w700, color: cs.onSecondary),
-                                        ),
-                                      ),
-                                    ],
-                                  ],
+                              Flexible(
+                                child: Text(
+                                  post.author.startsWith('u/') ? post.author.substring(2) : post.author,
+                                  style: GoogleFonts.notoSansKr(
+                                    fontSize: 13,
+                                    color: cs.onSurface,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
                                 ),
                               ),
-                              const SizedBox(height: 2),
-                              Text(
-                                post.timeAgo,
-                                style: GoogleFonts.notoSansKr(
-                                  fontSize: 11,
-                                  color: AppColors.mediumGrey.withOpacity(0.7),
-                                  fontWeight: FontWeight.w400,
+                              if (widget.currentUserAuthor != null && post.author == widget.currentUserAuthor) ...[
+                                const SizedBox(width: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: cs.secondary,
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Text(
+                                    CountryScope.of(context).strings.get('myPostBadge'),
+                                    style: GoogleFonts.notoSansKr(fontSize: 10, fontWeight: FontWeight.w700, color: cs.onSecondary),
+                                  ),
                                 ),
-                              ),
+                              ],
                             ],
                           ),
                         ),
+                        const SizedBox(height: 2),
+                        Text(
+                          post.timeAgo,
+                          style: GoogleFonts.notoSansKr(
+                            fontSize: 11,
+                            color: AppColors.mediumGrey.withOpacity(0.7),
+                            fontWeight: FontWeight.w400,
+                          ),
+                        ),
                       ],
-                    ),
-                  ),
-                  // 저장 버튼 (로컬 _isSaved만 사용, 탭 시에만 갱신)
-                  GestureDetector(
-                    onTap: () {
-                      SavedService.instance.toggle(SavedItem(
-                        id: post.id,
-                        title: post.title,
-                        views: formatCompactCount(post.views),
-                        type: SavedItemType.post,
-                        post: post,
-                      ));
-                      setState(() => _isSaved = SavedService.instance.isSaved(post.id));
-                    },
-                    behavior: HitTestBehavior.opaque,
-                    child: Padding(
-                      padding: const EdgeInsets.only(left: 8, top: 2),
-                      child: Icon(
-                        _isSaved ? Icons.bookmark : Icons.bookmark_border,
-                        size: 20,
-                        color: _isSaved ? cs.primary : AppColors.mediumGrey,
-                      ),
                     ),
                   ),
                 ],

@@ -8,10 +8,13 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 import '../models/post.dart';
+import '../models/profile_rating_histogram.dart';
 import '../models/notification_item.dart';
 import '../utils/format_utils.dart';
 import '../utils/post_board_utils.dart';
 import 'auth_service.dart';
+import 'drama_list_service.dart';
+import 'level_service.dart';
 import 'notification_service.dart';
 import 'review_service.dart';
 import 'user_profile_service.dart';
@@ -564,6 +567,135 @@ class PostService {
     }
   }
 
+  /// 같은 유저·같은 드라마의 DramaFeed 리뷰 글(`posts`, type=review) 중 최신 1건.
+  /// 로컬 `MyReviewItem`과 문서 id가 다르므로 `dramaId`로 조회해 글 상세 진입에 사용.
+  Future<Post?> getLatestMyFeedReviewPostForDrama({
+    required String authorUid,
+    required String dramaId,
+    String? locale,
+  }) async {
+    final did = dramaId.trim();
+    if (authorUid.isEmpty || did.isEmpty) return null;
+    try {
+      final snap = await _col
+          .where('authorUid', isEqualTo: authorUid)
+          .where('dramaId', isEqualTo: did)
+          .limit(40)
+          .get();
+      if (snap.docs.isEmpty) return null;
+      DocumentSnapshot<Map<String, dynamic>>? best;
+      var bestAt = DateTime.fromMillisecondsSinceEpoch(0);
+      for (final doc in snap.docs) {
+        final data = doc.data();
+        final type = (data['type'] as String?)?.trim().toLowerCase();
+        if (type != 'review') continue;
+        final createdAt = data['createdAt'];
+        final at = createdAt is Timestamp
+            ? createdAt.toDate()
+            : DateTime.fromMillisecondsSinceEpoch(0);
+        if (at.isAfter(bestAt)) {
+          bestAt = at;
+          best = doc;
+        }
+      }
+      if (best == null) return null;
+      return getPost(best.id, locale);
+    } catch (e, st) {
+      debugPrint('getLatestMyFeedReviewPostForDrama: $e\n$st');
+      return null;
+    }
+  }
+
+  /// 드라마 상세 리뷰 탭에서 저장한 내용을 DramaFeed 리뷰 게시판(`posts`, type=review)과 동기화.
+  /// [existingFeedPostId]가 있으면 해당 글만 수정.
+  /// [forceNewPost]가 true이면 같은 작품에 리뷰 글이 있어도 항상 새 글을 추가 (작품당 여러 리뷰).
+  /// 반환: [createdNewPost]는 새 `posts` 문서가 추가된 경우 true(레벨 점수 등), [postId]는 저장된 글 id.
+  Future<({bool createdNewPost, String? postId})> syncReviewFeedPostFromDramaDetail({
+    required String dramaId,
+    required String dramaTitle,
+    required double rating,
+    required String comment,
+    required String reviewsTabLabel,
+    required String timeSoonLabel,
+    String? existingFeedPostId,
+    bool forceNewPost = false,
+  }) async {
+    final uid = AuthService.instance.currentUser.value?.uid;
+    if (uid == null) return (createdNewPost: false, postId: null);
+    final did = dramaId.trim();
+    if (did.isEmpty) return (createdNewPost: false, postId: null);
+    try {
+      await DramaListService.instance.loadFromAsset();
+      await UserProfileService.instance.loadIfNeeded();
+      await LevelService.instance.loadIfNeeded();
+      final author = await UserProfileService.instance.getAuthorForPost();
+      final rawCountry = UserProfileService.instance.signupCountryNotifier.value?.trim().toLowerCase();
+      final countryOr = (rawCountry != null && rawCountry.isNotEmpty) ? rawCountry : 'us';
+      final titleText = dramaTitle.trim().isNotEmpty
+          ? dramaTitle.trim()
+          : DramaListService.instance.getDisplayTitle(did, countryOr);
+      final thumb = DramaListService.instance.getDisplayImageUrl(did, countryOr) ?? '';
+
+      Post? mergeTarget;
+      final byId = existingFeedPostId?.trim();
+      if (byId != null && byId.isNotEmpty) {
+        mergeTarget = await getPost(byId, countryOr);
+      }
+      if (mergeTarget == null && !forceNewPost) {
+        mergeTarget = await getLatestMyFeedReviewPostForDrama(
+          authorUid: uid,
+          dramaId: did,
+          locale: countryOr,
+        );
+      }
+      if (mergeTarget != null) {
+        final merged = mergeTarget.copyWith(
+          title: titleText.isNotEmpty ? titleText : mergeTarget.title,
+          body: comment,
+          rating: rating,
+          dramaId: did,
+          dramaTitle: titleText.isNotEmpty ? titleText : mergeTarget.dramaTitle,
+          dramaThumbnail: thumb.isNotEmpty ? thumb : mergeTarget.dramaThumbnail,
+          type: 'review',
+        );
+        await updatePost(merged);
+        return (createdNewPost: false, postId: mergeTarget.id);
+      }
+
+      final tempId = DateTime.now().millisecondsSinceEpoch.toString();
+      final post = Post(
+        id: tempId,
+        title: titleText.isNotEmpty ? titleText : did,
+        subreddit: reviewsTabLabel,
+        author: author,
+        timeAgo: timeSoonLabel,
+        votes: 0,
+        comments: 0,
+        body: comment,
+        authorLevel: LevelService.instance.currentLevel.clamp(1, 30),
+        category: 'free',
+        type: 'review',
+        dramaId: did,
+        dramaTitle: titleText.isNotEmpty ? titleText : null,
+        dramaThumbnail: thumb.isNotEmpty ? thumb : null,
+        rating: rating,
+        hasSpoiler: false,
+        isLiked: false,
+        isFirstWatch: true,
+        tags: const [],
+        allowReply: true,
+        authorPhotoUrl: UserProfileService.instance.profileImageUrlNotifier.value,
+        authorAvatarColorIndex: UserProfileService.instance.avatarColorNotifier.value,
+        country: countryOr,
+      );
+      final (saved, _) = await addPostWithRetry(post);
+      return (createdNewPost: saved != null, postId: saved?.id);
+    } catch (e, st) {
+      debugPrint('syncReviewFeedPostFromDramaDetail: $e\n$st');
+      return (createdNewPost: false, postId: null);
+    }
+  }
+
   /// 글 좋아요 토글 (posts/{id}/likes/{uid} 서브컬렉션 + likeCount, 트랜잭션).
   /// [currentVoteState]는 호환용(무시). 성공 시 true=좋아요 적용됨, false=좋아요 취소, 실패 시 null.
   Future<bool?> togglePostLike(
@@ -894,6 +1026,45 @@ class PostService {
     }
   }
 
+  /// 프로필 별점 분포: `posts`(type=review, authorUid) + `drama_reviews`(uid). dramaId 기준 중복 제거.
+  Future<ProfileRatingHistogram> aggregateReviewRatingsForUid(String uid) async {
+    if (uid.isEmpty) return ProfileRatingHistogram.empty();
+
+    final dramaIdToRating = <String, double>{};
+
+    try {
+      final postSnap = await _col.where('authorUid', isEqualTo: uid).get();
+      for (final doc in postSnap.docs) {
+        final data = doc.data();
+        final type = (data['type'] as String?)?.toLowerCase();
+        if (type != 'review') continue;
+        final r = (data['rating'] as num?)?.toDouble();
+        if (r == null || r <= 0) continue;
+        final dramaId = (data['dramaId'] as String?)?.trim() ?? '';
+        final key = dramaId.isNotEmpty ? dramaId : 'post_${doc.id}';
+        dramaIdToRating[key] = r;
+      }
+    } catch (e, st) {
+      debugPrint('aggregateReviewRatingsForUid posts: $e\n$st');
+    }
+
+    try {
+      final drSnap = await _firestore.collection('drama_reviews').where('uid', isEqualTo: uid).get();
+      for (final doc in drSnap.docs) {
+        final data = doc.data();
+        final dramaId = (data['dramaId'] as String?)?.trim() ?? '';
+        if (dramaId.isEmpty) continue;
+        if (dramaIdToRating.containsKey(dramaId)) continue;
+        final r = (data['rating'] as num?)?.toDouble() ?? 0;
+        if (r > 0) dramaIdToRating[dramaId] = r;
+      }
+    } catch (e, st) {
+      debugPrint('aggregateReviewRatingsForUid drama_reviews: $e\n$st');
+    }
+
+    return ProfileRatingHistogram.fromRatings(dramaIdToRating.values.toList());
+  }
+
   /// 특정 작성자가 쓴 댓글 목록 (글 정보 포함). 댓글·답글 모두 포함.
   Future<List<({Post post, PostComment comment})>> getCommentsByAuthor(String author) async {
     final posts = await getPostsAllPages();
@@ -982,6 +1153,44 @@ class PostService {
       last = r.lastDocument;
     }
     return acc;
+  }
+
+  static const int _likedPostsQueryLimit = 200;
+
+  /// [likedBy]에 [uid]가 포함된 게시글. `array-contains`만 사용 후 클라이언트에서 `createdAt` 내림차순 정렬.
+  /// 국가 피드 가리기는 적용하지 않음(내가 누른 좋아요는 모두 표시).
+  Future<List<Post>> getPostsLikedByUid(
+    String uid, {
+    String? countryForTimeAgo,
+    int limit = _likedPostsQueryLimit,
+  }) async {
+    if (uid.isEmpty) return [];
+    try {
+      final snap = await _col.where('likedBy', arrayContains: uid).limit(limit).get();
+      final out = <({Post post, DateTime sortAt})>[];
+      for (final doc in snap.docs) {
+        try {
+          final data = Map<String, dynamic>.from(doc.data());
+          data['id'] = doc.id;
+          final createdAt = data['createdAt'];
+          final sortAt = createdAt is Timestamp
+              ? createdAt.toDate()
+              : DateTime.fromMillisecondsSinceEpoch(0);
+          final normalized = _normalizePostMap(data);
+          normalized['timeAgo'] = formatTimeAgo(sortAt, countryForTimeAgo);
+          final post = Post.fromMap(normalized);
+          out.add((post: post, sortAt: sortAt));
+        } catch (e, st) {
+          debugPrint('getPostsLikedByUid parse fail ${doc.id}: $e\n$st');
+        }
+      }
+      out.sort((a, b) => b.sortAt.compareTo(a.sortAt));
+      final posts = out.map((e) => e.post).toList();
+      return await hydratePostsViewerVotes(posts);
+    } catch (e, st) {
+      debugPrint('getPostsLikedByUid: $e\n$st');
+      return [];
+    }
   }
 
   /// 댓글 createdAt 마이그레이션: id(밀리초)로 createdAt 없는 댓글을 복원

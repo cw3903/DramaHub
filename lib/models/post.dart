@@ -43,6 +43,7 @@ class Post {
     this.isFirstWatch = true,
     this.tags = const [],
     this.allowReply = true,
+    this.createdAt,
   });
   final String id;
   final String title;
@@ -104,6 +105,8 @@ class Post {
   final List<String> tags;
   /// 리뷰: 댓글 허용 여부
   final bool allowReply;
+  /// Firestore `createdAt` (글 상세·Letterboxd 리뷰 시청일 등)
+  final DateTime? createdAt;
 
   Post copyWith({
     String? id,
@@ -145,6 +148,7 @@ class Post {
     bool? isFirstWatch,
     List<String>? tags,
     bool? allowReply,
+    DateTime? createdAt,
   }) {
     return Post(
       id: id ?? this.id,
@@ -186,6 +190,7 @@ class Post {
       isFirstWatch: isFirstWatch ?? this.isFirstWatch,
       tags: tags ?? this.tags,
       allowReply: allowReply ?? this.allowReply,
+      createdAt: createdAt ?? this.createdAt,
     );
   }
 
@@ -231,6 +236,7 @@ class Post {
       'isFirstWatch': isFirstWatch,
       'tags': tags,
       'allowReply': allowReply,
+      if (createdAt != null) 'createdAt': Timestamp.fromDate(createdAt!),
     };
   }
 
@@ -289,6 +295,10 @@ class Post {
             .toList()
         : null;
 
+    final createdAtRaw = map['createdAt'];
+    final DateTime? createdAtParsed = createdAtRaw is Timestamp
+        ? createdAtRaw.toDate()
+        : null;
     return Post(
       id: map['id'] as String? ?? '',
       title: map['title'] as String? ?? '',
@@ -329,6 +339,7 @@ class Post {
       isFirstWatch: map['isFirstWatch'] as bool? ?? true,
       tags: _tagsFromMap(map['tags']),
       allowReply: map['allowReply'] as bool? ?? true,
+      createdAt: createdAtParsed,
     );
   }
 

@@ -34,11 +34,18 @@ import '../services/home_tab_visibility.dart';
 
 /// 홈 탭 - 인기글 / 자유게시판 (모던 스타일)
 class CommunityScreen extends StatefulWidget {
-  const CommunityScreen({super.key, this.onProfileTap, this.writeNotifier});
+  const CommunityScreen({
+    super.key,
+    this.onProfileTap,
+    this.writeNotifier,
+    this.writeOpenAsReview,
+  });
 
   final VoidCallback? onProfileTap;
   /// main_screen에서 만들기 버튼 누를 때 notify → _openWritePost 호출
   final ValueNotifier<int>? writeNotifier;
+  /// 홈 외 탭에서 [+] 시 true → 글쓰기는 리뷰 탭 기준으로 열고 소비 시 false로 되돌림
+  final ValueNotifier<bool>? writeOpenAsReview;
 
   @override
   State<CommunityScreen> createState() => _CommunityScreenState();
@@ -420,11 +427,17 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
       );
       if (!mounted || loggedIn != true) return;
     }
-    final initialBoard = switch (_tabController.index) {
-      0 => 'review',
-      1 => 'talk',
-      _ => 'ask',
-    };
+    final forceReview = widget.writeOpenAsReview?.value == true;
+    if (forceReview && widget.writeOpenAsReview != null) {
+      widget.writeOpenAsReview!.value = false;
+    }
+    final initialBoard = forceReview
+        ? 'review'
+        : switch (_tabController.index) {
+            0 => 'review',
+            1 => 'talk',
+            _ => 'ask',
+          };
     final Post? post = await Navigator.push<Post>(
       context,
       MaterialPageRoute(builder: (_) => WritePostPage(initialBoard: initialBoard)),
@@ -478,21 +491,19 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
     final cs = theme.colorScheme;
     final shortSide = MediaQuery.sizeOf(context).shortestSide;
     final r = (shortSide / 360).clamp(0.85, 1.25);
+    /// 리뷰·톡·질문 **본문 패널** 배경(이전 상단 스트립과 동일 톤). DramaFeed **AppBar**는 `scaffoldBackgroundColor`와 맞춤.
+    final homeFeedBoardPanelColor = theme.brightness == Brightness.dark
+        ? AppColors.darkSurfaceVariant
+        : AppColors.communityBoardBackground;
     return Scaffold(
       resizeToAvoidBottomInset: true,
-      backgroundColor: theme.scaffoldBackgroundColor,
+      backgroundColor: homeFeedBoardPanelColor,
       appBar: AppBar(
         backgroundColor: theme.scaffoldBackgroundColor,
         elevation: 6,
         scrolledUnderElevation: 6,
         shadowColor: cs.shadow.withOpacity(0.18),
         surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.only(
-            bottomLeft: Radius.circular(20 * r),
-            bottomRight: Radius.circular(20 * r),
-          ),
-        ),
         automaticallyImplyLeading: false,
         centerTitle: false,
         toolbarHeight: 52 * r,
@@ -638,7 +649,10 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
                                       child: Container(
                                         alignment: Alignment.center,
                                         decoration: BoxDecoration(
-                                          border: Border.all(color: cs.outline, width: 0.7),
+                                          border: Border.all(
+                                            color: cs.outline,
+                                            width: 1.25 * r,
+                                          ),
                                           borderRadius: BorderRadius.circular(6 * r),
                                         ),
                                         child: Text(
@@ -646,11 +660,11 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
                                           strutStyle: StrutStyle(
                                             forceStrutHeight: true,
                                             height: 1.15,
-                                            fontSize: 11 * r,
+                                            fontSize: 10 * r,
                                             leadingDistribution: TextLeadingDistribution.even,
                                           ),
                                           style: GoogleFonts.notoSansKr(
-                                            fontSize: 11 * r,
+                                            fontSize: 10 * r,
                                             height: 1.15,
                                             fontWeight: FontWeight.w700,
                                             color: idx == i ? cs.onInverseSurface : cs.onSurfaceVariant,
@@ -677,7 +691,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
         ),
       ),
       body: Container(
-        color: theme.scaffoldBackgroundColor,
+        color: homeFeedBoardPanelColor,
         child: Stack(
           children: [
             TabBarView(

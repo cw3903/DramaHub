@@ -390,6 +390,33 @@ class DramaListService {
     return result;
   }
 
+  /// 시놉시스 아래 장르·태그 토큰(예: "Twist", "반전")과 동일한 토큰이 부제에 포함된 작품만.
+  /// [tag]는 상세에서 탭한 문자열과 동일(공백·대소문자 무시 후 토큰 단위 일치).
+  List<DramaItem> getDramasMatchingGenreTag(
+    String tag,
+    String? country, {
+    int limit = 200,
+    int maxScan = 3000,
+  }) {
+    final needle = tag.trim().toLowerCase();
+    if (needle.isEmpty) return [];
+    final candidates = getListForCountry(country);
+    final result = <DramaItem>[];
+    var scanned = 0;
+    for (final item in candidates) {
+      if (result.length >= limit) break;
+      if (scanned >= maxScan) break;
+      scanned++;
+      final otherGenre = getDisplaySubtitle(item.id, country);
+      final otherTags = otherGenre
+          .split(RegExp(r'[·,]'))
+          .map((e) => e.trim().toLowerCase())
+          .where((e) => e.isNotEmpty);
+      if (otherTags.contains(needle)) result.add(item);
+    }
+    return result;
+  }
+
   /// [item]에 대한 상세 정보 생성(비슷한 작품 탭 시 상세 페이지 진입용). 평점·리뷰는 페이지에서 로드.
   /// 비슷한 작품은 목록이 클 때 동기 전부 스캔하면 탭이 버벅이므로 비워 두고 상세 UI에서 지연 로드.
   DramaDetail buildDetailForItem(DramaItem item, String? country) {

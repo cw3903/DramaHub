@@ -6,6 +6,7 @@ import 'services/auth_service.dart';
 import 'services/country_service.dart';
 import 'services/level_service.dart';
 import 'services/saved_service.dart';
+import 'services/watchlist_service.dart';
 import 'services/user_profile_service.dart';
 import 'services/message_service.dart';
 import 'services/notification_service.dart';
@@ -30,6 +31,7 @@ void main() async {
     CountryService.instance.loadSavedOverride(),
     LevelService.instance.loadIfNeeded(),
     SavedService.instance.loadIfNeeded(),
+    WatchlistService.instance.loadIfNeeded(),
     UserProfileService.instance.loadIfNeeded(),
     MessageService.instance.loadIfNeeded(),
     NotificationService.instance.init(),

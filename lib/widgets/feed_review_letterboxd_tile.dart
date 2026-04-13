@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../models/post.dart';
+import '../screens/user_posts_screen.dart';
 import '../screens/write_post_page.dart';
 import '../config/app_moderators.dart';
+import '../services/drama_list_service.dart';
 import '../services/post_service.dart';
 import '../services/user_profile_service.dart';
 import 'country_scope.dart';
@@ -46,66 +48,195 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
   static const double _thumbH = 96;
   static const double _thumbRadius = 4;
 
-  /// 리스트 구분선 ~ 제목행까지 세로 패딩(이 값을 기준으로 썸네일 쪽 간격도 맞춤).
-  static const double _gapDividerToTitleRow = 12;
+  /// 리스트 구분선 ~ 제목행까지 세로 패딩.
+  static const double _gapDividerToTitleRow = 6;
+
+  /// 제목(헤더) 행 ↔ 별점 행. 별~썸네일보다 좁게 두어 시각적으로 균형 맞춤.
+  static const double _gapTitleToStars = 3;
+
+  /// 별점 행 ↔ 썸네일 행.
+  static const double _gapStarsToThumb = 5;
 
   static const Color _starOrange = Color(0xFFFFB020);
 
   static Color _reviewTapSplash(ColorScheme cs) => cs.primary.withValues(alpha: 0.14);
   static Color _reviewTapHighlight(ColorScheme cs) => cs.primary.withValues(alpha: 0.08);
 
-  /// 0.5점: `star_half`는 오른쪽 빈 윤곽이 보이므로, 꽉 찬 별의 왼쪽 절반만 잘라서만 표시.
-  static Widget _filledHalfStarOnly(double iconSize, Color color) {
-    return ClipRect(
-      child: Align(
-        alignment: Alignment.centerLeft,
-        widthFactor: 0.5,
-        child: Icon(Icons.star_rounded, size: iconSize, color: color),
+  /// 반점 표기 — 위 1 · 사선 · 아래 2 (별 높이에 맞춤).
+  static Widget _halfFractionLabel({
+    required TextStyle halfLabelStyle,
+    required double iconSize,
+  }) {
+    final color = halfLabelStyle.color ?? _starOrange;
+    final digitSize = (iconSize * 0.40).clamp(11.0, 12.5);
+    final slashSize = (iconSize * 0.58).clamp(15.0, 18.0);
+
+    TextStyle digitStyle() => halfLabelStyle.copyWith(
+          fontSize: digitSize,
+          height: 1.0,
+          fontWeight: FontWeight.w800,
+          color: color,
+        );
+
+    TextStyle slashStyle() => halfLabelStyle.copyWith(
+          fontSize: slashSize,
+          height: 1.0,
+          fontWeight: FontWeight.w700,
+          color: color,
+        );
+
+    return SizedBox(
+      width: iconSize * 0.78,
+      height: iconSize,
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.center,
+        children: [
+          Positioned(
+            left: 0,
+            top: iconSize * 0.02,
+            child: Text('1', style: digitStyle()),
+          ),
+          Center(
+            child: Transform.rotate(
+              angle: -0.92,
+              child: Text('/', style: slashStyle()),
+            ),
+          ),
+          Positioned(
+            right: 0,
+            bottom: iconSize * 0.04,
+            child: Text('2', style: digitStyle()),
+          ),
+        ],
       ),
     );
   }
 
-  /// 채워진 별(+0.5면 반쪽 채움만)만 표시. 빈 테두리 별은 넣지 않음.
-  static Widget _starRow(double rating, double thumbWidth) {
+  /// 채워진 별만 표시(빈 테두리 별 없음). 0.5점은 반별 아이콘 대신 `1/2` 텍스트만 붙임.
+  static Widget _starRow(
+    double rating,
+    double thumbWidth, {
+    required TextStyle halfLabelStyle,
+  }) {
     final units = (rating.clamp(0.0, 5.0) * 2).round().clamp(0, 10);
     final fullCount = units ~/ 2;
     final hasHalf = units.isOdd;
-    final starCount = fullCount + (hasHalf ? 1 : 0);
-    if (starCount == 0) return const SizedBox.shrink();
+    final starCount = fullCount;
+    if (starCount == 0 && !hasHalf) return const SizedBox.shrink();
     final slotW = thumbWidth / 5;
     final iconSize = (slotW * 0.82).clamp(14.0, 22.0);
-    return SizedBox(
-      width: starCount * slotW,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: List.generate(starCount, (i) {
-          final isHalf = hasHalf && i == fullCount;
-          return SizedBox(
-            width: slotW,
-            child: Center(
-              child: isHalf
-                  ? _filledHalfStarOnly(iconSize, _starOrange)
-                  : Icon(Icons.star_rounded, size: iconSize, color: _starOrange),
+
+    final Widget starsOnly = starCount > 0
+        ? SizedBox(
+            width: starCount * slotW,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: List.generate(
+                starCount,
+                (i) => SizedBox(
+                  width: slotW,
+                  child: Center(
+                    child: Icon(
+                      Icons.star_rounded,
+                      size: iconSize,
+                      color: _starOrange,
+                    ),
+                  ),
+                ),
+              ),
             ),
-          );
-        }),
-      ),
+          )
+        : const SizedBox.shrink();
+
+    if (!hasHalf) return starsOnly;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        if (starCount > 0) starsOnly,
+        Padding(
+          padding: EdgeInsets.only(left: starCount > 0 ? 1 : 0),
+          child: _halfFractionLabel(
+            halfLabelStyle: halfLabelStyle,
+            iconSize: iconSize,
+          ),
+        ),
+      ],
     );
   }
 
   String _displayAuthor(String author) =>
       author.startsWith('u/') ? author.substring(2) : author;
 
+  /// [UserPostsScreen] 등 작성자 식별용 (`u/닉네임` 형식).
+  static String _authorNavKey(String author) {
+    final t = author.trim();
+    if (t.isEmpty) return '';
+    return t.startsWith('u/') ? t : 'u/$t';
+  }
+
+  /// Firestore 제목이 `title_ko` 등과만 맞고 [getDisplayTitleByTitle]이 못 찾을 때(예: 띄어쓰기·대소문자).
+  static String _displayTitleFromExtraLanguageMatch(
+    String stored,
+    String? country,
+  ) {
+    final st = stored.trim();
+    if (st.isEmpty) return '';
+    final extras = DramaListService.instance.extraNotifier.value;
+    for (final e in extras.entries) {
+      final ex = e.value;
+      final ko = (ex.title_ko ?? '').trim();
+      final en = (ex.title_en ?? '').trim();
+      final ja = (ex.title_ja ?? '').trim();
+      if (st == ko || st == en || st == ja) {
+        final t = DramaListService.instance.getDisplayTitle(e.key, country);
+        if (t.isNotEmpty) return t;
+      }
+    }
+    return '';
+  }
+
+  /// 앱 언어(가입 국가) 기준 표시 제목 — Firestore `dramaTitle`(한글 저장 등)만 쓰면 영어 UI에서 한글이 남음.
+  static String _displayDramaTitle(BuildContext context, Post post) {
+    final country = CountryScope.maybeOf(context)?.country;
+    final id = post.dramaId?.trim() ?? '';
+    if (id.isNotEmpty && !id.startsWith('short-')) {
+      final t = DramaListService.instance.getDisplayTitle(id, country);
+      if (t.isNotEmpty) return t;
+    }
+    final stored = post.dramaTitle?.trim();
+    if (stored != null && stored.isNotEmpty) {
+      final byTitle =
+          DramaListService.instance.getDisplayTitleByTitle(stored, country);
+      if (byTitle.isNotEmpty && byTitle != stored) return byTitle;
+      final fromExtras =
+          _displayTitleFromExtraLanguageMatch(stored, country);
+      if (fromExtras.isNotEmpty) return fromExtras;
+      return stored;
+    }
+    return post.title.trim();
+  }
+
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: Listenable.merge([
+        DramaListService.instance.extraNotifier,
+        DramaListService.instance.listNotifier,
+      ]),
+      builder: (context, _) => _buildWithCatalog(context),
+    );
+  }
+
+  Widget _buildWithCatalog(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final s = CountryScope.of(context).strings;
     final bool isMyReview =
         currentUserAuthor != null && post.author == currentUserAuthor;
     final thumb = post.dramaThumbnail?.trim();
     final hasHttpThumb = thumb != null && thumb.startsWith('http');
-    final dramaTitle =
-        post.dramaTitle?.trim().isNotEmpty == true ? post.dramaTitle! : post.title;
+    final dramaTitle = _displayDramaTitle(context, post);
     final body = (post.body ?? '').replaceAll(RegExp(r'\s+'), ' ').trim();
     final r = (post.rating ?? 0).clamp(0.0, 5.0);
 
@@ -150,39 +281,16 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
       );
     }
 
-    Widget bodyForTap = bodyText;
-    if (isMyReview) {
-      bodyForTap = Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(top: 1, right: 8),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: cs.secondary,
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                s.get('myPostBadge'),
-                style: GoogleFonts.notoSansKr(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                  color: cs.onSecondary,
-                ),
-              ),
-            ),
-          ),
-          Expanded(child: bodyText),
-        ],
-      );
-    }
+    final Widget bodyForTap = bodyText;
 
     final titleStyle = GoogleFonts.notoSansKr(
       fontSize: 15,
       fontWeight: FontWeight.w700,
-      color: cs.onSurface,
-      height: 1.08,
+      color: Color.alphaBlend(
+        cs.onSurface.withValues(alpha: 0.78),
+        cs.surface,
+      ),
+      height: 1.0,
     );
 
     /// 제목은 글자 너비만 드라마 탭 (Expanded로 가로 꽉 차지 않게).
@@ -249,7 +357,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
             child: thumbChild,
           );
 
-    final authorRow = Row(
+    final authorRowCore = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         ConstrainedBox(
@@ -271,10 +379,38 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
           photoUrl: post.authorPhotoUrl,
           author: post.author,
           colorIndex: post.authorAvatarColorIndex,
-          size: 26,
+          size: 22,
         ),
       ],
     );
+
+    final navAuthor = _authorNavKey(post.author);
+    final authorRow = navAuthor.isEmpty
+        ? authorRowCore
+        : Material(
+            type: MaterialType.transparency,
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () {
+                final nav = navAuthor;
+                final ctx = context;
+                // 상위 InkWell(onReviewBodyTap) 등과 겹칠 때 Navigator 잠금 회피
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (!ctx.mounted) return;
+                  Navigator.push<void>(
+                    ctx,
+                    MaterialPageRoute<void>(
+                      builder: (_) => UserPostsScreen(authorName: nav),
+                    ),
+                  );
+                });
+              },
+              borderRadius: BorderRadius.circular(8),
+              splashColor: _reviewTapSplash(cs),
+              highlightColor: _reviewTapHighlight(cs),
+              child: authorRowCore,
+            ),
+          );
 
     final bool canModeratorDelete =
         isAppModerator() && onPostDeleted != null && !isMyReview;
@@ -369,38 +505,41 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
       );
     }
 
-    final Widget authorBlock = ownerEditDeleteRow != null && thumbTrailingActions == null
-        ? Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              authorRow,
-              Padding(
-                padding: const EdgeInsets.only(top: 2),
-                child: Align(
-                  alignment: Alignment.centerRight,
-                  child: ownerEditDeleteRow,
-                ),
-              ),
-            ],
-          )
-        : authorRow;
-
-    // 제목은 1줄만. Expanded + topLeft: 오른쪽 작성자 블록이 더 높아도 제목을 위에 붙여 별점과의 빈 간격을 없앰.
-    final Widget headerRow = Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    // 제목·닉네임·프로필은 한 줄에서 세로 중앙 정렬. 수정·삭제는 그 아래 오른쪽.
+    final Widget headerRow = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Expanded(
-          child: Align(
-            alignment: Alignment.topLeft,
-            child: dramaTitleWidget,
-          ),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: dramaTitleWidget,
+              ),
+            ),
+            const SizedBox(width: 8),
+            authorRow,
+          ],
         ),
-        const SizedBox(width: 8),
-        authorBlock,
+        if (ownerEditDeleteRow != null && thumbTrailingActions == null)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: ownerEditDeleteRow,
+            ),
+          ),
       ],
     );
 
+    final halfStarLabelStyle = GoogleFonts.notoSansKr(
+      fontSize: 12,
+      fontWeight: FontWeight.w700,
+      height: 1.0,
+      color: _starOrange,
+    );
     final Widget starRowWidget = onRatingTap != null
         ? Material(
             type: MaterialType.transparency,
@@ -412,11 +551,11 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
               borderRadius: BorderRadius.circular(6),
               child: Padding(
                 padding: EdgeInsets.zero,
-                child: _starRow(r, _thumbW),
+                child: _starRow(r, _thumbW, halfLabelStyle: halfStarLabelStyle),
               ),
             ),
           )
-        : _starRow(r, _thumbW);
+        : _starRow(r, _thumbW, halfLabelStyle: halfStarLabelStyle);
 
     final Widget ratingRow = Align(
       alignment: Alignment.centerLeft,
@@ -479,8 +618,9 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           headerRow,
+          SizedBox(height: _gapTitleToStars),
           ratingRow,
-          const SizedBox(height: 6),
+          SizedBox(height: _gapStarsToThumb),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [

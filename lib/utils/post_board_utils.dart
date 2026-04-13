@@ -21,13 +21,19 @@ String _postFeedFilterToken(Post post) {
   return post.subreddit.trim().toLowerCase();
 }
 
+/// 리뷰 게시판: 별점만 있고 본문이 비어 있으면 목록에 넣지 않음.
+bool reviewFeedPostHasWrittenBody(Post post) {
+  final b = post.body?.replaceAll(RegExp(r'\s+'), ' ').trim() ?? '';
+  return b.isNotEmpty;
+}
+
 /// DramaFeed 탭 필터: review / trend / talk / ask
 bool postMatchesFeedFilter(Post post, String board) {
   final t = _postFeedFilterToken(post);
 
   switch (board) {
     case 'review':
-      return t == 'review';
+      return t == 'review' && reviewFeedPostHasWrittenBody(post);
     case 'trend':
       return postInTrendFeed(post);
     case 'talk':

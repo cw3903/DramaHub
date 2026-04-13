@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import '../models/profile_favorite.dart';
 import 'auth_service.dart';
 import 'follow_service.dart';
 import 'post_service.dart';
@@ -19,6 +20,8 @@ class UserProfileService {
   final ValueNotifier<int?> avatarColorNotifier = ValueNotifier<int?>(null);
   /// 가입 시 선택한 국가 코드 (us, kr, cn, jp). 프로필 표시용.
   final ValueNotifier<String?> signupCountryNotifier = ValueNotifier<String?>(null);
+  /// Letterboxd 스타일 프로필 즐겨찾기 드라마 (최대 4, `users/{uid}.favorites`).
+  final ValueNotifier<List<ProfileFavorite>> favoritesNotifier = ValueNotifier<List<ProfileFavorite>>([]);
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseStorage _storage = FirebaseStorage.instance;
   bool _loaded = false;
@@ -108,6 +111,7 @@ class UserProfileService {
       nicknameNotifier.value = null;
       profileImageUrlNotifier.value = null;
       signupCountryNotifier.value = null;
+      favoritesNotifier.value = [];
       FollowService.instance.stopFollowingCountListener();
       _loaded = true;
       return;
@@ -129,15 +133,18 @@ class UserProfileService {
         } else {
           avatarColorNotifier.value = (colorIdx as num).toInt();
         }
+        favoritesNotifier.value = _parseFavoritesList(data['favorites']);
       } else {
         nicknameNotifier.value = null;
         profileImageUrlNotifier.value = null;
         avatarColorNotifier.value = null;
+        favoritesNotifier.value = [];
       }
     } catch (_) {
       nicknameNotifier.value = null;
       profileImageUrlNotifier.value = null;
       avatarColorNotifier.value = null;
+      favoritesNotifier.value = [];
     }
     FollowService.instance.startFollowingCountListener(uid);
     _loaded = true;
@@ -159,9 +166,50 @@ class UserProfileService {
     nicknameNotifier.value = null;
     profileImageUrlNotifier.value = null;
     avatarColorNotifier.value = null;
+    favoritesNotifier.value = [];
     FollowService.instance.stopFollowingCountListener();
     _loaded = false;
     _lastLoadedUid = null;
+  }
+
+  static List<ProfileFavorite> _parseFavoritesList(dynamic raw) {
+    if (raw is! List) return [];
+    final out = <ProfileFavorite>[];
+    for (final e in raw) {
+      final fav = ProfileFavorite.fromDynamic(e);
+      if (fav != null) out.add(fav);
+      if (out.length >= 4) break;
+    }
+    return out;
+  }
+
+  /// `favorites` 배열 전체 저장 (최대 4개).
+  Future<void> saveFavorites(List<ProfileFavorite> list) async {
+    final uid = AuthService.instance.currentUser.value?.uid;
+    if (uid == null) return;
+    final trimmed = list.take(4).toList();
+    try {
+      await _userDoc.set(
+        {'favorites': trimmed.map((e) => e.toMap()).toList()},
+        SetOptions(merge: true),
+      );
+      favoritesNotifier.value = trimmed;
+    } catch (e, st) {
+      debugPrint('saveFavorites: $e\n$st');
+    }
+  }
+
+  Future<void> addFavorite(ProfileFavorite fav) async {
+    final cur = List<ProfileFavorite>.from(favoritesNotifier.value);
+    if (cur.length >= 4) return;
+    if (cur.any((e) => e.dramaId == fav.dramaId)) return;
+    cur.add(fav);
+    await saveFavorites(cur);
+  }
+
+  Future<void> removeFavoriteByDramaId(String dramaId) async {
+    final cur = favoritesNotifier.value.where((e) => e.dramaId != dramaId).toList();
+    await saveFavorites(cur);
   }
 
   /// 글/댓글 작성 및 조회 시 사용하는 작성자 이름 (닉네임 > displayName > 이메일앞 > 익명)

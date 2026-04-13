@@ -2,8 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_theme.dart';
 import '../widgets/country_scope.dart';
+import '../services/drama_list_service.dart';
+import '../services/level_service.dart';
+import '../services/post_service.dart';
 import '../services/review_service.dart';
 import '../services/user_profile_service.dart';
+import '../services/watch_history_service.dart';
 
 /// 리뷰 작성 바텀시트
 class WriteReviewSheet extends StatefulWidget {
@@ -11,12 +15,15 @@ class WriteReviewSheet extends StatefulWidget {
     super.key,
     this.dramaId,
     this.dramaTitle,
+    this.editingReviewId,
     this.initialRating,
     this.initialComment,
   });
 
   final String? dramaId;
   final String? dramaTitle;
+  /// 수정 시 `drama_reviews` 문서 id
+  final String? editingReviewId;
   final double? initialRating;
   final String? initialComment;
 
@@ -24,6 +31,7 @@ class WriteReviewSheet extends StatefulWidget {
     BuildContext context, {
     String? dramaId,
     String? dramaTitle,
+    String? editingReviewId,
     double? initialRating,
     String? initialComment,
   }) async {
@@ -38,6 +46,7 @@ class WriteReviewSheet extends StatefulWidget {
         child: WriteReviewSheet(
           dramaId: dramaId,
           dramaTitle: dramaTitle,
+          editingReviewId: editingReviewId,
           initialRating: initialRating,
           initialComment: initialComment,
         ),
@@ -54,8 +63,7 @@ class _WriteReviewSheetState extends State<WriteReviewSheet>
   late double _rating;
   late final TextEditingController _controller;
 
-  bool get _isEditMode =>
-      widget.initialRating != null && widget.initialComment != null;
+  bool get _isEditMode => widget.editingReviewId != null;
   String? _validationMessage;
   late AnimationController _toastAnimController;
   late Animation<Offset> _toastSlideAnim;
@@ -109,46 +117,133 @@ class _WriteReviewSheetState extends State<WriteReviewSheet>
       _showValidationMessage(s.get('ratingRequired'));
       return;
     }
-    if (_controller.text.trim().length < 5) {
-      _showValidationMessage(s.get('reviewMinLength'));
-      return;
-    }
 
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final country = CountryScope.maybeOf(context)?.country;
     Navigator.pop(context);
 
     final dramaId = widget.dramaId;
     final dramaTitle = widget.dramaTitle ?? '';
     if (dramaId != null && dramaId.isNotEmpty) {
       if (_isEditMode) {
-        await ReviewService.instance.update(
-          dramaId: dramaId,
+        final rid = widget.editingReviewId!;
+        await ReviewService.instance.updateById(
+          id: rid,
           rating: _rating,
           comment: _controller.text.trim(),
         );
+        final item = ReviewService.instance.getById(rid);
+        await _syncDiaryAfterReviewSave(
+          dramaId: dramaId,
+          dramaTitle: dramaTitle,
+          country: country,
+        );
+        await PostService.instance.syncReviewFeedPostFromDramaDetail(
+          dramaId: dramaId,
+          dramaTitle: dramaTitle,
+          rating: _rating,
+          comment: _controller.text.trim(),
+          reviewsTabLabel: s.get('tabReviews'),
+          timeSoonLabel: s.get('soon'),
+          existingFeedPostId: item?.feedPostId,
+          forceNewPost: false,
+        );
       } else {
         final authorName = await UserProfileService.instance.getAuthorBaseName();
-        await ReviewService.instance.add(
+        final reviewId = await ReviewService.instance.add(
           dramaId: dramaId,
           dramaTitle: dramaTitle,
           rating: _rating,
           comment: _controller.text.trim(),
           authorName: authorName,
         );
+        await _syncDiaryAfterReviewSave(
+          dramaId: dramaId,
+          dramaTitle: dramaTitle,
+          country: country,
+        );
+        final sync = await PostService.instance.syncReviewFeedPostFromDramaDetail(
+          dramaId: dramaId,
+          dramaTitle: dramaTitle,
+          rating: _rating,
+          comment: _controller.text.trim(),
+          reviewsTabLabel: s.get('tabReviews'),
+          timeSoonLabel: s.get('soon'),
+          forceNewPost: true,
+        );
+        final pid = sync.postId;
+        if (pid != null && pid.isNotEmpty) {
+          await ReviewService.instance.setFeedPostId(
+            reviewId: reviewId,
+            feedPostId: pid,
+          );
+        }
+        if (sync.createdNewPost) {
+          LevelService.instance.addPoints(5);
+        }
       }
     }
 
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            _isEditMode ? s.get('reviewUpdated') : s.get('reviewSubmitted'),
-            style: GoogleFonts.notoSansKr(),
-          ),
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: AppColors.accent,
+    messenger?.showSnackBar(
+      SnackBar(
+        content: Text(
+          _isEditMode ? s.get('reviewUpdated') : s.get('reviewSubmitted'),
+          style: GoogleFonts.notoSansKr(),
         ),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: AppColors.accent,
+      ),
+    );
+  }
+
+  /// 드라마 상세·리뷰 목록에서 리뷰 저장 시 다이어리(시청 기록)에도 같은 작품이 오늘 본 것으로 쌓임.
+  Future<void> _syncDiaryAfterReviewSave({
+    required String dramaId,
+    required String dramaTitle,
+    String? country,
+  }) async {
+    var title = dramaTitle.trim();
+    if (dramaId.isNotEmpty && !dramaId.startsWith('short-')) {
+      final t = DramaListService.instance.getDisplayTitle(dramaId, country);
+      if (t.isNotEmpty) title = t;
+    } else if (title.isEmpty) {
+      final t = DramaListService.instance.getDisplayTitleByTitle(
+        dramaTitle,
+        country,
+      );
+      if (t.isNotEmpty) title = t;
+    }
+    if (title.isEmpty) title = dramaTitle;
+
+    String? imageUrl;
+    if (dramaId.isNotEmpty && !dramaId.startsWith('short-')) {
+      imageUrl = DramaListService.instance.getDisplayImageUrl(dramaId, country);
+    } else {
+      imageUrl = DramaListService.instance.getDisplayImageUrlByTitle(
+        dramaTitle,
+        country,
       );
     }
+
+    var subtitle = '';
+    var views = '0';
+    if (dramaId.isNotEmpty && !dramaId.startsWith('short-')) {
+      subtitle = DramaListService.instance.getDisplaySubtitle(dramaId, country);
+      for (final e in DramaListService.instance.listNotifier.value) {
+        if (e.id == dramaId) {
+          views = e.views;
+          break;
+        }
+      }
+    }
+
+    await WatchHistoryService.instance.add(
+      id: dramaId,
+      title: title,
+      subtitle: subtitle,
+      views: views,
+      imageUrl: imageUrl,
+    );
   }
 
   @override

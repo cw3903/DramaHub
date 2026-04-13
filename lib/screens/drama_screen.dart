@@ -8,73 +8,12 @@ import '../services/drama_list_service.dart';
 import '../services/drama_view_service.dart';
 import '../services/review_service.dart';
 import '../widgets/country_scope.dart';
-import '../widgets/optimized_network_image.dart';
+import '../widgets/drama_grid_card.dart';
 import 'drama_detail_page.dart';
 import 'drama_search_screen.dart';
 
-/// 360pt 기준 화면 너비 비율 (0.85~1.15). 반응형 패딩/폰트/간격용.
-double _dramaScreenScale(BuildContext context) {
-  final w = MediaQuery.sizeOf(context).width;
-  return (w / 360).clamp(0.85, 1.15);
-}
-
 /// 1페이지당 드라마 카드 개수 (홈탭 페이지네이션과 동일 디자인)
 const int _dramaCardsPerPage = 30;
-
-/// 탭 인디케이터: 글자 길이와 관계없이 짧은 고정 길이 + 둥근 끝
-class _ShortRoundedIndicator extends Decoration {
-  const _ShortRoundedIndicator({
-    required this.color,
-    this.width = 28,
-    this.height = 2.5,
-    this.offsetDown = 0,
-  });
-
-  final Color color;
-  final double width;
-  final double height;
-
-  /// 인디케이터를 아래로 밀어낼 픽셀 (양수 = 아래)
-  final double offsetDown;
-
-  @override
-  BoxPainter createBoxPainter([VoidCallback? onChanged]) {
-    return _ShortRoundedIndicatorPainter(
-      color: color,
-      width: width,
-      height: height,
-      offsetDown: offsetDown,
-    );
-  }
-}
-
-class _ShortRoundedIndicatorPainter extends BoxPainter {
-  _ShortRoundedIndicatorPainter({
-    required this.color,
-    this.width = 28,
-    this.height = 2.5,
-    this.offsetDown = 0,
-  });
-
-  final Color color;
-  final double width;
-  final double height;
-  final double offsetDown;
-
-  @override
-  void paint(Canvas canvas, Offset offset, ImageConfiguration configuration) {
-    final rect = offset & configuration.size!;
-    final w = width.clamp(0.0, rect.width);
-    final h = height;
-    final left = rect.left + (rect.width - w) / 2;
-    final top = rect.bottom - h + offsetDown;
-    final rrect = RRect.fromRectAndRadius(
-      Rect.fromLTWH(left, top, w, h),
-      Radius.circular(h / 2),
-    );
-    canvas.drawRRect(rrect, Paint()..color = color);
-  }
-}
 
 /// 리뷰 탭 - 검색창 + 인기 순위 / 신작 / 카테고리 탭 + 그리드 드라마 카드
 class DramaScreen extends StatefulWidget {
@@ -308,7 +247,8 @@ class _DramaScreenState extends State<DramaScreen> {
     final cs = theme.colorScheme;
     final s = CountryScope.of(context).strings;
     final country = CountryScope.maybeOf(context)?.country;
-    final r = _dramaScreenScale(context);
+    /// 상단 헤더 세로는 `dramaFeedHeaderContentHeight` = [dramaFeedHeaderToolbarRh]+[dramaFeedHeaderTabStripRh]·rh+[dramaFeedHeaderSlopPx] 고정.
+    final rh = dramaFeedHeaderScale(context);
 
     const headerBlue = Color(0xFF3399FF);
     final isDark = theme.brightness == Brightness.dark;
@@ -332,116 +272,167 @@ class _DramaScreenState extends State<DramaScreen> {
           top: false,
           child: DefaultTabController(
             length: 3,
-            child: NestedScrollView(
-              headerSliverBuilder: (context, innerBoxIsScrolled) => [
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
                 // 상태바 영역만 흰색(라이트) / 헤더색(다크)
-                SliverToBoxAdapter(
-                  child: Container(
-                    height: MediaQuery.of(context).padding.top,
-                    color: statusBarBg,
-                  ),
+                Container(
+                  height: MediaQuery.of(context).padding.top,
+                  color: statusBarBg,
                 ),
-                // 상단 헤더: 검색창 + 탭 (파란색) — 스크롤 시 함께 올라감
-                SliverToBoxAdapter(
-                  child: Container(
-                    color: headerBg,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Padding(
-                          padding: EdgeInsets.fromLTRB(
-                            16 * r,
-                            12 * r,
-                            16 * r,
-                            4 * r,
+                // 상단 헤더: 세로는 [dramaFeedHeaderToolbarRh]/[dramaFeedHeaderTabStripRh] 슬롯만 고정(클립).
+                Container(
+                  decoration: BoxDecoration(color: headerBg),
+                  height: dramaFeedHeaderContentHeight(context),
+                  clipBehavior: Clip.hardEdge,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.max,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // 검색창: 슬롯 높이만 고정. 크기·위치는 Stack 안에서만 조정.
+                      SizedBox(
+                        height: dramaFeedHeaderToolbarRh * rh,
+                        child: ClipRect(
+                          child: Stack(
+                            fit: StackFit.expand,
+                            clipBehavior: Clip.hardEdge,
+                            children: [
+                              // 하단 정렬: 가운데 두면 탭과 사이가 벌어짐 → 탭에 붙여 한 덩어리처럼
+                              Align(
+                                alignment: Alignment.bottomCenter,
+                                child: Padding(
+                                  padding: EdgeInsets.fromLTRB(
+                                    16 * rh,
+                                    4 * rh,
+                                    16 * rh,
+                                    5 * rh,
+                                  ),
+                                  child: InkWell(
+                                    onTap: () {
+                                      Navigator.of(context).push(
+                                        CupertinoPageRoute(
+                                          builder: (_) =>
+                                              const DramaSearchScreen(),
+                                        ),
+                                      );
+                                    },
+                                    borderRadius:
+                                        BorderRadius.circular(8 * rh),
+                                    child: Container(
+                                      padding: EdgeInsets.symmetric(
+                                        horizontal: 16 * rh,
+                                        vertical: 6 * rh,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: searchBarBg,
+                                        borderRadius:
+                                            BorderRadius.circular(8 * rh),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.max,
+                                        children: [
+                                          Icon(
+                                            LucideIcons.search,
+                                            size: 18 * rh,
+                                            color: searchBarFg,
+                                          ),
+                                          SizedBox(width: 10 * rh),
+                                          Expanded(
+                                            child: Text(
+                                              s.get('dramaSearchHint'),
+                                              maxLines: 1,
+                                              overflow:
+                                                  TextOverflow.ellipsis,
+                                              style: GoogleFonts.notoSansKr(
+                                                fontSize: (12 * rh)
+                                                    .roundToDouble(),
+                                                height: 1.12,
+                                                color: searchBarFg,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
-                          child: InkWell(
-                            onTap: () {
-                              Navigator.of(context).push(
-                                CupertinoPageRoute(
-                                  builder: (_) => const DramaSearchScreen(),
+                        ),
+                      ),
+                      // 탭바: 슬롯 높이만 고정. 글자 크기만 바꿀 때는 안쪽 FittedBox가 넘침만 처리.
+                      SizedBox(
+                        height: dramaFeedHeaderTabStripRh * rh +
+                            dramaFeedHeaderSlopPx,
+                        child: ClipRect(
+                          clipBehavior: Clip.hardEdge,
+                          child: LayoutBuilder(
+                            builder: (context, tabBarConstraints) {
+                              const nominalTabBarHRh = 44.0;
+                              return FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: Alignment.topLeft,
+                                child: SizedBox(
+                                  width: tabBarConstraints.maxWidth,
+                                  height: nominalTabBarHRh * rh,
+                                  child: TabBar(
+                                    isScrollable: true,
+                                    labelColor: headerFg,
+                                    unselectedLabelColor: headerFg
+                                        .withValues(alpha: 0.88),
+                                    indicator: const BoxDecoration(),
+                                    indicatorWeight: 0,
+                                    indicatorSize:
+                                        TabBarIndicatorSize.label,
+                                    padding: EdgeInsets.only(
+                                      left: 14 * rh,
+                                      right: 14 * rh,
+                                      top: 1 * rh,
+                                      bottom: 2 * rh,
+                                    ),
+                                    tabAlignment: TabAlignment.start,
+                                    labelPadding: EdgeInsets.symmetric(
+                                      horizontal: 8 * rh,
+                                      vertical: 2 * rh,
+                                    ),
+                                    dividerColor: Colors.transparent,
+                                    overlayColor: WidgetStateProperty.all(
+                                      Colors.transparent,
+                                    ),
+                                    splashFactory: NoSplash.splashFactory,
+                                    labelStyle: GoogleFonts.notoSansKr(
+                                      fontSize: (16 * rh)
+                                          .roundToDouble(),
+                                      fontWeight: FontWeight.w900,
+                                      height: 1.08,
+                                      letterSpacing: -0.2,
+                                    ),
+                                    unselectedLabelStyle:
+                                        GoogleFonts.notoSansKr(
+                                      fontSize: (13.5 * rh)
+                                          .roundToDouble(),
+                                      fontWeight: FontWeight.w700,
+                                      height: 1.08,
+                                      letterSpacing: -0.15,
+                                    ),
+                                    tabs: [
+                                      Tab(text: s.get('popularRanking')),
+                                      Tab(text: s.get('newReleases')),
+                                      Tab(text: s.get('category')),
+                                    ],
+                                  ),
                                 ),
                               );
                             },
-                            borderRadius: BorderRadius.circular(6 * r),
-                            child: Container(
-                              padding: EdgeInsets.symmetric(
-                                horizontal: 16 * r,
-                                vertical: 8 * r,
-                              ),
-                              decoration: BoxDecoration(
-                                color: searchBarBg,
-                                borderRadius: BorderRadius.circular(6 * r),
-                              ),
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    LucideIcons.search,
-                                    size: 20 * r,
-                                    color: searchBarFg,
-                                  ),
-                                  SizedBox(width: 12 * r),
-                                  Text(
-                                    s.get('dramaSearchHint'),
-                                    style: GoogleFonts.notoSansKr(
-                                      fontSize: (13 * r).roundToDouble(),
-                                      color: searchBarFg,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
                           ),
                         ),
-                        TabBar(
-                          isScrollable: true,
-                          labelColor: headerFg,
-                          unselectedLabelColor: headerFg.withOpacity(0.85),
-                          indicator: _ShortRoundedIndicator(
-                            color: headerFg,
-                            width: 28,
-                            height: 2.5,
-                            offsetDown: 4,
-                          ),
-                          indicatorWeight: 3,
-                          indicatorSize: TabBarIndicatorSize.label,
-                          indicatorPadding: EdgeInsets.only(top: 0, bottom: 10),
-                          padding: EdgeInsets.only(
-                            left: 16 * r,
-                            right: 16 * r,
-                            bottom: 3,
-                          ),
-                          tabAlignment: TabAlignment.start,
-                          labelPadding: EdgeInsets.symmetric(
-                            horizontal: 6 * r,
-                            vertical: 0,
-                          ),
-                          dividerColor: Colors.transparent,
-                          overlayColor: WidgetStateProperty.all(
-                            Colors.transparent,
-                          ),
-                          splashFactory: NoSplash.splashFactory,
-                          labelStyle: GoogleFonts.notoSansKr(
-                            fontSize: (17 * r).roundToDouble(),
-                            fontWeight: FontWeight.w900,
-                          ),
-                          unselectedLabelStyle: GoogleFonts.notoSansKr(
-                            fontSize: (14 * r).roundToDouble(),
-                            fontWeight: FontWeight.w800,
-                          ),
-                          tabs: [
-                            Tab(text: s.get('popularRanking')),
-                            Tab(text: s.get('newReleases')),
-                            Tab(text: s.get('category')),
-                          ],
-                        ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ),
                 // 필터: 카테고리 탭일 때만 — 필터 버튼 행만 (패널은 오버레이로 표시)
-                SliverToBoxAdapter(
-                  child: Builder(
+                Builder(
                     builder: (ctx) {
                       final controller = DefaultTabController.of(ctx);
                       if (controller == null) return const SizedBox.shrink();
@@ -455,7 +446,7 @@ class _DramaScreenState extends State<DramaScreen> {
                               );
                             return const SizedBox.shrink();
                           }
-                          final scale = _dramaScreenScale(ctx);
+                          final scale = dramaGridScreenScale(ctx);
                           final filterFg = isDark
                               ? cs.onSurface
                               : Colors.grey.shade800;
@@ -484,7 +475,7 @@ class _DramaScreenState extends State<DramaScreen> {
                                     Text(
                                       s.get('filter'),
                                       style: GoogleFonts.notoSansKr(
-                                        fontSize: (13 * scale).roundToDouble(),
+                                        fontSize: (11.5 * scale).roundToDouble(),
                                         fontWeight: FontWeight.w600,
                                         color: filterFg,
                                       ),
@@ -505,11 +496,10 @@ class _DramaScreenState extends State<DramaScreen> {
                         },
                       );
                     },
-                  ),
                 ),
-              ],
-              body: Stack(
-                children: [
+                Expanded(
+                  child: Stack(
+                    children: [
                   Positioned.fill(
                     child: FutureBuilder<Map<String, int>>(
                       future: DramaViewService.instance.getAllViewCounts(),
@@ -524,7 +514,7 @@ class _DramaScreenState extends State<DramaScreen> {
                             final newList = DramaListService.instance
                                 .getListForCountrySortedByReleaseDate(country);
                             if (baseList.isEmpty) {
-                              final scale = _dramaScreenScale(context);
+                              final scale = dramaGridScreenScale(context);
                               return Center(
                                 child: Text(
                                   s.get('notReadyYet'),
@@ -600,7 +590,7 @@ class _DramaScreenState extends State<DramaScreen> {
                         final controller = DefaultTabController.of(ctx);
                         if (controller == null || controller.index != 2)
                           return const SizedBox.shrink();
-                        final scale = _dramaScreenScale(context);
+                        final scale = dramaGridScreenScale(context);
                         final filterFg = isDark
                             ? cs.onSurface
                             : Colors.grey.shade800;
@@ -772,8 +762,10 @@ class _DramaScreenState extends State<DramaScreen> {
                       },
                     ),
                   ),
-                ],
-              ),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -828,64 +820,6 @@ class _PopularGrid extends StatelessWidget {
       viewCounts: viewCounts,
       onTapCard: onTapCard,
       posterPlaceholder: posterPlaceholder,
-    );
-  }
-}
-
-/// 드라마 그리드 (3열 카드)
-class _DramaGridView extends StatelessWidget {
-  const _DramaGridView({
-    required this.list,
-    required this.country,
-    required this.onTapCard,
-    required this.posterPlaceholder,
-    Map<String, int>? viewCounts,
-  }) : viewCounts = viewCounts ?? const {};
-
-  final List<DramaItem> list;
-  final String? country;
-  final Map<String, int> viewCounts;
-  final void Function(DramaItem item) onTapCard;
-  final Widget Function(BuildContext context) posterPlaceholder;
-
-  @override
-  Widget build(BuildContext context) {
-    final r = _dramaScreenScale(context);
-    final horizontalGap = 8 * r;
-    return GridView.builder(
-      padding: EdgeInsets.fromLTRB(horizontalGap, 0, horizontalGap, 16 * r),
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        childAspectRatio: 0.53,
-        crossAxisSpacing: horizontalGap,
-        mainAxisSpacing: 0,
-      ),
-      itemCount: list.length,
-      itemBuilder: (context, index) {
-        final item = list[index];
-        final displayTitle = DramaListService.instance.getDisplayTitle(
-          item.id,
-          country,
-        );
-        final displaySubtitle = DramaListService.instance.getDisplaySubtitle(
-          item.id,
-          country,
-        );
-        final imageUrl =
-            DramaListService.instance.getDisplayImageUrl(item.id, country) ??
-            item.imageUrl;
-        final rawRating =
-            ReviewService.instance.getByDramaId(item.id)?.rating ?? item.rating;
-        final rating = rawRating > 0 ? rawRating : 0.0;
-        return _DramaGridCard(
-          displayTitle: displayTitle,
-          displaySubtitle: displaySubtitle,
-          imageUrl: imageUrl,
-          rating: rating,
-          onTap: () => onTapCard(item),
-          posterPlaceholder: posterPlaceholder(context),
-        );
-      },
     );
   }
 }
@@ -1082,7 +1016,7 @@ class _DramaGridWithPaginationState extends State<_DramaGridWithPagination> {
     final pageList = list.sublist(start, end);
 
     final cs = Theme.of(context).colorScheme;
-    final r = _dramaScreenScale(context);
+    final r = dramaGridScreenScale(context);
     return CustomScrollView(
       primary: true,
       slivers: [
@@ -1117,7 +1051,7 @@ class _DramaGridWithPaginationState extends State<_DramaGridWithPagination> {
                   widget.ratingOverrides!.containsKey(item.id)) {
                 rating = widget.ratingOverrides![item.id]!;
               }
-              return _DramaGridCard(
+              return DramaGridCard(
                 displayTitle: displayTitle,
                 displaySubtitle: displaySubtitle,
                 imageUrl: imageUrl,
@@ -1140,128 +1074,6 @@ class _DramaGridWithPaginationState extends State<_DramaGridWithPagination> {
           child: SizedBox(height: MediaQuery.of(context).padding.bottom + 22),
         ),
       ],
-    );
-  }
-}
-
-class _DramaGridCard extends StatelessWidget {
-  const _DramaGridCard({
-    required this.displayTitle,
-    required this.displaySubtitle,
-    required this.imageUrl,
-    required this.rating,
-    required this.onTap,
-    required this.posterPlaceholder,
-  });
-
-  final String displayTitle;
-  final String displaySubtitle;
-  final String? imageUrl;
-  final double rating;
-  final VoidCallback onTap;
-  final Widget posterPlaceholder;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final textColor = isDark ? cs.onSurface : const Color(0xFF333333);
-    final greyColor = isDark ? cs.onSurfaceVariant : Colors.grey.shade500;
-    final r = _dramaScreenScale(context);
-    final titleFontSize = (12 * r).roundToDouble();
-    final metaFontSize = (11 * r).roundToDouble();
-    final starSize = 12 * r;
-    final genreColor = isDark ? cs.onSurfaceVariant : Colors.grey.shade600;
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final w = constraints.maxWidth;
-        final posterHeight = w / (1 / 1.4);
-        return GestureDetector(
-          onTap: onTap,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SizedBox(
-                width: w,
-                height: posterHeight,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(8 * r),
-                  child: imageUrl != null && imageUrl!.isNotEmpty
-                      ? OptimizedNetworkImage(
-                          imageUrl: imageUrl!,
-                          fit: BoxFit.cover,
-                          memCacheWidth: 320,
-                          memCacheHeight: 448,
-                          placeholder: posterPlaceholder,
-                          errorWidget: posterPlaceholder,
-                        )
-                      : posterPlaceholder,
-                ),
-              ),
-              SizedBox(height: 1 * r),
-              SizedBox(
-                height: titleFontSize * 2,
-                child: Text(
-                  displayTitle,
-                  strutStyle: StrutStyle(
-                    fontSize: titleFontSize,
-                    height: 1.0,
-                    leading: 0,
-                    forceStrutHeight: true,
-                    fontWeight: FontWeight.w700,
-                  ),
-                  style: GoogleFonts.notoSansKr(
-                    fontSize: titleFontSize,
-                    fontWeight: FontWeight.w700,
-                    color: textColor,
-                    height: 1.0,
-                  ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              SizedBox(height: 0.5 * r),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Icon(
-                    Icons.star_rounded,
-                    size: starSize,
-                    color: rating > 0 ? Colors.amber : greyColor,
-                  ),
-                  Transform.translate(
-                    offset: Offset(0 * r, 0),
-                    child: Text(
-                      rating == 0 ? '0' : rating.toStringAsFixed(1),
-                      style: GoogleFonts.notoSansKr(
-                        fontSize: metaFontSize,
-                        fontWeight: FontWeight.w500,
-                        color: isDark ? cs.onSurface : Colors.black,
-                      ),
-                    ),
-                  ),
-                  if (displaySubtitle.isNotEmpty) ...[
-                    SizedBox(width: 4 * r),
-                    Expanded(
-                      child: Text(
-                        displaySubtitle,
-                        style: GoogleFonts.notoSansKr(
-                          fontSize: metaFontSize,
-                          fontWeight: FontWeight.w600,
-                          color: genreColor,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ],
-          ),
-        );
-      },
     );
   }
 }

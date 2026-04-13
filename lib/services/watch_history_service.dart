@@ -183,4 +183,21 @@ class WatchHistoryService {
       });
     }
   }
+
+  bool isWatched(String id) {
+    return listNotifier.value.any((e) => e.id == id);
+  }
+
+  Future<void> remove(String id) async {
+    final list = List<WatchedDramaItem>.from(listNotifier.value);
+    list.removeWhere((e) => e.id == id);
+    listNotifier.value = list;
+    await _persist(list);
+    final uid = _uid;
+    if (uid != null) {
+      await _watchCol.doc(id).delete().catchError((e) {
+        debugPrint('WatchHistoryService remove: $e');
+      });
+    }
+  }
 }

@@ -22,8 +22,10 @@ import '../services/locale_service.dart';
 import '../services/post_service.dart';
 import '../services/user_profile_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/app_bar_back_icon_button.dart';
 import '../widgets/country_scope.dart';
 import '../widgets/share_sheet.dart';
+import '../widgets/review_share_card.dart';
 import '../services/saved_service.dart';
 import '../models/post.dart';
 import '../models/drama.dart';
@@ -79,6 +81,10 @@ class PostDetailPage extends StatefulWidget {
     this.initialForwardStack = const [],
     this.initialTabIndex,
     this.initialBoardPosts,
+    this.hideBelowLetterboxdLike = false,
+
+    /// Firestore에 없는 로컬 전용 합성 리뷰 글 — 조회수/재조회/좋아요 API·편집·삭제 생략.
+    this.offlineSyntheticReview = false,
   });
 
   final Post post;
@@ -87,19 +93,28 @@ class PostDetailPage extends StatefulWidget {
   final List<(Post, int)> initialBackStack;
   final List<(Post, int)> initialForwardStack;
   final int? initialTabIndex;
+
   /// 홈탭 게시판 목록(인기글/자유/질문). 넘기면 글 상세 하단 DramaFeed에 그대로 표시
   final List<Post>? initialBoardPosts;
+
+  /// 프로필 Recent Activity 등 — Letterboxd 리뷰 상세에서 LIKE 행 아래(Film·댓글·피드) 숨김.
+  final bool hideBelowLetterboxdLike;
+
+  /// [hideBelowLetterboxdLike]와 함께 쓰는 로컬-only 리뷰 상세 (posts 문서 없음).
+  final bool offlineSyntheticReview;
 
   @override
   State<PostDetailPage> createState() => _PostDetailPageState();
 }
 
-class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObserver {
+class _PostDetailPageState extends State<PostDetailPage>
+    with WidgetsBindingObserver {
   final ScrollController _scrollController = ScrollController();
   final GlobalKey _commentsKey = GlobalKey();
   final GlobalKey _inputCardKey = GlobalKey();
   final GlobalKey _morePostsSectionKey = GlobalKey();
   final GlobalKey _newCommentKey = GlobalKey();
+
   /// 등록 직후 이 댓글을 화면 맨 위로 스크롤할 id (한 번 쓰고 null로 초기화)
   String? _scrollToCommentId;
   final TextEditingController _commentController = TextEditingController();
@@ -110,22 +125,29 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
   bool _votePending = false;
   Post? _currentPost;
   String? _currentUserAuthor;
+
   /// 답글 달 댓글 id (null이면 일반 댓글)
   String? _replyingToCommentId;
   bool _isSubmittingComment = false;
   int _commentLines = 2;
+
   /// 댓글에 첨부할 이미지/GIF 로컬 경로 (선택 시 설정, 전송 후 초기화)
   String? _commentImagePath;
-  final ValueNotifier<String?> _commentImagePathNotifier = ValueNotifier<String?>(null);
+  final ValueNotifier<String?> _commentImagePathNotifier =
+      ValueNotifier<String?>(null);
   int _commentPage = 0;
   static const int _commentsPerPage = 20;
+
   /// 글별로 마지막으로 보던 댓글 페이지 (다시 들어왔을 때 복원)
   static final Map<String, int> _savedCommentPageByPostId = {};
-  final ValueNotifier<bool> _commentSortByTop = ValueNotifier(false); // true: 추천순, false: 시간순
+  final ValueNotifier<bool> _commentSortByTop = ValueNotifier(
+    false,
+  ); // true: 추천순, false: 시간순
   bool _showFab = false;
   late int _morePostsTabIndex;
   Timer? _keyboardDebounceTimer;
   bool _isRefreshing = false;
+
   /// Letterboxd 리뷰 상세: 스포일러 본문 공개 여부 (글 바뀌면 초기화)
   bool _reviewSpoilerRevealed = false;
   String? _letterboxdSpoilerBoundPostId;
@@ -134,12 +156,20 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
   late final List<(Post, int)> _forwardStack;
 
   Post get _post => _currentPost ?? widget.post;
-  bool get _isMine => _currentUserAuthor != null && _post.author == _currentUserAuthor;
+  bool get _isMine =>
+      _currentUserAuthor != null && _post.author == _currentUserAuthor;
+
   /// 운영자는 타인 글도 삭제 가능(UID는 [kAppModeratorAuthUids]).
   bool get _canDeletePost => _isMine || isAppModerator();
 
-  Future<void> _showPostAuthorMenu(BuildContext context, String author, TapDownDetails details) async {
+  Future<void> _showPostAuthorMenu(
+    BuildContext context,
+    String author,
+    TapDownDetails details,
+  ) async {
     if (author.isEmpty) return;
+    final kind = postDisplayType(_post);
+    if (kind == 'talk' || kind == 'ask') return;
     final s = CountryScope.of(context).strings;
     final displayName = author.startsWith('u/') ? author.substring(2) : author;
     final result = await showMenu<String>(
@@ -154,49 +184,80 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
         PopupMenuItem(
           value: 'message',
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(LucideIcons.mail, size: 16, color: Colors.blue),
-            const SizedBox(width: 6),
-            Text(s.get('sendMessageToUser'), style: GoogleFonts.notoSansKr(fontSize: 13)),
-          ]),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(LucideIcons.mail, size: 16, color: Colors.blue),
+              const SizedBox(width: 6),
+              Text(
+                s.get('sendMessageToUser'),
+                style: GoogleFonts.notoSansKr(fontSize: 13),
+              ),
+            ],
+          ),
         ),
         PopupMenuItem(
           value: 'posts',
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(LucideIcons.file_text, size: 16, color: Colors.green),
-            const SizedBox(width: 6),
-            Text(s.get('viewUserPosts'), style: GoogleFonts.notoSansKr(fontSize: 13)),
-          ]),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(LucideIcons.file_text, size: 16, color: Colors.green),
+              const SizedBox(width: 6),
+              Text(
+                s.get('viewUserPosts'),
+                style: GoogleFonts.notoSansKr(fontSize: 13),
+              ),
+            ],
+          ),
         ),
         PopupMenuItem(
           value: 'comments',
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(LucideIcons.message_circle, size: 16, color: Colors.green),
-            const SizedBox(width: 6),
-            Text(s.get('viewUserComments'), style: GoogleFonts.notoSansKr(fontSize: 13)),
-          ]),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(LucideIcons.message_circle, size: 16, color: Colors.green),
+              const SizedBox(width: 6),
+              Text(
+                s.get('viewUserComments'),
+                style: GoogleFonts.notoSansKr(fontSize: 13),
+              ),
+            ],
+          ),
         ),
       ],
     );
     if (!mounted || result == null) return;
     if (result == 'message') {
-      final conv = await MessageService.instance.startConversation(author, displayName);
+      final conv = await MessageService.instance.startConversation(
+        author,
+        displayName,
+      );
       if (mounted) {
-        Navigator.push(context, MaterialPageRoute(
-          builder: (_) => MessageThreadScreen(conversationId: conv.id, otherUserName: displayName),
-        ));
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => MessageThreadScreen(
+              conversationId: conv.id,
+              otherUserName: displayName,
+            ),
+          ),
+        );
       }
     } else if (result == 'posts') {
-      Navigator.push(context, MaterialPageRoute(
-        builder: (_) => UserPostsScreen(authorName: author),
-      ));
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => UserPostsScreen(authorName: author)),
+      );
     } else if (result == 'comments') {
       final baseName = author.startsWith('u/') ? author.substring(2) : author;
-      Navigator.push(context, MaterialPageRoute(
-        builder: (_) => UserCommentsScreen(authorName: baseName),
-      ));
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => UserCommentsScreen(authorName: baseName),
+        ),
+      );
     }
   }
 
@@ -220,8 +281,10 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
     final uid = AuthService.instance.currentUser.value?.uid;
     _isLiked = uid != null && widget.post.likedBy.contains(uid);
     _isDisliked = uid != null && widget.post.dislikedBy.contains(uid);
-    _loadLatestPost();
-    _incrementViews();
+    if (!widget.offlineSyntheticReview) {
+      _loadLatestPost();
+      _incrementViews();
+    }
     _commentController.addListener(() {
       final lines = '\n'.allMatches(_commentController.text).length + 2;
       final clamped = lines.clamp(2, 6);
@@ -239,7 +302,8 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
         idx = 0;
       } else if (widget.tabName == s.get('tabHot')) {
         idx = 1;
-      } else if (widget.tabName == s.get('freeBoard') || widget.tabName == s.get('tabGeneral')) {
+      } else if (widget.tabName == s.get('freeBoard') ||
+          widget.tabName == s.get('tabGeneral')) {
         idx = 1;
       } else if (widget.tabName == s.get('tabQnA')) {
         idx = 2;
@@ -308,9 +372,14 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
           ),
         );
       }
-      imageUrl = await PostService.instance.uploadCommentImage(_commentImagePath!);
+      imageUrl = await PostService.instance.uploadCommentImage(
+        _commentImagePath!,
+      );
       if (mounted) ScaffoldMessenger.of(context).hideCurrentSnackBar();
-      if (!mounted) { _isSubmittingComment = false; return; }
+      if (!mounted) {
+        _isSubmittingComment = false;
+        return;
+      }
       if (imageUrl == null) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -328,7 +397,9 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
     final email = AuthService.instance.currentUser.value?.email;
     String author = nickname?.trim().isNotEmpty == true
         ? nickname!.trim()
-        : (displayName?.trim().isNotEmpty == true ? displayName!.trim() : (email != null ? email.split('@').first : ''));
+        : (displayName?.trim().isNotEmpty == true
+              ? displayName!.trim()
+              : (email != null ? email.split('@').first : ''));
     if (author.isEmpty) author = '익명';
     final s = CountryScope.of(context).strings;
     final newComment = PostComment(
@@ -339,7 +410,8 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
       votes: 0,
       replies: const [],
       authorPhotoUrl: UserProfileService.instance.profileImageUrlNotifier.value,
-      authorAvatarColorIndex: UserProfileService.instance.avatarColorNotifier.value,
+      authorAvatarColorIndex:
+          UserProfileService.instance.avatarColorNotifier.value,
       imageUrl: imageUrl,
     );
     final parentId = _replyingToCommentId;
@@ -352,7 +424,9 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
       _commentImagePath = null;
       _commentImagePathNotifier.value = null;
       // 낙관적 업데이트: 답글/댓글을 로컬에 반영 후 서버 재조회로 동기화
-      final parent = parentId != null ? PostService.findCommentById(_post.commentsList, parentId!) : null;
+      final parent = parentId != null
+          ? PostService.findCommentById(_post.commentsList, parentId!)
+          : null;
       final newList = parent != null
           ? PostService.replaceCommentById(
               _post.commentsList,
@@ -390,7 +464,10 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
       }
       // 서버에서 글 다시 불러와 동기화 (실패해도 이미 화면에는 반영됨)
       final locale = CountryScope.maybeOf(context)?.country;
-      final updated = await PostService.instance.getPost(widget.post.id, locale);
+      final updated = await PostService.instance.getPost(
+        widget.post.id,
+        locale,
+      );
       if (mounted && updated != null) {
         setState(() {
           _currentPost = updated;
@@ -406,20 +483,35 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted) return;
           final ctx = _newCommentKey.currentContext;
-          if (ctx != null && _scrollToCommentId != null && _scrollController.hasClients) {
+          if (ctx != null &&
+              _scrollToCommentId != null &&
+              _scrollController.hasClients) {
             final box = ctx.findRenderObject() as RenderBox?;
-            final scrollableContext = _scrollController.position.context.storageContext;
-            final viewportBox = scrollableContext.findRenderObject() as RenderBox?;
+            final scrollableContext =
+                _scrollController.position.context.storageContext;
+            final viewportBox =
+                scrollableContext.findRenderObject() as RenderBox?;
             if (box != null && viewportBox != null) {
-              final commentTop = box.localToGlobal(Offset.zero, ancestor: viewportBox).dy;
-              final targetOffset = (_scrollController.offset + commentTop).clamp(0.0, _scrollController.position.maxScrollExtent);
-              _scrollController.animateTo(targetOffset, duration: const Duration(milliseconds: 350), curve: Curves.easeOut);
+              final commentTop = box
+                  .localToGlobal(Offset.zero, ancestor: viewportBox)
+                  .dy;
+              final targetOffset = (_scrollController.offset + commentTop)
+                  .clamp(0.0, _scrollController.position.maxScrollExtent);
+              _scrollController.animateTo(
+                targetOffset,
+                duration: const Duration(milliseconds: 350),
+                curve: Curves.easeOut,
+              );
             }
             setState(() => _scrollToCommentId = null);
           } else {
             final commentsCtx = _commentsKey.currentContext;
             if (commentsCtx != null) {
-              Scrollable.ensureVisible(commentsCtx, alignment: 0.0, duration: const Duration(milliseconds: 300));
+              Scrollable.ensureVisible(
+                commentsCtx,
+                alignment: 0.0,
+                duration: const Duration(milliseconds: 300),
+              );
             }
           }
         });
@@ -438,9 +530,13 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
 
   Future<void> _onLikeTap() async {
     if (!AuthService.instance.isLoggedIn.value) {
-      await Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginPage()));
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginPage()),
+      );
       return;
     }
+    if (widget.offlineSyntheticReview) return;
     if (_votePending) return;
     HapticFeedback.lightImpact();
     final uid = AuthService.instance.currentUser.value?.uid;
@@ -475,27 +571,38 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
       _currentPost = _post.copyWith(
         votes: _post.votes + likeVoteDelta,
         likedBy: newLikedBy,
-        dislikedBy: nowLiked ? _post.dislikedBy.where((u) => u != uid).toList() : _post.dislikedBy,
+        dislikedBy: nowLiked
+            ? _post.dislikedBy.where((u) => u != uid).toList()
+            : _post.dislikedBy,
         likeCount: nextLikeCount,
         dislikeCount: nextDislikeCount,
       );
     });
-    PostService.instance.togglePostLike(
-      widget.post.id,
-      postAuthorUid: _post.authorUid,
-      postTitle: _post.title,
-    ).then((result) {
-      if (!mounted) return;
-      if (result == null) {
-        setState(() { _isLiked = prevLiked; _isDisliked = prevDisliked; _currentPost = prevPost; });
-      }
-      if (mounted) setState(() => _votePending = false);
-    });
+    PostService.instance
+        .togglePostLike(
+          widget.post.id,
+          postAuthorUid: _post.authorUid,
+          postTitle: _post.title,
+        )
+        .then((result) {
+          if (!mounted) return;
+          if (result == null) {
+            setState(() {
+              _isLiked = prevLiked;
+              _isDisliked = prevDisliked;
+              _currentPost = prevPost;
+            });
+          }
+          if (mounted) setState(() => _votePending = false);
+        });
   }
 
   Future<void> _onDislikeTap() async {
     if (!AuthService.instance.isLoggedIn.value) {
-      await Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginPage()));
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginPage()),
+      );
       return;
     }
     if (_votePending) return;
@@ -512,7 +619,9 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
     } else {
       newDislikedBy.remove(uid);
     }
-    final newLikedBy = nowDisliked ? _post.likedBy.where((u) => u != uid).toList() : _post.likedBy;
+    final newLikedBy = nowDisliked
+        ? _post.likedBy.where((u) => u != uid).toList()
+        : _post.likedBy;
     final voteDelta = nowDisliked ? (_isLiked ? -2 : -1) : 1;
     var nextLikeCountD = _post.likeCount;
     var nextDislikeCountD = _post.dislikeCount;
@@ -541,7 +650,11 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
     PostService.instance.togglePostDislike(widget.post.id).then((result) {
       if (!mounted) return;
       if (result == null) {
-        setState(() { _isLiked = prevLiked; _isDisliked = prevDisliked; _currentPost = prevPost; });
+        setState(() {
+          _isLiked = prevLiked;
+          _isDisliked = prevDisliked;
+          _currentPost = prevPost;
+        });
       }
       if (mounted) setState(() => _votePending = false);
     });
@@ -549,7 +662,10 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
 
   Future<void> _onCommentTap() async {
     if (!AuthService.instance.isLoggedIn.value) {
-      await Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginPage()));
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginPage()),
+      );
       return;
     }
     _scrollToComments();
@@ -602,7 +718,10 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('이미지 선택 실패: ${e.toString()}', style: GoogleFonts.notoSansKr()),
+            content: Text(
+              '이미지 선택 실패: ${e.toString()}',
+              style: GoogleFonts.notoSansKr(),
+            ),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -612,7 +731,10 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
 
   Future<void> _onGifTap() async {
     if (!AuthService.instance.isLoggedIn.value) {
-      await Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginPage()));
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginPage()),
+      );
       return;
     }
     await _pickImageFromSource(ImageSource.gallery);
@@ -622,7 +744,10 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
 
   Future<void> _onPhotoTap() async {
     if (!AuthService.instance.isLoggedIn.value) {
-      await Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginPage()));
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginPage()),
+      );
       return;
     }
     final s = CountryScope.of(context).strings;
@@ -749,7 +874,10 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('이미지 선택 실패: ${e.toString()}', style: GoogleFonts.notoSansKr()),
+            content: Text(
+              '이미지 선택 실패: ${e.toString()}',
+              style: GoogleFonts.notoSansKr(),
+            ),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -775,7 +903,10 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
     if (!_commentFocusNode.hasFocus) return;
     // 키보드 애니메이션 중 수십 번 호출되므로 디바운스: 마지막 호출 후 150ms가 지나야 실행
     _keyboardDebounceTimer?.cancel();
-    _keyboardDebounceTimer = Timer(const Duration(milliseconds: 150), _scrollToShowInputCard);
+    _keyboardDebounceTimer = Timer(
+      const Duration(milliseconds: 150),
+      _scrollToShowInputCard,
+    );
   }
 
   void _scrollToShowInputCard() {
@@ -787,11 +918,16 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
     // 카드 하단의 현재 화면 상의 y좌표
     final cardBottomGlobal = box.localToGlobal(Offset(0, box.size.height)).dy;
     // 키보드를 제외한 실제 뷰포트 하단 y좌표
-    final viewportBottom = MediaQuery.of(context).size.height - MediaQuery.of(context).viewInsets.bottom;
+    final viewportBottom =
+        MediaQuery.of(context).size.height -
+        MediaQuery.of(context).viewInsets.bottom;
     final overflow = cardBottomGlobal - viewportBottom + 16; // 16px 여백
     if (overflow > 0) {
       _scrollController.animateTo(
-        (_scrollController.offset + overflow).clamp(0.0, _scrollController.position.maxScrollExtent),
+        (_scrollController.offset + overflow).clamp(
+          0.0,
+          _scrollController.position.maxScrollExtent,
+        ),
         duration: const Duration(milliseconds: 200),
         curve: Curves.easeOut,
       );
@@ -828,11 +964,11 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
   }
 
   PostDetailResult _buildResult({Post? updatedPost}) => PostDetailResult(
-        updatedPost: updatedPost,
-        backStack: List.of(_backStack),
-        forwardStack: List.of(_forwardStack),
-        tabIndex: _morePostsTabIndex,
-      );
+    updatedPost: updatedPost,
+    backStack: List.of(_backStack),
+    forwardStack: List.of(_forwardStack),
+    tabIndex: _morePostsTabIndex,
+  );
 
   void _goBack() {
     if (_backStack.isEmpty) {
@@ -875,6 +1011,44 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
     _scrollController.jumpTo(0);
   }
 
+  ReviewShareCardData _reviewShareDataFromPost(Post post) {
+    final dramaTitle = post.dramaTitle?.trim().isNotEmpty == true
+        ? post.dramaTitle!
+        : post.title;
+    final thumb = post.dramaThumbnail?.trim();
+    String? posterUrl;
+    String? posterAsset;
+    if (thumb != null && thumb.isNotEmpty) {
+      if (thumb.startsWith('http')) {
+        posterUrl = thumb;
+      } else {
+        posterAsset = thumb;
+      }
+    }
+    final nick = post.author.startsWith('u/')
+        ? post.author.substring(2)
+        : post.author;
+    return ReviewShareCardData(
+      dramaTitle: dramaTitle,
+      rating: post.rating,
+      reviewPreview: post.body ?? '',
+      userNickname: nick,
+      posterUrl: posterUrl,
+      posterAsset: posterAsset,
+    );
+  }
+
+  Future<void> _sharePostOrReview(BuildContext context, Post post) async {
+    if (postDisplayType(post) == 'review') {
+      await ReviewShareImageHelper.captureAndShare(
+        context,
+        _reviewShareDataFromPost(post),
+      );
+    } else {
+      await ShareSheet.show(context, title: post.title, type: 'post');
+    }
+  }
+
   Future<void> _openWritePost() async {
     final ib = postDisplayType(_post) == 'review'
         ? 'review'
@@ -887,7 +1061,10 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
       final s = CountryScope.of(context).strings;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(s.get('postSubmitted'), style: GoogleFonts.notoSansKr()),
+          content: Text(
+            s.get('postSubmitted'),
+            style: GoogleFonts.notoSansKr(),
+          ),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -912,94 +1089,6 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
     });
   }
 
-  Future<void> _showAuthorMenu(BuildContext context, TapDownDetails details, String authorName) async {
-    final nickname = authorName.startsWith('u/') ? authorName.substring(2) : authorName;
-    if (nickname.isEmpty) return;
-    final s = CountryScope.of(context).strings;
-    final result = await showMenu<String>(
-      context: context,
-      position: RelativeRect.fromLTRB(
-        details.globalPosition.dx,
-        details.globalPosition.dy,
-        details.globalPosition.dx + 1,
-        details.globalPosition.dy + 1,
-      ),
-      items: [
-        PopupMenuItem(
-          value: 'message',
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(LucideIcons.mail, size: 16, color: Colors.blue),
-              const SizedBox(width: 6),
-              Text(s.get('sendMessageToUser'), style: GoogleFonts.notoSansKr(fontSize: 13)),
-            ],
-          ),
-        ),
-        PopupMenuItem(
-          value: 'posts',
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(LucideIcons.file_text, size: 16, color: Colors.green),
-              const SizedBox(width: 6),
-              Text(s.get('viewUserPosts'), style: GoogleFonts.notoSansKr(fontSize: 13)),
-            ],
-          ),
-        ),
-        PopupMenuItem(
-          value: 'comments',
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(LucideIcons.message_circle, size: 16, color: Colors.green),
-              const SizedBox(width: 6),
-              Text(s.get('viewUserComments'), style: GoogleFonts.notoSansKr(fontSize: 13)),
-            ],
-          ),
-        ),
-      ],
-    );
-    if (!mounted || result == null) return;
-    switch (result) {
-      case 'message':
-        final conv = await MessageService.instance.startConversation(
-          'user_${nickname.hashCode}',
-          nickname,
-        );
-        if (!mounted) return;
-        Navigator.push(
-          context,
-          CupertinoPageRoute(
-            builder: (_) => MessageThreadScreen(
-              conversationId: conv.id,
-              otherUserName: conv.otherUserName,
-            ),
-          ),
-        );
-        break;
-      case 'posts':
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => UserPostsScreen(authorName: nickname),
-          ),
-        );
-        break;
-      case 'comments':
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => UserCommentsScreen(authorName: nickname),
-          ),
-        );
-        break;
-    }
-  }
-
   /// TextField를 dispose 없이 유지하여 키보드 유지. hasFocus에 따라 주변 레이아웃만 변경.
   Widget _buildInputLayout(ColorScheme cs, dynamic s) {
     return ListenableBuilder(
@@ -1007,7 +1096,10 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
       builder: (context, _) {
         final hasFocus = _commentFocusNode.hasFocus;
         final replyingTo = _replyingToCommentId != null
-            ? PostService.findCommentById(_post.commentsList, _replyingToCommentId!)
+            ? PostService.findCommentById(
+                _post.commentsList,
+                _replyingToCommentId!,
+              )
             : null;
         return Column(
           mainAxisSize: MainAxisSize.min,
@@ -1016,7 +1108,10 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
             // 답글 대상 댓글 배너
             if (replyingTo != null) ...[
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
                   color: cs.surfaceContainerHighest.withOpacity(0.6),
                   border: Border(
@@ -1060,7 +1155,11 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
                           _commentImagePathNotifier.value = null;
                         });
                       },
-                      child: Icon(LucideIcons.x, size: 16, color: cs.onSurfaceVariant),
+                      child: Icon(
+                        LucideIcons.x,
+                        size: 16,
+                        color: cs.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ),
@@ -1121,7 +1220,10 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
         if (!loggedIn) {
           return InkWell(
             onTap: () async {
-              await Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginPage()));
+              await Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginPage()),
+              );
             },
             borderRadius: BorderRadius.circular(20),
             child: Container(
@@ -1143,7 +1245,10 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
           );
         }
         final replyingTo = _replyingToCommentId != null
-            ? PostService.findCommentById(_post.commentsList, _replyingToCommentId!)
+            ? PostService.findCommentById(
+                _post.commentsList,
+                _replyingToCommentId!,
+              )
             : null;
         return TextField(
           controller: _commentController,
@@ -1153,7 +1258,10 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
             hintText: replyingTo != null
                 ? '${replyingTo.author}님에게 답글...'
                 : s.get('joinConversation'),
-            hintStyle: GoogleFonts.notoSansKr(fontSize: 15, color: cs.onSurfaceVariant),
+            hintStyle: GoogleFonts.notoSansKr(
+              fontSize: 15,
+              color: cs.onSurfaceVariant,
+            ),
             filled: true,
             fillColor: cs.surfaceContainerHighest.withOpacity(0.9),
             border: OutlineInputBorder(
@@ -1166,9 +1274,15 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(20),
-              borderSide: BorderSide(color: cs.primary.withOpacity(0.5), width: 1.5),
+              borderSide: BorderSide(
+                color: cs.primary.withOpacity(0.5),
+                width: 1.5,
+              ),
             ),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 14,
+              vertical: 16,
+            ),
           ),
           style: GoogleFonts.notoSansKr(fontSize: 15, color: cs.onSurface),
           maxLines: 6,
@@ -1190,10 +1304,20 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
             children: [
               TextButton(
                 onPressed: _onGifTap,
-                child: Text('GIF', style: GoogleFonts.notoSansKr(fontSize: 14, color: cs.onSurfaceVariant)),
+                child: Text(
+                  'GIF',
+                  style: GoogleFonts.notoSansKr(
+                    fontSize: 14,
+                    color: cs.onSurfaceVariant,
+                  ),
+                ),
               ),
               IconButton(
-                icon: Icon(LucideIcons.image_plus, size: 24, color: cs.onSurfaceVariant),
+                icon: Icon(
+                  LucideIcons.image_plus,
+                  size: 24,
+                  color: cs.onSurfaceVariant,
+                ),
                 onPressed: _onPhotoTap,
               ),
             ],
@@ -1211,15 +1335,19 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
                   duration: const Duration(milliseconds: 220),
                   switchInCurve: Curves.easeOut,
                   switchOutCurve: Curves.easeIn,
-                  transitionBuilder: (Widget child, Animation<double> animation) {
-                    return FadeTransition(
-                      opacity: animation,
-                      child: ScaleTransition(
-                        scale: Tween<double>(begin: 0.92, end: 1.0).animate(animation),
-                        child: child,
-                      ),
-                    );
-                  },
+                  transitionBuilder:
+                      (Widget child, Animation<double> animation) {
+                        return FadeTransition(
+                          opacity: animation,
+                          child: ScaleTransition(
+                            scale: Tween<double>(
+                              begin: 0.92,
+                              end: 1.0,
+                            ).animate(animation),
+                            child: child,
+                          ),
+                        );
+                      },
                   child: hasContent
                       ? Material(
                           key: const ValueKey<bool>(true),
@@ -1227,7 +1355,11 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
                           borderRadius: BorderRadius.circular(28),
                           child: IconButton(
                             onPressed: _submitComment,
-                            icon: const Icon(LucideIcons.arrow_up, size: 24, color: Colors.white),
+                            icon: const Icon(
+                              LucideIcons.arrow_up,
+                              size: 24,
+                              color: Colors.white,
+                            ),
                           ),
                         )
                       : Row(
@@ -1236,10 +1368,20 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
                           children: [
                             TextButton(
                               onPressed: _onGifTap,
-                              child: Text('GIF', style: GoogleFonts.notoSansKr(fontSize: 14, color: cs.onSurfaceVariant)),
+                              child: Text(
+                                'GIF',
+                                style: GoogleFonts.notoSansKr(
+                                  fontSize: 14,
+                                  color: cs.onSurfaceVariant,
+                                ),
+                              ),
                             ),
                             IconButton(
-                              icon: Icon(LucideIcons.image_plus, size: 24, color: cs.onSurfaceVariant),
+                              icon: Icon(
+                                LucideIcons.image_plus,
+                                size: 24,
+                                color: cs.onSurfaceVariant,
+                              ),
                               onPressed: _onPhotoTap,
                             ),
                           ],
@@ -1261,15 +1403,214 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
   }
 
   static const Color _kLetterboxdHeroOrange = Color(0xFFFF6B35);
+  static const Color _kLetterboxdReviewTabGreen = Color(0xFF00C46C);
+  static const Color _kLetterboxdReviewStarYellow = Color(0xFFFFC107);
+  static const Color _kLetterboxdReviewScreenBg = Color(0xFF000000);
 
-  Widget _buildReviewStarRowLetterboxd(double? rating, {double totalWidth = 168}) {
+  String _letterboxdAuthorShort(Post post) {
+    final a = post.author;
+    return a.startsWith('u/') ? a.substring(2) : a;
+  }
+
+  String? _dramaReleaseYearForReview(Post post) {
+    final id = post.dramaId?.trim() ?? '';
+    if (id.isEmpty) return null;
+    final rd = DramaListService.instance.getExtra(id)?.releaseDate;
+    return rd != null ? '${rd.year}' : null;
+  }
+
+  String _letterboxdReviewDateForMeta(Post post, String? country) {
+    final dt = post.createdAt;
+    if (dt == null) return post.timeAgo;
+    final c = country?.toLowerCase();
+    if (c == 'kr') {
+      return '${dt.year}년 ${dt.month}월 ${dt.day}일';
+    }
+    if (c == 'jp' || c == 'cn') {
+      return '${dt.year}年${dt.month}月${dt.day}日';
+    }
+    const months = <String>[
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
+    ];
+    return '${months[dt.month - 1]} ${dt.day}, ${dt.year}';
+  }
+
+  Widget _buildLetterboxdReviewAppBar(
+    BuildContext context,
+    ThemeData theme,
+    ColorScheme cs,
+    dynamic s,
+    Post post,
+  ) {
+    final short = _letterboxdAuthorShort(post);
+    final title = s
+        .get('letterboxdReviewDetailAppBarTitle')
+        .replaceAll('{name}', short);
+    return ColoredBox(
+      color: Colors.black,
+      child: SafeArea(
+        bottom: false,
+        child: SizedBox(
+          height: 48,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              AppBarBackIconButton(
+                iconColor: Colors.white,
+                onPressed: () =>
+                    Navigator.pop(context, _buildResult(updatedPost: _post)),
+              ),
+              Expanded(
+                child: Text(
+                  title,
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.notoSansKr(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                    letterSpacing: 0.1,
+                  ),
+                ),
+              ),
+              PopupMenuButton<String>(
+                color: cs.surface,
+                icon: const Icon(
+                  LucideIcons.ellipsis_vertical,
+                  color: Colors.white,
+                  size: 22,
+                ),
+                padding: EdgeInsets.zero,
+                onSelected: (v) =>
+                    _onLetterboxdPostMenuSelected(v, post, cs, s),
+                itemBuilder: (ctx) => [
+                  PopupMenuItem(
+                    value: 'share',
+                    child: Row(
+                      children: [
+                        Icon(
+                          LucideIcons.share_2,
+                          size: 18,
+                          color: cs.onSurface,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(s.get('share'), style: GoogleFonts.notoSansKr()),
+                      ],
+                    ),
+                  ),
+                  if (_isMine && !widget.offlineSyntheticReview) ...[
+                    PopupMenuItem(
+                      value: 'edit',
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.edit_outlined,
+                            size: 18,
+                            color: cs.onSurface,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(s.get('edit'), style: GoogleFonts.notoSansKr()),
+                        ],
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'delete',
+                      child: Row(
+                        children: [
+                          Icon(Icons.delete_outline, size: 18, color: cs.error),
+                          const SizedBox(width: 8),
+                          Text(
+                            s.get('delete'),
+                            style: GoogleFonts.notoSansKr(color: cs.error),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ] else if (!_isMine &&
+                      isAppModerator() &&
+                      !widget.offlineSyntheticReview) ...[
+                    PopupMenuItem(
+                      value: 'delete',
+                      child: Row(
+                        children: [
+                          Icon(Icons.delete_outline, size: 18, color: cs.error),
+                          const SizedBox(width: 8),
+                          Text(
+                            s.get('delete'),
+                            style: GoogleFonts.notoSansKr(color: cs.error),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ] else if (!_isMine) ...[
+                    PopupMenuItem(
+                      value: 'report',
+                      child: Row(
+                        children: [
+                          Icon(LucideIcons.flag, size: 18, color: cs.error),
+                          const SizedBox(width: 8),
+                          Text(
+                            s.get('report'),
+                            style: GoogleFonts.notoSansKr(color: cs.error),
+                          ),
+                        ],
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'block',
+                      child: Row(
+                        children: [
+                          Icon(LucideIcons.ban, size: 18, color: cs.onSurface),
+                          const SizedBox(width: 8),
+                          Text(s.get('block'), style: GoogleFonts.notoSansKr()),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildReviewStarRowLetterboxd(
+    double? rating, {
+    double totalWidth = 168,
+    Color? fillColor,
+    Color? emptyColor,
+
+    /// 0보다 크면 별 글리프를 왼쪽으로 겹쳐 간격을 줄임.
+    double glyphOverlap = 0,
+
+    /// 1보다 크면 아이콘 크기 상한을 조금 올림 (Recent Activity 등).
+    double iconScale = 1.0,
+  }) {
     final r = (rating ?? 0).clamp(0.0, 5.0);
     final units = (r * 2).round().clamp(0, 10);
     final fullCount = units ~/ 2;
     final hasHalf = units.isOdd;
-    const starOrange = Color(0xFFFFB020);
+    final fill = fillColor ?? _kLetterboxdReviewTabGreen;
+    final empty =
+        emptyColor ?? _kLetterboxdReviewTabGreen.withValues(alpha: 0.28);
     final slotW = totalWidth / 5;
-    final iconSize = (slotW * 0.82).clamp(15.0, 24.0);
+    final iconLo = fillColor != null ? 18.0 : 15.0;
+    final iconHi = fillColor != null ? 28.0 : 24.0;
+    final iconSize = (slotW * 0.82 * iconScale).clamp(iconLo, iconHi);
     return SizedBox(
       width: totalWidth,
       child: Row(
@@ -1282,10 +1623,22 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
           } else {
             icon = Icons.star_border_rounded;
           }
-          return SizedBox(
+          final c = (i < fullCount || (i == fullCount && hasHalf))
+              ? fill
+              : empty;
+          final slot = SizedBox(
             width: slotW,
-            child: Center(child: Icon(icon, size: iconSize, color: starOrange)),
+            child: Center(
+              child: Icon(icon, size: iconSize, color: c),
+            ),
           );
+          if (glyphOverlap > 0) {
+            return Transform.translate(
+              offset: Offset(-glyphOverlap * i, 0),
+              child: slot,
+            );
+          }
+          return slot;
         }),
       ),
     );
@@ -1309,9 +1662,14 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
     } else {
       final title = (post.dramaTitle?.trim().isNotEmpty == true)
           ? post.dramaTitle!.trim()
-          : DramaListService.instance.getDisplayTitleByTitle(post.title, locale);
+          : DramaListService.instance.getDisplayTitleByTitle(
+              post.title,
+              locale,
+            );
       final thumb = post.dramaThumbnail?.trim();
-      final hasImg = thumb != null && (thumb.startsWith('http') || thumb.startsWith('assets/'));
+      final hasImg =
+          thumb != null &&
+          (thumb.startsWith('http') || thumb.startsWith('assets/'));
       item = DramaItem(
         id: dramaId.isNotEmpty ? dramaId : 'review_${post.id}',
         title: title,
@@ -1329,20 +1687,44 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
     );
   }
 
-  Future<void> _onLetterboxdPostMenuSelected(String? value, Post post, ColorScheme cs, dynamic s) async {
+  Future<void> _onLetterboxdPostMenuSelected(
+    String? value,
+    Post post,
+    ColorScheme cs,
+    dynamic s,
+  ) async {
     if (!mounted || value == null) return;
+    if (value == 'share') {
+      await _sharePostOrReview(context, post);
+      return;
+    }
     if (value == 'edit') {
-      final updated = await Navigator.push<Post>(context, MaterialPageRoute(builder: (_) => WritePostPage(initialPost: post)));
+      final updated = await Navigator.push<Post>(
+        context,
+        MaterialPageRoute(builder: (_) => WritePostPage(initialPost: post)),
+      );
       if (updated != null && mounted) setState(() => _currentPost = updated);
     } else if (value == 'delete') {
       final confirm = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
           title: Text(s.get('delete'), style: GoogleFonts.notoSansKr()),
-          content: Text(s.get('deletePostConfirm'), style: GoogleFonts.notoSansKr()),
+          content: Text(
+            s.get('deletePostConfirm'),
+            style: GoogleFonts.notoSansKr(),
+          ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr())),
-            TextButton(onPressed: () => Navigator.pop(ctx, true), child: Text(s.get('delete'), style: GoogleFonts.notoSansKr(color: cs.error))),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr()),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(
+                s.get('delete'),
+                style: GoogleFonts.notoSansKr(color: cs.error),
+              ),
+            ),
           ],
         ),
       );
@@ -1357,18 +1739,36 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: Text(s.get('reportPostTitle'), style: GoogleFonts.notoSansKr()),
-          content: Text(s.get('reportPostMessage'), style: GoogleFonts.notoSansKr()),
+          title: Text(
+            s.get('reportPostTitle'),
+            style: GoogleFonts.notoSansKr(),
+          ),
+          content: Text(
+            s.get('reportPostMessage'),
+            style: GoogleFonts.notoSansKr(),
+          ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr())),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr()),
+            ),
             TextButton(
               onPressed: () {
                 Navigator.pop(ctx);
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(s.get('reportSubmitted'), style: GoogleFonts.notoSansKr()), behavior: SnackBarBehavior.floating),
+                  SnackBar(
+                    content: Text(
+                      s.get('reportSubmitted'),
+                      style: GoogleFonts.notoSansKr(),
+                    ),
+                    behavior: SnackBarBehavior.floating,
+                  ),
                 );
               },
-              child: Text(s.get('report'), style: GoogleFonts.notoSansKr(color: cs.error)),
+              child: Text(
+                s.get('report'),
+                style: GoogleFonts.notoSansKr(color: cs.error),
+              ),
             ),
           ],
         ),
@@ -1378,10 +1778,19 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
         context: context,
         builder: (ctx) => AlertDialog(
           title: Text(s.get('blockPostTitle'), style: GoogleFonts.notoSansKr()),
-          content: Text(s.get('blockPostMessage'), style: GoogleFonts.notoSansKr()),
+          content: Text(
+            s.get('blockPostMessage'),
+            style: GoogleFonts.notoSansKr(),
+          ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr())),
-            TextButton(onPressed: () => Navigator.pop(ctx, true), child: Text(s.get('block'), style: GoogleFonts.notoSansKr())),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr()),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(s.get('block'), style: GoogleFonts.notoSansKr()),
+            ),
           ],
         ),
       );
@@ -1389,7 +1798,13 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
         await BlockService.instance.blockPost(post.id);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(s.get('blockPostDone'), style: GoogleFonts.notoSansKr()), behavior: SnackBarBehavior.floating),
+            SnackBar(
+              content: Text(
+                s.get('blockPostDone'),
+                style: GoogleFonts.notoSansKr(),
+              ),
+              behavior: SnackBarBehavior.floating,
+            ),
           );
           Navigator.pop(context);
         }
@@ -1411,7 +1826,13 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
               onPressed: _onGifTap,
-              child: Text('GIF', style: GoogleFonts.notoSansKr(fontSize: 12, color: cs.onSurfaceVariant)),
+              child: Text(
+                'GIF',
+                style: GoogleFonts.notoSansKr(
+                  fontSize: 12,
+                  color: cs.onSurfaceVariant,
+                ),
+              ),
             ),
             IconButton(
               style: IconButton.styleFrom(
@@ -1419,7 +1840,11 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
                 padding: const EdgeInsets.all(4),
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
-              icon: Icon(LucideIcons.image_plus, size: 20, color: cs.onSurfaceVariant),
+              icon: Icon(
+                LucideIcons.image_plus,
+                size: 20,
+                color: cs.onSurfaceVariant,
+              ),
               onPressed: _onPhotoTap,
             ),
             const Spacer(),
@@ -1432,13 +1857,18 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
                     final hasText = value.text.trim().isNotEmpty;
                     final hasContent = hasText || imagePath != null;
                     return Material(
-                      color: hasContent ? cs.primary : Colors.grey.withOpacity(0.5),
+                      color: hasContent
+                          ? cs.primary
+                          : Colors.grey.withOpacity(0.5),
                       borderRadius: BorderRadius.circular(20),
                       child: InkWell(
                         onTap: hasContent ? _submitComment : null,
                         borderRadius: BorderRadius.circular(14),
                         child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 6,
+                          ),
                           child: Text(
                             s.get('replySubmit'),
                             style: GoogleFonts.notoSansKr(
@@ -1460,12 +1890,17 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
     );
   }
 
-  Widget _buildReviewSmallPoster(Post post, ColorScheme cs, double w, double h) {
+  Widget _buildReviewSmallPoster(
+    Post post,
+    ColorScheme cs,
+    double w,
+    double h,
+  ) {
     final t = post.dramaThumbnail?.trim();
     final ok = t != null && t.startsWith('http');
     if (ok) {
       return OptimizedNetworkImage(
-        imageUrl: t!,
+        imageUrl: t,
         width: w,
         height: h,
         fit: BoxFit.cover,
@@ -1482,298 +1917,442 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
     );
   }
 
-  Widget _buildLetterboxdReviewSection(BuildContext context, ThemeData theme, ColorScheme cs, Post post) {
-    final s = CountryScope.of(context).strings;
-    final heroThumb = post.dramaThumbnail?.trim();
-    final hasHttpHero = heroThumb != null && heroThumb.startsWith('http');
-    final dramaTitle = post.dramaTitle?.trim().isNotEmpty == true ? post.dramaTitle! : post.title;
-    final bodyRaw = post.body ?? '';
+  /// Letterboxd 리뷰 포스터 — [Positioned.fill] 등 **유한한** 부모 안에서 쓰는 것을 권장.
+  /// (IntrinsicHeight Row + SizedBox.expand + infinity 크기는 semantics/layout 오류 유발)
+  Widget _buildReviewPosterStretch(Post post, ColorScheme cs) {
+    final t = post.dramaThumbnail?.trim();
+    final ok = t != null && t.startsWith('http');
+    if (ok) {
+      return OptimizedNetworkImage(
+        imageUrl: t,
+        fit: BoxFit.cover,
+        memCacheWidth: 280,
+        memCacheHeight: 420,
+      );
+    }
+    return Container(
+      color: cs.surfaceContainerHighest,
+      alignment: Alignment.center,
+      child: Icon(Icons.movie_outlined, color: cs.onSurfaceVariant, size: 28),
+    );
+  }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        SizedBox(
-          height: 220,
-          width: double.infinity,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              if (hasHttpHero)
-                OptimizedNetworkImage.thumbnail(
-                  imageUrl: heroThumb!,
-                  height: 220,
-                  width: MediaQuery.sizeOf(context).width,
-                )
-              else
-                const ColoredBox(color: _kLetterboxdHeroOrange),
-              Positioned.fill(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [Colors.black.withOpacity(0.38), Colors.transparent],
-                      stops: const [0, 0.42],
-                    ),
-                  ),
-                ),
-              ),
-              SafeArea(
-                bottom: false,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+  Widget _buildLetterboxdReviewSection(
+    BuildContext context,
+    ThemeData theme,
+    ColorScheme cs,
+    Post post,
+  ) {
+    final s = CountryScope.of(context).strings;
+    final country = CountryScope.maybeOf(context)?.country;
+
+    // 앱 언어 기준 표시 제목 — Firestore에 한글로 저장된 경우도 표시 언어에 맞게 변환
+    String dramaTitle;
+    final dramaId = post.dramaId?.trim() ?? '';
+    if (dramaId.isNotEmpty && !dramaId.startsWith('short-')) {
+      final t = DramaListService.instance.getDisplayTitle(dramaId, country);
+      dramaTitle = t.isNotEmpty
+          ? t
+          : (post.dramaTitle?.trim().isNotEmpty == true
+                ? post.dramaTitle!
+                : post.title);
+    } else if (post.dramaTitle?.trim().isNotEmpty == true) {
+      final byTitle = DramaListService.instance.getDisplayTitleByTitle(
+        post.dramaTitle!,
+        country,
+      );
+      dramaTitle = byTitle.isNotEmpty ? byTitle : post.dramaTitle!;
+    } else {
+      dramaTitle = post.title;
+    }
+    final bodyRaw = post.body ?? '';
+    final year = _dramaReleaseYearForReview(post);
+    final watchedCaption = s
+        .get('letterboxdReviewWatchedLine')
+        .replaceAll('{date}', _letterboxdReviewDateForMeta(post, country));
+    final recentCompact = widget.hideBelowLetterboxdLike;
+    // Recent Activity: 포스터는 제목 1줄 기준 왼쪽 열 높이(고정)에 맞춘 2:3 — 제목이 2줄이어도 크기 불변.
+    const recentPosterOneLineBlockH = 126.0;
+    final recentPosterW = recentPosterOneLineBlockH * 2 / 3;
+
+    return ColoredBox(
+      color: _kLetterboxdReviewScreenBg,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _buildLetterboxdReviewAppBar(context, theme, cs, s, post),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+            child: recentCompact
+                ? Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      IconButton(
-                        icon: const Icon(LucideIcons.arrow_left, color: Colors.white, size: 26),
-                        tooltip: MaterialLocalizations.of(context).backButtonTooltip,
-                        onPressed: () => Navigator.pop(context, _buildResult(updatedPost: _post)),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                _PostAuthorAvatar(
+                                  photoUrl: post.authorPhotoUrl,
+                                  author: post.author,
+                                  colorIndex: post.authorAvatarColorIndex,
+                                  size: 28,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    _letterboxdAuthorShort(post),
+                                    style: GoogleFonts.notoSansKr(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.white.withValues(
+                                        alpha: 0.72,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            InkWell(
+                              onTap: () => _openDramaDetailFromReview(post),
+                              child: Text(
+                                dramaTitle,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: GoogleFonts.notoSansKr(
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w800,
+                                  color: Colors.white,
+                                  height: 1.2,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: _buildReviewStarRowLetterboxd(
+                                post.rating,
+                                totalWidth: 122,
+                                fillColor: _kLetterboxdReviewStarYellow,
+                                emptyColor: _kLetterboxdReviewStarYellow
+                                    .withValues(alpha: 0.28),
+                                glyphOverlap: 5,
+                                iconScale: 1.12,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              watchedCaption,
+                              style: GoogleFonts.notoSansKr(
+                                fontSize: 13,
+                                color: Colors.white.withValues(alpha: 0.52),
+                                height: 1.3,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                      IconButton(
-                        icon: const Icon(LucideIcons.share_2, color: Colors.white, size: 22),
-                        onPressed: () => ShareSheet.show(context, title: post.title, type: 'post'),
+                      const SizedBox(width: 12),
+                      Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () => _openDramaDetailFromReview(post),
+                          borderRadius: BorderRadius.circular(6),
+                          child: SizedBox(
+                            width: recentPosterW,
+                            height: recentPosterOneLineBlockH,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(6),
+                              child: _buildReviewPosterStretch(post, cs),
+                            ),
+                          ),
+                        ),
                       ),
                     ],
+                  )
+                : IntrinsicHeight(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  _PostAuthorAvatar(
+                                    photoUrl: post.authorPhotoUrl,
+                                    author: post.author,
+                                    colorIndex: post.authorAvatarColorIndex,
+                                    size: 28,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: GestureDetector(
+                                      onTapDown: (d) => _showPostAuthorMenu(
+                                        context,
+                                        post.author,
+                                        d,
+                                      ),
+                                      behavior: HitTestBehavior.opaque,
+                                      child: Text(
+                                        _letterboxdAuthorShort(post),
+                                        style: GoogleFonts.notoSansKr(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w700,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 12),
+                              InkWell(
+                                onTap: () => _openDramaDetailFromReview(post),
+                                child: Text.rich(
+                                  TextSpan(
+                                    children: [
+                                      TextSpan(
+                                        text: dramaTitle,
+                                        style: GoogleFonts.notoSansKr(
+                                          fontSize: 22,
+                                          fontWeight: FontWeight.w800,
+                                          color: Colors.white,
+                                          height: 1.2,
+                                        ),
+                                      ),
+                                      if (year != null && year.isNotEmpty)
+                                        TextSpan(
+                                          text: '  $year',
+                                          style: GoogleFonts.notoSansKr(
+                                            fontSize: 15,
+                                            fontWeight: FontWeight.w500,
+                                            color: Colors.white.withValues(
+                                              alpha: 0.55,
+                                            ),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  _buildReviewStarRowLetterboxd(
+                                    post.rating,
+                                    totalWidth: 110,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Icon(
+                                    Icons.favorite_rounded,
+                                    size: 20,
+                                    color: post.isLiked
+                                        ? _kLetterboxdHeroOrange
+                                        : Colors.white.withValues(alpha: 0.35),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                watchedCaption,
+                                style: GoogleFonts.notoSansKr(
+                                  fontSize: 13,
+                                  color: Colors.white.withValues(alpha: 0.52),
+                                  height: 1.3,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: () => _openDramaDetailFromReview(post),
+                            borderRadius: BorderRadius.circular(6),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(6),
+                              child: SizedBox(
+                                width: 70,
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    Positioned.fill(
+                                      child: _buildReviewPosterStretch(
+                                        post,
+                                        cs,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+          ),
+          if (post.hasSpoiler && !_reviewSpoilerRevealed)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+              child: InkWell(
+                onTap: () => setState(() => _reviewSpoilerRevealed = true),
+                borderRadius: BorderRadius.circular(10),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1C1C1E),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.12),
+                    ),
+                  ),
+                  child: Text(
+                    s.get('reviewSpoilerTapToRevealLetterboxd'),
+                    style: GoogleFonts.notoSansKr(
+                      fontSize: 15,
+                      height: 1.45,
+                      color: Colors.white70,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               ),
-            ],
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 18, 8, 8),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _PostAuthorAvatar(
-                      photoUrl: post.authorPhotoUrl,
-                      author: post.author,
-                      colorIndex: post.authorAvatarColorIndex,
-                      size: 40,
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: GestureDetector(
-                        onTapDown: (d) => _showPostAuthorMenu(context, post.author, d),
-                        behavior: HitTestBehavior.opaque,
-                        child: Text(
-                          post.author.startsWith('u/') ? post.author.substring(2) : post.author,
-                          style: GoogleFonts.notoSansKr(fontSize: 15, fontWeight: FontWeight.w700, color: cs.onSurface),
+            )
+          else if (bodyRaw.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (_isMine && !recentCompact) ...[
+                    Padding(
+                      padding: const EdgeInsets.only(top: 3, right: 10),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
                         ),
+                        decoration: BoxDecoration(
+                          color: cs.secondary,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          s.get('myPostBadge'),
+                          style: GoogleFonts.notoSansKr(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: cs.onSecondary,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                  Expanded(
+                    child: Text(
+                      bodyRaw,
+                      style: GoogleFonts.notoSansKr(
+                        fontSize: 16,
+                        color: Colors.white.withValues(
+                          alpha: recentCompact ? 0.72 : 0.88,
+                        ),
+                        height: 1.65,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          Padding(
+            padding: EdgeInsets.fromLTRB(8, 4, 16, recentCompact ? 20 : 4),
+            child: InkWell(
+              onTap: _onLikeTap,
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: EdgeInsets.symmetric(
+                  vertical: recentCompact ? 8 : 10,
+                  horizontal: 8,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      _isLiked ? Icons.favorite : Icons.favorite_border,
+                      size: recentCompact ? 21 : 26,
+                      color: _isLiked
+                          ? Colors.redAccent.withValues(
+                              alpha: recentCompact ? 0.88 : 1,
+                            )
+                          : (recentCompact
+                                ? Colors.white.withValues(alpha: 0.42)
+                                : Colors.white54),
+                    ),
+                    SizedBox(width: recentCompact ? 8 : 10),
+                    Text(
+                      s.get('reviewLikeLabel'),
+                      style: GoogleFonts.notoSansKr(
+                        fontSize: recentCompact ? 13 : 15,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.4,
+                        color: recentCompact
+                            ? Colors.white.withValues(alpha: 0.68)
+                            : Colors.white,
+                      ),
+                    ),
+                    SizedBox(width: recentCompact ? 8 : 10),
+                    Text(
+                      '${post.likeCount}',
+                      style: GoogleFonts.notoSansKr(
+                        fontSize: recentCompact ? 13 : 15,
+                        fontWeight: FontWeight.w600,
+                        color: recentCompact
+                            ? Colors.white.withValues(alpha: 0.45)
+                            : Colors.white54,
                       ),
                     ),
                   ],
                 ),
               ),
-              Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: () => _openDramaDetailFromReview(post),
-                      borderRadius: BorderRadius.circular(8),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: _buildReviewSmallPoster(post, cs, 60, 85),
-                      ),
-                    ),
-                  ),
-                  PopupMenuButton<String>(
-                    padding: EdgeInsets.zero,
-                    icon: Icon(LucideIcons.ellipsis, size: 20, color: cs.onSurfaceVariant),
-                    onSelected: (v) => _onLetterboxdPostMenuSelected(v, post, cs, s),
-                    itemBuilder: (ctx) => [
-                      if (_isMine) ...[
-                        PopupMenuItem(
-                          value: 'edit',
-                          child: Row(children: [
-                            Icon(Icons.edit_outlined, size: 18, color: cs.onSurface),
-                            const SizedBox(width: 8),
-                            Text(s.get('edit'), style: GoogleFonts.notoSansKr()),
-                          ]),
-                        ),
-                        PopupMenuItem(
-                          value: 'delete',
-                          child: Row(children: [
-                            Icon(Icons.delete_outline, size: 18, color: cs.error),
-                            const SizedBox(width: 8),
-                            Text(s.get('delete'), style: GoogleFonts.notoSansKr(color: cs.error)),
-                          ]),
-                        ),
-                      ] else if (isAppModerator()) ...[
-                        PopupMenuItem(
-                          value: 'delete',
-                          child: Row(children: [
-                            Icon(Icons.delete_outline, size: 18, color: cs.error),
-                            const SizedBox(width: 8),
-                            Text(s.get('delete'), style: GoogleFonts.notoSansKr(color: cs.error)),
-                          ]),
-                        ),
-                      ] else ...[
-                        PopupMenuItem(
-                          value: 'report',
-                          child: Row(children: [
-                            Icon(LucideIcons.flag, size: 18, color: cs.error),
-                            const SizedBox(width: 8),
-                            Text(s.get('report'), style: GoogleFonts.notoSansKr(color: cs.error)),
-                          ]),
-                        ),
-                        PopupMenuItem(
-                          value: 'block',
-                          child: Row(children: [
-                            Icon(LucideIcons.ban, size: 18, color: cs.onSurface),
-                            const SizedBox(width: 8),
-                            Text(s.get('block'), style: GoogleFonts.notoSansKr()),
-                          ]),
-                        ),
-                      ],
-                    ],
-                  ),
-                ],
-              ),
-            ],
+            ),
           ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              InkWell(
-                onTap: () => _openDramaDetailFromReview(post),
-                child: Text(
-                  dramaTitle,
-                  style: GoogleFonts.notoSansKr(fontSize: 19, fontWeight: FontWeight.w800, color: cs.onSurface, height: 1.25),
-                ),
-              ),
-              const SizedBox(height: 8),
-              _buildReviewStarRowLetterboxd(post.rating),
-              const SizedBox(height: 6),
-              Text(post.timeAgo, style: GoogleFonts.notoSansKr(fontSize: 13, color: cs.onSurfaceVariant)),
-            ],
-          ),
-        ),
-        if (post.hasSpoiler && !_reviewSpoilerRevealed)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-            child: InkWell(
-              onTap: () => setState(() => _reviewSpoilerRevealed = true),
-              borderRadius: BorderRadius.circular(10),
-              child: Container(
+          if (!widget.hideBelowLetterboxdLike)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              child: SizedBox(
                 width: double.infinity,
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: cs.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: cs.outline.withOpacity(0.22)),
-                ),
-                child: Text(
-                  s.get('reviewSpoilerTapToRevealLetterboxd'),
-                  style: GoogleFonts.notoSansKr(
-                    fontSize: 15,
-                    height: 1.45,
-                    color: cs.onSurfaceVariant,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ),
-          )
-        else if (bodyRaw.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (_isMine) ...[
-                  Padding(
-                    padding: const EdgeInsets.only(top: 3, right: 10),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: cs.secondary,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        s.get('myPostBadge'),
-                        style: GoogleFonts.notoSansKr(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                          color: cs.onSecondary,
-                        ),
-                      ),
+                child: OutlinedButton(
+                  onPressed: () => _openDramaDetailFromReview(post),
+                  style: OutlinedButton.styleFrom(
+                    alignment: Alignment.centerLeft,
+                    foregroundColor: Colors.white.withValues(alpha: 0.92),
+                    backgroundColor: const Color(0xFF1C1C1E),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 18,
+                      vertical: 14,
+                    ),
+                    side: BorderSide(
+                      color: Colors.white.withValues(alpha: 0.14),
                     ),
                   ),
-                ],
-                Expanded(
                   child: Text(
-                    bodyRaw,
-                    style: GoogleFonts.notoSansKr(fontSize: 16, color: cs.onSurface, height: 1.65),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(8, 4, 16, 4),
-          child: InkWell(
-            onTap: _onLikeTap,
-            borderRadius: BorderRadius.circular(12),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    _isLiked ? Icons.favorite : Icons.favorite_border,
-                    size: 26,
-                    color: _isLiked ? Colors.redAccent : cs.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    s.get('reviewLikeLabel'),
+                    s.get('reviewFilmButton'),
                     style: GoogleFonts.notoSansKr(
                       fontSize: 15,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 0.4,
-                      color: cs.onSurface,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
-                  const SizedBox(width: 10),
-                  Text(
-                    '${post.likeCount}',
-                    style: GoogleFonts.notoSansKr(fontSize: 15, fontWeight: FontWeight.w600, color: cs.onSurfaceVariant),
-                  ),
-                ],
+                ),
               ),
             ),
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-          child: SizedBox(
-            width: double.infinity,
-            child: OutlinedButton(
-              onPressed: () => _openDramaDetailFromReview(post),
-              style: OutlinedButton.styleFrom(
-                alignment: Alignment.centerLeft,
-                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                side: BorderSide(color: cs.outline.withOpacity(0.35)),
-              ),
-              child: Text(
-                s.get('reviewFilmButton'),
-                style: GoogleFonts.notoSansKr(fontSize: 15, fontWeight: FontWeight.w700, color: cs.primary),
-              ),
-            ),
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -1784,10 +2363,13 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final isTypedReview = postDisplayType(post) == 'review';
+    final hideLetterboxdTail = isTypedReview && widget.hideBelowLetterboxdLike;
     final boardKind = postDisplayType(post);
+    final showAuthorProfileMenu = boardKind != 'talk' && boardKind != 'ask';
     final hideViewsInTalkAskDetail = boardKind == 'talk' || boardKind == 'ask';
-    final deleteLabelColor =
-        (boardKind == 'talk' || boardKind == 'ask') ? Colors.redAccent : cs.error;
+    final deleteLabelColor = (boardKind == 'talk' || boardKind == 'ask')
+        ? Colors.redAccent
+        : cs.error;
     _letterboxdEnsureSpoilerStateForPost(post.id);
     return PopScope(
       canPop: _backStack.isEmpty,
@@ -1798,688 +2380,1562 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
       },
       child: Scaffold(
         resizeToAvoidBottomInset: true,
-        backgroundColor: theme.scaffoldBackgroundColor,
+        backgroundColor: isTypedReview
+            ? _kLetterboxdReviewScreenBg
+            : theme.scaffoldBackgroundColor,
         body: ValueListenableBuilder<bool>(
           valueListenable: HomeTabVisibility.isHomeMainTabSelected,
           builder: (context, isHomeMainTab, _) {
-          final hideBottomBrowserBar = isHomeMainTab;
-          final bottomScrollPad = hideBottomBrowserBar
-              ? (MediaQuery.paddingOf(context).bottom + 16)
-              : (_kBrowserNavBarHeight + MediaQuery.paddingOf(context).bottom);
-          return Stack(
-        children: [
-        Column(
-        children: [
-          if (!isTypedReview)
-          // 상단 바: 댓글 0/시간순 영역과 동일한 배경색
-          Container(
-            width: double.infinity,
-            padding: EdgeInsets.fromLTRB(10, MediaQuery.of(context).padding.top, 10, 0),
-            color: theme.cardTheme.color ?? cs.surface,
-            child: Row(
-                children: [
-                  Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(24),
-                      onTap: () => Navigator.pop(context, _buildResult(updatedPost: _post)),
-                        child: Padding(
-                        padding: const EdgeInsets.all(10),
-                        child: Icon(LucideIcons.x, size: 22, color: cs.onSurface),
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    child: Center(
-                      child: Text(
-                        widget.tabName ?? '',
-                        style: GoogleFonts.notoSansKr(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: cs.onSurface,
+            final hideBottomBrowserBar =
+                isHomeMainTab || widget.hideBelowLetterboxdLike;
+            final bottomScrollPad = hideBottomBrowserBar
+                ? (MediaQuery.paddingOf(context).bottom + 16)
+                : (_kBrowserNavBarHeight +
+                      MediaQuery.paddingOf(context).bottom);
+            return Stack(
+              children: [
+                Column(
+                  children: [
+                    if (!isTypedReview)
+                      // 상단 바: 댓글 0/시간순 영역과 동일한 배경색
+                      Container(
+                        width: double.infinity,
+                        padding: EdgeInsets.fromLTRB(
+                          10,
+                          MediaQuery.of(context).padding.top,
+                          10,
+                          0,
                         ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 42),
-                ],
-            ),
-          ),
-          Expanded(
-              child: BlindRefreshIndicator(
-                onRefresh: _loadLatestPost,
-                spinnerOffsetDown: 15.0,
-                child: Container(
-                  color: theme.scaffoldBackgroundColor,
-                  child: SingleChildScrollView(
-                  controller: _scrollController,
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-                  padding: EdgeInsets.zero,
-                  child: GestureDetector(
-                    onTap: () => FocusScope.of(context).unfocus(),
-                    behavior: HitTestBehavior.opaque,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                    if (isTypedReview) _buildLetterboxdReviewSection(context, theme, cs, post),
-                    if (!isTypedReview) ...[
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(15, 8, 15, 8),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              // 아바타 + 닉네임/시간
-                              _PostAuthorAvatar(photoUrl: post.authorPhotoUrl, author: post.author, colorIndex: post.authorAvatarColorIndex, size: 38),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    GestureDetector(
-                                      onTapDown: (details) => _showPostAuthorMenu(context, post.author, details),
-                                      behavior: HitTestBehavior.opaque,
-                                      child: Text(
-                                        post.author.startsWith('u/') ? post.author.substring(2) : post.author,
-                                        style: GoogleFonts.notoSansKr(fontSize: 13, fontWeight: FontWeight.w600, color: cs.onSurface),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      post.timeAgo,
-                                      style: GoogleFonts.notoSansKr(fontSize: 11, color: cs.onSurfaceVariant),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              // 공유 아이콘
-                              GestureDetector(
-                                onTap: () => ShareSheet.show(context, title: post.title, type: 'post'),
-                                behavior: HitTestBehavior.opaque,
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-                                  child: Icon(LucideIcons.share_2, size: 18, color: cs.onSurfaceVariant),
-                                ),
-                              ),
-                              // 저장 아이콘
-                              ValueListenableBuilder<List<SavedItem>>(
-                                valueListenable: SavedService.instance.savedList,
-                                builder: (context, _, __) {
-                                  final isSaved = SavedService.instance.isSaved(post.id);
-                                  return GestureDetector(
-                                    onTap: () => SavedService.instance.toggle(SavedItem(
-                                      id: post.id,
-                                      title: post.title,
-                                      views: formatCompactCount(post.views),
-                                      type: SavedItemType.post,
-                                      post: post,
-                                    )),
-                                    behavior: HitTestBehavior.opaque,
-                                    child: Padding(
-                                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-                                      child: Icon(
-                                        isSaved ? Icons.bookmark : Icons.bookmark_border,
-                                        size: 20,
-                                        color: isSaved ? cs.primary : cs.onSurfaceVariant,
-                                      ),
-                                    ),
-                                  );
-                                },
-                              ),
-                              // ··· 버튼 (오른쪽 상단)
-                              GestureDetector(
-                                onTapDown: (details) async {
-                                  final value = await showMenu<String>(
-                                    context: context,
-                                    position: RelativeRect.fromLTRB(
-                                      details.globalPosition.dx,
-                                      details.globalPosition.dy,
-                                      details.globalPosition.dx + 1,
-                                      details.globalPosition.dy + 1,
-                                    ),
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                    color: cs.surface,
-                                    items: [
-                                      if (_isMine) ...[
-                                        PopupMenuItem(value: 'edit', child: Row(children: [Icon(Icons.edit_outlined, size: 18, color: cs.onSurface), const SizedBox(width: 10), Text(s.get('edit'), style: GoogleFonts.notoSansKr())])),
-                                        PopupMenuItem(value: 'delete', child: Row(children: [Icon(Icons.delete_outline, size: 18, color: cs.error), const SizedBox(width: 10), Text(s.get('delete'), style: GoogleFonts.notoSansKr(color: cs.error))])),
-                                      ] else if (isAppModerator()) ...[
-                                        PopupMenuItem(value: 'delete', child: Row(children: [Icon(Icons.delete_outline, size: 18, color: cs.error), const SizedBox(width: 10), Text(s.get('delete'), style: GoogleFonts.notoSansKr(color: cs.error))])),
-                                      ] else ...[
-                                        PopupMenuItem(value: 'report', child: Row(children: [Icon(LucideIcons.flag, size: 18, color: cs.error), const SizedBox(width: 10), Text(s.get('report'), style: GoogleFonts.notoSansKr(color: cs.error))])),
-                                        PopupMenuItem(value: 'block', child: Row(children: [Icon(LucideIcons.ban, size: 18, color: cs.onSurface), const SizedBox(width: 10), Text(s.get('block'), style: GoogleFonts.notoSansKr())])),
-                                      ],
-                                    ],
-                                  );
-                                  if (!mounted || value == null) return;
-                                  if (value == 'edit') {
-                                    final updated = await Navigator.push<Post>(context, MaterialPageRoute(builder: (_) => WritePostPage(initialPost: _post)));
-                                    if (updated != null && mounted) setState(() => _currentPost = updated);
-                                  } else if (value == 'delete') {
-                                    final confirm = await showDialog<bool>(
-                                      context: context,
-                                      builder: (ctx) => AlertDialog(
-                                        title: Text(s.get('delete'), style: GoogleFonts.notoSansKr()),
-                                        content: Text(s.get('deletePostConfirm'), style: GoogleFonts.notoSansKr()),
-                                        actions: [
-                                          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr())),
-                                          TextButton(onPressed: () => Navigator.pop(ctx, true), child: Text(s.get('delete'), style: GoogleFonts.notoSansKr(color: cs.error))),
-                                        ],
-                                      ),
-                                    );
-                                    if (confirm == true && mounted) {
-                                      await PostService.instance.deletePost(_post.id);
-                                      if (mounted) { widget.onPostDeleted?.call(_post); Navigator.pop(context); }
-                                    }
-                                  } else if (value == 'report') {
-                                    await showDialog<void>(
-                                      context: context,
-                                      builder: (ctx) => AlertDialog(
-                                        title: Text(s.get('reportPostTitle'), style: GoogleFonts.notoSansKr()),
-                                        content: Text(s.get('reportPostMessage'), style: GoogleFonts.notoSansKr()),
-                                        actions: [
-                                          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr())),
-                                          TextButton(onPressed: () { Navigator.pop(ctx); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s.get('reportSubmitted'), style: GoogleFonts.notoSansKr()), behavior: SnackBarBehavior.floating)); }, child: Text(s.get('report'), style: GoogleFonts.notoSansKr(color: cs.error))),
-                                        ],
-                                      ),
-                                    );
-                                  } else if (value == 'block') {
-                                    final confirm = await showDialog<bool>(
-                                      context: context,
-                                      builder: (ctx) => AlertDialog(
-                                        title: Text(s.get('blockPostTitle'), style: GoogleFonts.notoSansKr()),
-                                        content: Text(s.get('blockPostMessage'), style: GoogleFonts.notoSansKr()),
-                                        actions: [
-                                          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr())),
-                                          TextButton(onPressed: () => Navigator.pop(ctx, true), child: Text(s.get('block'), style: GoogleFonts.notoSansKr())),
-                                        ],
-                                      ),
-                                    );
-                                    if (confirm == true && mounted) {
-                                      await BlockService.instance.blockPost(_post.id);
-                                      if (mounted) {
-                                        ScaffoldMessenger.of(context).showSnackBar(
-                                          SnackBar(content: Text(s.get('blockPostDone'), style: GoogleFonts.notoSansKr()), behavior: SnackBarBehavior.floating),
-                                        );
-                                        Navigator.pop(context);
-                                      }
-                                    }
-                                  }
-                                },
-                                behavior: HitTestBehavior.opaque,
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-                                  child: Icon(LucideIcons.ellipsis, size: 17, color: cs.onSurfaceVariant),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 28),
-                          Text(
-                            post.title,
-                            style: GoogleFonts.notoSansKr(
-                              fontSize: 21,
-                              fontWeight: FontWeight.w700,
-                              color: cs.onSurface,
-                              height: 1.4,
-                              letterSpacing: -0.3,
-                            ),
-                          ),
-                          if (post.hasVideo && post.videoUrl != null && post.videoUrl!.isNotEmpty) ...[
-                            const SizedBox(height: 16),
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(20),
-                              child: _PostVideoPlayer(
-                                videoUrl: post.videoUrl!,
-                                thumbnailUrl: post.videoThumbnailUrl,
-                                isGif: post.isGif == true,
-                              ),
-                            ),
-                          ] else if (post.hasImage && post.imageUrls.isNotEmpty) ...[
-                            const SizedBox(height: 16),
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(20),
-                              child: _PostImageCarousel(
-                                imageUrls: post.imageUrls,
-                                imageDimensions: post.imageDimensions,
-                                onTap: (index) => FullScreenImagePage.show(context, post.imageUrls, initialIndex: index),
-                              ),
-                            ),
-                          ] else if (post.hasImage) ...[
-                            const SizedBox(height: 16),
-                            AspectRatio(
-                              aspectRatio: 1 / 1.15,
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  color: cs.surfaceContainerHighest,
-                                  borderRadius: BorderRadius.circular(20),
-                                ),
-                                child: Center(
-                                  child: Icon(LucideIcons.image, size: 56, color: cs.onSurfaceVariant.withOpacity(0.4)),
-                                ),
-                              ),
-                            ),
-                          ],
-                          if (post.body != null && post.body!.isNotEmpty) ...[
-                            const SizedBox(height: 14),
-                            Text(
-                              post.body!,
-                              style: GoogleFonts.notoSansKr(
-                                fontSize: 15,
-                                color: cs.onSurface,
-                                height: 1.7,
-                              ),
-                            ),
-                          ],
-                          if (post.linkUrl != null && post.linkUrl!.isNotEmpty) ...[
-                            const SizedBox(height: 12),
-                            Row(
-                              children: [
-                                Icon(LucideIcons.link, size: 18, color: cs.primary),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    post.linkUrl!,
-                                    style: GoogleFonts.notoSansKr(
-                                      fontSize: 14,
-                                      color: cs.primary,
-                                      decoration: TextDecoration.underline,
-                                    ),
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                    // 액션 바
-                    Padding(
-                      padding: const EdgeInsets.only(left: 4, right: 15, top: 4, bottom: 15),
-                      child: Row(
-                        children: [
-                          // 투표박스
-                          _DetailVoteBox(
-                            voteState: _isLiked ? 1 : (_isDisliked ? -1 : 0),
-                            count: _likeCount,
-                            onUp: _onLikeTap,
-                            onDown: _onDislikeTap,
-                            primaryColor: cs.primary,
-                          ),
-                          const SizedBox(width: 4),
-                          // 댓글
-                          GestureDetector(
-                            onTap: _onCommentTap,
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(LucideIcons.message_circle, size: 16, color: cs.onSurfaceVariant),
-                                const SizedBox(width: 4),
-                                Text(
-                                  formatCompactCount(post.comments),
-                                  style: GoogleFonts.notoSansKr(fontSize: 12, fontWeight: FontWeight.w500, color: cs.onSurfaceVariant),
-                                ),
-                              ],
-                            ),
-                          ),
-                          if (!hideViewsInTalkAskDetail) ...[
-                            const SizedBox(width: 14),
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(LucideIcons.eye, size: 16, color: cs.onSurfaceVariant),
-                                const SizedBox(width: 4),
-                                Text(
-                                  formatCompactCount(post.views),
-                                  style: GoogleFonts.notoSansKr(fontSize: 12, fontWeight: FontWeight.w500, color: cs.onSurfaceVariant),
-                                ),
-                              ],
-                            ),
-                          ],
-                          if (_canDeletePost) ...[
-                            const Spacer(),
-                            if (_isMine)
-                              GestureDetector(
-                                onTap: () async {
-                                  final updated = await Navigator.push<Post>(
-                                    context,
-                                    MaterialPageRoute(builder: (_) => WritePostPage(initialPost: _post)),
-                                  );
-                                  if (updated != null && mounted) setState(() => _currentPost = updated);
-                                },
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                                  child: Text(s.get('edit'), style: GoogleFonts.notoSansKr(fontSize: 13, color: cs.onSurfaceVariant)),
-                                ),
-                              ),
-                            if (_canDeletePost)
-                              GestureDetector(
-                                onTap: () async {
-                                  final confirm = await showDialog<bool>(
-                                    context: context,
-                                    builder: (ctx) => AlertDialog(
-                                      title: Text(s.get('delete'), style: GoogleFonts.notoSansKr()),
-                                      content: Text(s.get('deletePostConfirm'), style: GoogleFonts.notoSansKr()),
-                                      actions: [
-                                        TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr())),
-                                        TextButton(onPressed: () => Navigator.pop(ctx, true), child: Text(s.get('delete'), style: GoogleFonts.notoSansKr(color: cs.error))),
-                                      ],
-                                    ),
-                                  );
-                                  if (confirm == true && mounted) {
-                                    await PostService.instance.deletePost(_post.id);
-                                    if (mounted) {
-                                      widget.onPostDeleted?.call(_post);
-                                      Navigator.pop(context);
-                                    }
-                                  }
-                                },
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                                  child: Text(
-                                    s.get('delete'),
-                                    style: GoogleFonts.notoSansKr(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600,
-                                      color: deleteLabelColor,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                          ],
-                        ],
-                      ),
-                    ),
-                    ],
-                    // 액션 바 아래 구분선 (댓글 시간순 위) - 얇은 회색선
-                    Container(height: 1, color: cs.outline.withOpacity(0.4)),
-                    // 댓글 섹션 (contentWidth로 3행 버튼 오른쪽 끝 통일)
-                    KeyedSubtree(
-                      key: _commentsKey,
-                      child: LayoutBuilder(
-                        builder: (context, constraints) {
-                          final contentWidth = constraints.maxWidth;
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Container(
-                                width: double.infinity,
-                                color: theme.brightness == Brightness.light
-                                    ? cs.surfaceContainerHighest
-                                    : (theme.cardTheme.color ?? cs.surface),
-                                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                                child: Row(
-                                  children: [
-                                    Text(
-                                      '${s.get('comments')} ${post.comments}',
-                                      style: GoogleFonts.notoSansKr(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w600,
-                                        color: cs.onSurface,
-                                      ),
-                                    ),
-                                    const Spacer(),
-                                    ValueListenableBuilder<bool>(
-                                      valueListenable: _commentSortByTop,
-                                      builder: (context, sortByTop, _) => PopupMenuButton<bool>(
-                                        offset: const Offset(0, 36),
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                        padding: EdgeInsets.zero,
-                                        onSelected: (value) {
-                                          _commentSortByTop.value = value;
-                                          setState(() => _commentPage = 0);
-                                        },
-                                        itemBuilder: (context) => [
-                                          PopupMenuItem(value: false, child: Text(s.get('sortByTime'), style: GoogleFonts.notoSansKr(fontSize: 14))),
-                                          PopupMenuItem(value: true, child: Text(s.get('sortByTop'), style: GoogleFonts.notoSansKr(fontSize: 14))),
-                                        ],
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Text(
-                                              sortByTop ? s.get('sortByTop') : s.get('sortByTime'),
-                                              style: GoogleFonts.notoSansKr(
-                                                fontSize: 13,
-                                                fontWeight: FontWeight.w500,
-                                                color: cs.onSurfaceVariant,
-                                              ),
-                                            ),
-                                            const SizedBox(width: 2),
-                                            Icon(Icons.keyboard_arrow_down, size: 18, color: cs.onSurfaceVariant),
-                                          ],
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              // 페이지네이션 적용된 댓글 목록 (빈 목록일 때는 플레이스홀더 없이 아래 입력칸만 사용)
-                              ValueListenableBuilder<bool>(
-                                valueListenable: _commentSortByTop,
-                                builder: (context, sortByTop, _) {
-                                  if (post.commentsList.isEmpty) return const SizedBox.shrink();
-                                  final allComments = List<PostComment>.from(post.commentsList);
-                                if (sortByTop) {
-                                  allComments.sort((a, b) {
-                                    final voteCmp = b.votes.compareTo(a.votes);
-                                    if (voteCmp != 0) return voteCmp;
-                                    final aTime = a.createdAtDate?.millisecondsSinceEpoch ?? int.tryParse(a.id) ?? 0;
-                                    final bTime = b.createdAtDate?.millisecondsSinceEpoch ?? int.tryParse(b.id) ?? 0;
-                                    return aTime.compareTo(bTime);
-                                  });
-                                } else {
-                                    allComments.sort((a, b) {
-                                      final aTime = a.createdAtDate?.millisecondsSinceEpoch ?? int.tryParse(a.id) ?? 0;
-                                      final bTime = b.createdAtDate?.millisecondsSinceEpoch ?? int.tryParse(b.id) ?? 0;
-                                      return aTime.compareTo(bTime);
-                                    });
-                                  }
-                                  final totalPages = (allComments.length / _commentsPerPage).ceil().clamp(1, 9999);
-                                  final safePage = _commentPage.clamp(0, totalPages - 1);
-                                  final start = safePage * _commentsPerPage;
-                                  final end = (start + _commentsPerPage).clamp(0, allComments.length);
-                                  // 페이지마다 다른 key로 해당 페이지 목록이 확실히 보이도록 함
-                                  return Column(
-                                    key: ValueKey('comment_list_page_$safePage'),
-                                    children: allComments.sublist(start, end).map((c) {
-                                      final tile = _CommentTile(
-                                        key: ValueKey(c.id),
-                                        comment: c,
-                                        strings: s,
-                                        depth: 0,
-                                        postId: _post.id,
-                                        contentWidth: contentWidth,
-                                        onPostUpdated: (Post p) => setState(() => _currentPost = p),
-                                        onReplyTap: (String commentId) {
-                                          setState(() => _replyingToCommentId = commentId);
-                                          _commentFocusNode.requestFocus();
-                                          Future.delayed(const Duration(milliseconds: 350), () {
-                                            if (!mounted) return;
-                                            final ctx = _inputCardKey.currentContext;
-                                            if (ctx == null || !_scrollController.hasClients) return;
-                                            final box = ctx.findRenderObject() as RenderBox?;
-                                            if (box == null) return;
-                                            final scrollBox = _scrollController.position.context.storageContext
-                                                .findRenderObject() as RenderBox?;
-                                            if (scrollBox == null) return;
-                                            final cardTopInScroll = box.localToGlobal(Offset.zero, ancestor: scrollBox).dy;
-                                            final cardBottom = cardTopInScroll + box.size.height + _scrollController.offset;
-                                            final target = (cardBottom - _scrollController.position.viewportDimension)
-                                                .clamp(0.0, _scrollController.position.maxScrollExtent);
-                                            _scrollController.animateTo(
-                                              target,
-                                              duration: const Duration(milliseconds: 300),
-                                              curve: Curves.easeOut,
-                                            );
-                                          });
-                                        },
-                                      );
-                                      return c.id == _scrollToCommentId
-                                          ? KeyedSubtree(key: _newCommentKey, child: tile)
-                                          : tile;
-                                    }).toList(),
-                                  );
-                                },
-                              ),
-                            ],
-                          );
-                        },
-                      ),
-                    ),
-                    // 댓글 페이지네이션
-                    Builder(builder: (context) {
-                      final allComments = post.commentsList;
-                      if (allComments.isEmpty) return const SizedBox.shrink();
-                      final totalPages = (allComments.length / _commentsPerPage).ceil().clamp(1, 9999);
-                      final safePage = _commentPage.clamp(0, totalPages - 1);
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        color: theme.cardTheme.color ?? cs.surface,
                         child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            GestureDetector(
-                              onTap: safePage > 0
-                                  ? () {
-                                      setState(() => _commentPage = safePage - 1);
-                                      _savedCommentPageByPostId[_post.id] = safePage - 1;
-                                      _scrollToComments();
-                                    }
-                                  : null,
-                              child: Padding(
-                                padding: const EdgeInsets.all(8),
-                                child: Icon(LucideIcons.chevron_left, size: 22,
-                                  color: safePage > 0 ? cs.onSurface.withOpacity(0.75) : cs.onSurface.withOpacity(0.18)),
+                            Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(24),
+                                onTap: () => Navigator.pop(
+                                  context,
+                                  _buildResult(updatedPost: _post),
+                                ),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(10),
+                                  child: Icon(
+                                    LucideIcons.x,
+                                    size: 22,
+                                    color: cs.onSurface,
+                                  ),
+                                ),
                               ),
                             ),
-                            const SizedBox(width: 12),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                              decoration: BoxDecoration(
-                                color: cs.onSurface.withOpacity(0.05),
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child: Text(
-                                '${safePage + 1} / $totalPages',
-                                style: GoogleFonts.notoSansKr(fontSize: 13, fontWeight: FontWeight.w500, color: cs.onSurfaceVariant, letterSpacing: 0.2),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            GestureDetector(
-                              onTap: safePage < totalPages - 1
-                                  ? () {
-                                      setState(() => _commentPage = safePage + 1);
-                                      _savedCommentPageByPostId[_post.id] = safePage + 1;
-                                      _scrollToComments();
-                                    }
-                                  : null,
-                              child: Padding(
-                                padding: const EdgeInsets.all(8),
-                                child: Icon(LucideIcons.chevron_right, size: 22,
-                                  color: safePage < totalPages - 1 ? cs.onSurface.withOpacity(0.75) : cs.onSurface.withOpacity(0.18)),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    }),
-                    const SizedBox(height: 8),
-                    // 댓글 입력 카드 (배경색과 입력칸 색 사이의 중간색)
-                    Container(
-                      key: _inputCardKey,
-                      margin: const EdgeInsets.symmetric(horizontal: 16),
-                      decoration: BoxDecoration(
-                        color: Color.lerp(theme.scaffoldBackgroundColor, cs.surfaceContainerHighest, 0.6),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: cs.outline.withOpacity(0.2)),
-                        boxShadow: [
-                          BoxShadow(
-                            color: cs.shadow.withOpacity(0.15),
-                            blurRadius: 20,
-                            offset: const Offset(0, 4),
-                          ),
-                          BoxShadow(
-                            color: cs.shadow.withOpacity(0.06),
-                            blurRadius: 6,
-                            offset: const Offset(0, 1),
-                          ),
-                        ],
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
-                            child: Row(
-                              children: [
-                                Text(
-                                  '${s.get('writeComment')}  ',
+                            Expanded(
+                              child: Center(
+                                child: Text(
+                                  widget.tabName ?? '',
                                   style: GoogleFonts.notoSansKr(
-                                    fontSize: 13,
+                                    fontSize: 15,
                                     fontWeight: FontWeight.w600,
                                     color: cs.onSurface,
                                   ),
                                 ),
-                                Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Text('(', style: GoogleFonts.notoSansKr(fontSize: 12, color: cs.onSurfaceVariant, fontWeight: FontWeight.w500)),
-                                    ShaderMask(
-                                      blendMode: BlendMode.srcIn,
-                                      shaderCallback: (bounds) => const LinearGradient(
-                                        colors: [Color(0xFFFF6B35), Color(0xFFE63946)],
-                                        begin: Alignment.topCenter,
-                                        end: Alignment.bottomCenter,
-                                      ).createShader(bounds),
-                                      child: const Icon(Icons.local_fire_department_rounded, size: 13, color: Colors.white),
+                              ),
+                            ),
+                            const SizedBox(width: 42),
+                          ],
+                        ),
+                      ),
+                    Expanded(
+                      child: BlindRefreshIndicator(
+                        onRefresh: _loadLatestPost,
+                        spinnerOffsetDown: 15.0,
+                        child: Container(
+                          color: isTypedReview
+                              ? _kLetterboxdReviewScreenBg
+                              : theme.scaffoldBackgroundColor,
+                          child: SingleChildScrollView(
+                            controller: _scrollController,
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            keyboardDismissBehavior:
+                                ScrollViewKeyboardDismissBehavior.onDrag,
+                            padding: EdgeInsets.zero,
+                            child: GestureDetector(
+                              onTap: () => FocusScope.of(context).unfocus(),
+                              behavior: HitTestBehavior.opaque,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  if (isTypedReview)
+                                    _buildLetterboxdReviewSection(
+                                      context,
+                                      theme,
+                                      cs,
+                                      post,
                                     ),
-                                    Text(s.get('activityPoint'), style: GoogleFonts.notoSansKr(fontSize: 12, color: cs.onSurfaceVariant, fontWeight: FontWeight.w500)),
+                                  if (!isTypedReview) ...[
+                                    Padding(
+                                      padding: const EdgeInsets.fromLTRB(
+                                        15,
+                                        8,
+                                        15,
+                                        8,
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.center,
+                                            children: [
+                                              // 아바타 + 닉네임/시간
+                                              _PostAuthorAvatar(
+                                                photoUrl: post.authorPhotoUrl,
+                                                author: post.author,
+                                                colorIndex:
+                                                    post.authorAvatarColorIndex,
+                                                size: 38,
+                                              ),
+                                              const SizedBox(width: 10),
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
+                                                  children: [
+                                                    GestureDetector(
+                                                      onTapDown: (details) =>
+                                                          _showPostAuthorMenu(
+                                                            context,
+                                                            post.author,
+                                                            details,
+                                                          ),
+                                                      behavior: HitTestBehavior
+                                                          .opaque,
+                                                      child: Text(
+                                                        post.author.startsWith(
+                                                              'u/',
+                                                            )
+                                                            ? post.author
+                                                                  .substring(2)
+                                                            : post.author,
+                                                        style:
+                                                            GoogleFonts.notoSansKr(
+                                                              fontSize: 13,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w600,
+                                                              color:
+                                                                  cs.onSurface,
+                                                            ),
+                                                      ),
+                                                    ),
+                                                    const SizedBox(height: 2),
+                                                    Text(
+                                                      post.timeAgo,
+                                                      style:
+                                                          GoogleFonts.notoSansKr(
+                                                            fontSize: 11,
+                                                            color: cs
+                                                                .onSurfaceVariant,
+                                                          ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                              // 공유 아이콘
+                                              GestureDetector(
+                                                onTap: () => _sharePostOrReview(
+                                                  context,
+                                                  post,
+                                                ),
+                                                behavior:
+                                                    HitTestBehavior.opaque,
+                                                child: Padding(
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                        horizontal: 4,
+                                                        vertical: 4,
+                                                      ),
+                                                  child: Icon(
+                                                    LucideIcons.share_2,
+                                                    size: 18,
+                                                    color: cs.onSurfaceVariant,
+                                                  ),
+                                                ),
+                                              ),
+                                              // 저장 아이콘
+                                              ValueListenableBuilder<
+                                                List<SavedItem>
+                                              >(
+                                                valueListenable: SavedService
+                                                    .instance
+                                                    .savedList,
+                                                builder: (context, _, __) {
+                                                  final isSaved = SavedService
+                                                      .instance
+                                                      .isSaved(post.id);
+                                                  return GestureDetector(
+                                                    onTap: () => SavedService
+                                                        .instance
+                                                        .toggle(
+                                                          SavedItem(
+                                                            id: post.id,
+                                                            title: post.title,
+                                                            views:
+                                                                formatCompactCount(
+                                                                  post.views,
+                                                                ),
+                                                            type: SavedItemType
+                                                                .post,
+                                                            post: post,
+                                                          ),
+                                                        ),
+                                                    behavior:
+                                                        HitTestBehavior.opaque,
+                                                    child: Padding(
+                                                      padding:
+                                                          const EdgeInsets.symmetric(
+                                                            horizontal: 4,
+                                                            vertical: 4,
+                                                          ),
+                                                      child: Icon(
+                                                        isSaved
+                                                            ? Icons.bookmark
+                                                            : Icons
+                                                                  .bookmark_border,
+                                                        size: 20,
+                                                        color: isSaved
+                                                            ? cs.primary
+                                                            : cs.onSurfaceVariant,
+                                                      ),
+                                                    ),
+                                                  );
+                                                },
+                                              ),
+                                              // ··· 버튼 (오른쪽 상단)
+                                              GestureDetector(
+                                                onTapDown: (details) async {
+                                                  final value = await showMenu<String>(
+                                                    context: context,
+                                                    position:
+                                                        RelativeRect.fromLTRB(
+                                                          details
+                                                              .globalPosition
+                                                              .dx,
+                                                          details
+                                                              .globalPosition
+                                                              .dy,
+                                                          details
+                                                                  .globalPosition
+                                                                  .dx +
+                                                              1,
+                                                          details
+                                                                  .globalPosition
+                                                                  .dy +
+                                                              1,
+                                                        ),
+                                                    shape: RoundedRectangleBorder(
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            10,
+                                                          ),
+                                                    ),
+                                                    color: cs.surface,
+                                                    items: [
+                                                      if (_isMine) ...[
+                                                        PopupMenuItem(
+                                                          value: 'edit',
+                                                          child: Row(
+                                                            children: [
+                                                              Icon(
+                                                                Icons
+                                                                    .edit_outlined,
+                                                                size: 18,
+                                                                color: cs
+                                                                    .onSurface,
+                                                              ),
+                                                              const SizedBox(
+                                                                width: 10,
+                                                              ),
+                                                              Text(
+                                                                s.get('edit'),
+                                                                style:
+                                                                    GoogleFonts.notoSansKr(),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                        PopupMenuItem(
+                                                          value: 'delete',
+                                                          child: Row(
+                                                            children: [
+                                                              Icon(
+                                                                Icons
+                                                                    .delete_outline,
+                                                                size: 18,
+                                                                color: cs.error,
+                                                              ),
+                                                              const SizedBox(
+                                                                width: 10,
+                                                              ),
+                                                              Text(
+                                                                s.get('delete'),
+                                                                style:
+                                                                    GoogleFonts.notoSansKr(
+                                                                      color: cs
+                                                                          .error,
+                                                                    ),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                      ] else if (isAppModerator()) ...[
+                                                        PopupMenuItem(
+                                                          value: 'delete',
+                                                          child: Row(
+                                                            children: [
+                                                              Icon(
+                                                                Icons
+                                                                    .delete_outline,
+                                                                size: 18,
+                                                                color: cs.error,
+                                                              ),
+                                                              const SizedBox(
+                                                                width: 10,
+                                                              ),
+                                                              Text(
+                                                                s.get('delete'),
+                                                                style:
+                                                                    GoogleFonts.notoSansKr(
+                                                                      color: cs
+                                                                          .error,
+                                                                    ),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                      ] else ...[
+                                                        PopupMenuItem(
+                                                          value: 'report',
+                                                          child: Row(
+                                                            children: [
+                                                              Icon(
+                                                                LucideIcons
+                                                                    .flag,
+                                                                size: 18,
+                                                                color: cs.error,
+                                                              ),
+                                                              const SizedBox(
+                                                                width: 10,
+                                                              ),
+                                                              Text(
+                                                                s.get('report'),
+                                                                style:
+                                                                    GoogleFonts.notoSansKr(
+                                                                      color: cs
+                                                                          .error,
+                                                                    ),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                        PopupMenuItem(
+                                                          value: 'block',
+                                                          child: Row(
+                                                            children: [
+                                                              Icon(
+                                                                LucideIcons.ban,
+                                                                size: 18,
+                                                                color: cs
+                                                                    .onSurface,
+                                                              ),
+                                                              const SizedBox(
+                                                                width: 10,
+                                                              ),
+                                                              Text(
+                                                                s.get('block'),
+                                                                style:
+                                                                    GoogleFonts.notoSansKr(),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ],
+                                                  );
+                                                  if (!mounted || value == null)
+                                                    return;
+                                                  if (value == 'edit') {
+                                                    final updated =
+                                                        await Navigator.push<
+                                                          Post
+                                                        >(
+                                                          context,
+                                                          MaterialPageRoute(
+                                                            builder: (_) =>
+                                                                WritePostPage(
+                                                                  initialPost:
+                                                                      _post,
+                                                                ),
+                                                          ),
+                                                        );
+                                                    if (updated != null &&
+                                                        mounted)
+                                                      setState(
+                                                        () => _currentPost =
+                                                            updated,
+                                                      );
+                                                  } else if (value ==
+                                                      'delete') {
+                                                    final confirm = await showDialog<bool>(
+                                                      context: context,
+                                                      builder: (ctx) => AlertDialog(
+                                                        title: Text(
+                                                          s.get('delete'),
+                                                          style:
+                                                              GoogleFonts.notoSansKr(),
+                                                        ),
+                                                        content: Text(
+                                                          s.get(
+                                                            'deletePostConfirm',
+                                                          ),
+                                                          style:
+                                                              GoogleFonts.notoSansKr(),
+                                                        ),
+                                                        actions: [
+                                                          TextButton(
+                                                            onPressed: () =>
+                                                                Navigator.pop(
+                                                                  ctx,
+                                                                  false,
+                                                                ),
+                                                            child: Text(
+                                                              s.get('cancel'),
+                                                              style:
+                                                                  GoogleFonts.notoSansKr(),
+                                                            ),
+                                                          ),
+                                                          TextButton(
+                                                            onPressed: () =>
+                                                                Navigator.pop(
+                                                                  ctx,
+                                                                  true,
+                                                                ),
+                                                            child: Text(
+                                                              s.get('delete'),
+                                                              style:
+                                                                  GoogleFonts.notoSansKr(
+                                                                    color: cs
+                                                                        .error,
+                                                                  ),
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    );
+                                                    if (confirm == true &&
+                                                        mounted) {
+                                                      await PostService.instance
+                                                          .deletePost(_post.id);
+                                                      if (mounted) {
+                                                        widget.onPostDeleted
+                                                            ?.call(_post);
+                                                        Navigator.pop(context);
+                                                      }
+                                                    }
+                                                  } else if (value ==
+                                                      'report') {
+                                                    await showDialog<void>(
+                                                      context: context,
+                                                      builder: (ctx) => AlertDialog(
+                                                        title: Text(
+                                                          s.get(
+                                                            'reportPostTitle',
+                                                          ),
+                                                          style:
+                                                              GoogleFonts.notoSansKr(),
+                                                        ),
+                                                        content: Text(
+                                                          s.get(
+                                                            'reportPostMessage',
+                                                          ),
+                                                          style:
+                                                              GoogleFonts.notoSansKr(),
+                                                        ),
+                                                        actions: [
+                                                          TextButton(
+                                                            onPressed: () =>
+                                                                Navigator.pop(
+                                                                  ctx,
+                                                                ),
+                                                            child: Text(
+                                                              s.get('cancel'),
+                                                              style:
+                                                                  GoogleFonts.notoSansKr(),
+                                                            ),
+                                                          ),
+                                                          TextButton(
+                                                            onPressed: () {
+                                                              Navigator.pop(
+                                                                ctx,
+                                                              );
+                                                              ScaffoldMessenger.of(
+                                                                context,
+                                                              ).showSnackBar(
+                                                                SnackBar(
+                                                                  content: Text(
+                                                                    s.get(
+                                                                      'reportSubmitted',
+                                                                    ),
+                                                                    style:
+                                                                        GoogleFonts.notoSansKr(),
+                                                                  ),
+                                                                  behavior:
+                                                                      SnackBarBehavior
+                                                                          .floating,
+                                                                ),
+                                                              );
+                                                            },
+                                                            child: Text(
+                                                              s.get('report'),
+                                                              style:
+                                                                  GoogleFonts.notoSansKr(
+                                                                    color: cs
+                                                                        .error,
+                                                                  ),
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    );
+                                                  } else if (value == 'block') {
+                                                    final confirm = await showDialog<bool>(
+                                                      context: context,
+                                                      builder: (ctx) => AlertDialog(
+                                                        title: Text(
+                                                          s.get(
+                                                            'blockPostTitle',
+                                                          ),
+                                                          style:
+                                                              GoogleFonts.notoSansKr(),
+                                                        ),
+                                                        content: Text(
+                                                          s.get(
+                                                            'blockPostMessage',
+                                                          ),
+                                                          style:
+                                                              GoogleFonts.notoSansKr(),
+                                                        ),
+                                                        actions: [
+                                                          TextButton(
+                                                            onPressed: () =>
+                                                                Navigator.pop(
+                                                                  ctx,
+                                                                  false,
+                                                                ),
+                                                            child: Text(
+                                                              s.get('cancel'),
+                                                              style:
+                                                                  GoogleFonts.notoSansKr(),
+                                                            ),
+                                                          ),
+                                                          TextButton(
+                                                            onPressed: () =>
+                                                                Navigator.pop(
+                                                                  ctx,
+                                                                  true,
+                                                                ),
+                                                            child: Text(
+                                                              s.get('block'),
+                                                              style:
+                                                                  GoogleFonts.notoSansKr(),
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    );
+                                                    if (confirm == true &&
+                                                        mounted) {
+                                                      await BlockService
+                                                          .instance
+                                                          .blockPost(_post.id);
+                                                      if (mounted) {
+                                                        ScaffoldMessenger.of(
+                                                          context,
+                                                        ).showSnackBar(
+                                                          SnackBar(
+                                                            content: Text(
+                                                              s.get(
+                                                                'blockPostDone',
+                                                              ),
+                                                              style:
+                                                                  GoogleFonts.notoSansKr(),
+                                                            ),
+                                                            behavior:
+                                                                SnackBarBehavior
+                                                                    .floating,
+                                                          ),
+                                                        );
+                                                        Navigator.pop(context);
+                                                      }
+                                                    }
+                                                  }
+                                                },
+                                                behavior:
+                                                    HitTestBehavior.opaque,
+                                                child: Padding(
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                        horizontal: 4,
+                                                        vertical: 4,
+                                                      ),
+                                                  child: Icon(
+                                                    LucideIcons.ellipsis,
+                                                    size: 17,
+                                                    color: cs.onSurfaceVariant,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 28),
+                                          Text(
+                                            post.title,
+                                            style: GoogleFonts.notoSansKr(
+                                              fontSize: 21,
+                                              fontWeight: FontWeight.w700,
+                                              color: cs.onSurface,
+                                              height: 1.4,
+                                              letterSpacing: -0.3,
+                                            ),
+                                          ),
+                                          if (post.hasVideo &&
+                                              post.videoUrl != null &&
+                                              post.videoUrl!.isNotEmpty) ...[
+                                            const SizedBox(height: 16),
+                                            ClipRRect(
+                                              borderRadius:
+                                                  BorderRadius.circular(20),
+                                              child: _PostVideoPlayer(
+                                                videoUrl: post.videoUrl!,
+                                                thumbnailUrl:
+                                                    post.videoThumbnailUrl,
+                                                isGif: post.isGif == true,
+                                              ),
+                                            ),
+                                          ] else if (post.hasImage &&
+                                              post.imageUrls.isNotEmpty) ...[
+                                            const SizedBox(height: 16),
+                                            ClipRRect(
+                                              borderRadius:
+                                                  BorderRadius.circular(20),
+                                              child: _PostImageCarousel(
+                                                imageUrls: post.imageUrls,
+                                                imageDimensions:
+                                                    post.imageDimensions,
+                                                onTap: (index) =>
+                                                    FullScreenImagePage.show(
+                                                      context,
+                                                      post.imageUrls,
+                                                      initialIndex: index,
+                                                    ),
+                                              ),
+                                            ),
+                                          ] else if (post.hasImage) ...[
+                                            const SizedBox(height: 16),
+                                            AspectRatio(
+                                              aspectRatio: 1 / 1.15,
+                                              child: Container(
+                                                decoration: BoxDecoration(
+                                                  color: cs
+                                                      .surfaceContainerHighest,
+                                                  borderRadius:
+                                                      BorderRadius.circular(20),
+                                                ),
+                                                child: Center(
+                                                  child: Icon(
+                                                    LucideIcons.image,
+                                                    size: 56,
+                                                    color: cs.onSurfaceVariant
+                                                        .withOpacity(0.4),
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                          if (post.body != null &&
+                                              post.body!.isNotEmpty) ...[
+                                            const SizedBox(height: 14),
+                                            Text(
+                                              post.body!,
+                                              style: GoogleFonts.notoSansKr(
+                                                fontSize: 15,
+                                                color: cs.onSurface,
+                                                height: 1.7,
+                                              ),
+                                            ),
+                                          ],
+                                          if (post.linkUrl != null &&
+                                              post.linkUrl!.isNotEmpty) ...[
+                                            const SizedBox(height: 12),
+                                            Row(
+                                              children: [
+                                                Icon(
+                                                  LucideIcons.link,
+                                                  size: 18,
+                                                  color: cs.primary,
+                                                ),
+                                                const SizedBox(width: 8),
+                                                Expanded(
+                                                  child: Text(
+                                                    post.linkUrl!,
+                                                    style:
+                                                        GoogleFonts.notoSansKr(
+                                                          fontSize: 14,
+                                                          color: cs.primary,
+                                                          decoration:
+                                                              TextDecoration
+                                                                  .underline,
+                                                        ),
+                                                    maxLines: 2,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ],
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(height: 18),
+                                    // 액션 바
+                                    Padding(
+                                      padding: const EdgeInsets.only(
+                                        left: 4,
+                                        right: 15,
+                                        top: 4,
+                                        bottom: 15,
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          // 투표박스
+                                          _DetailVoteBox(
+                                            voteState: _isLiked
+                                                ? 1
+                                                : (_isDisliked ? -1 : 0),
+                                            count: _likeCount,
+                                            onUp: _onLikeTap,
+                                            onDown: _onDislikeTap,
+                                            primaryColor: cs.primary,
+                                          ),
+                                          const SizedBox(width: 4),
+                                          // 댓글
+                                          GestureDetector(
+                                            onTap: _onCommentTap,
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Icon(
+                                                  LucideIcons.message_circle,
+                                                  size: 16,
+                                                  color: cs.onSurfaceVariant,
+                                                ),
+                                                const SizedBox(width: 4),
+                                                Text(
+                                                  formatCompactCount(
+                                                    post.comments,
+                                                  ),
+                                                  style: GoogleFonts.notoSansKr(
+                                                    fontSize: 12,
+                                                    fontWeight: FontWeight.w500,
+                                                    color: cs.onSurfaceVariant,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          if (!hideViewsInTalkAskDetail) ...[
+                                            const SizedBox(width: 14),
+                                            Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Icon(
+                                                  LucideIcons.eye,
+                                                  size: 16,
+                                                  color: cs.onSurfaceVariant,
+                                                ),
+                                                const SizedBox(width: 4),
+                                                Text(
+                                                  formatCompactCount(
+                                                    post.views,
+                                                  ),
+                                                  style: GoogleFonts.notoSansKr(
+                                                    fontSize: 12,
+                                                    fontWeight: FontWeight.w500,
+                                                    color: cs.onSurfaceVariant,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ],
+                                          if (_canDeletePost) ...[
+                                            const Spacer(),
+                                            if (_isMine)
+                                              GestureDetector(
+                                                onTap: () async {
+                                                  final updated =
+                                                      await Navigator.push<
+                                                        Post
+                                                      >(
+                                                        context,
+                                                        MaterialPageRoute(
+                                                          builder: (_) =>
+                                                              WritePostPage(
+                                                                initialPost:
+                                                                    _post,
+                                                              ),
+                                                        ),
+                                                      );
+                                                  if (updated != null &&
+                                                      mounted)
+                                                    setState(
+                                                      () => _currentPost =
+                                                          updated,
+                                                    );
+                                                },
+                                                child: Padding(
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                        horizontal: 6,
+                                                        vertical: 6,
+                                                      ),
+                                                  child: Text(
+                                                    s.get('edit'),
+                                                    style:
+                                                        GoogleFonts.notoSansKr(
+                                                          fontSize: 13,
+                                                          color: cs
+                                                              .onSurfaceVariant,
+                                                        ),
+                                                  ),
+                                                ),
+                                              ),
+                                            if (_canDeletePost)
+                                              GestureDetector(
+                                                onTap: () async {
+                                                  final confirm = await showDialog<bool>(
+                                                    context: context,
+                                                    builder: (ctx) => AlertDialog(
+                                                      title: Text(
+                                                        s.get('delete'),
+                                                        style:
+                                                            GoogleFonts.notoSansKr(),
+                                                      ),
+                                                      content: Text(
+                                                        s.get(
+                                                          'deletePostConfirm',
+                                                        ),
+                                                        style:
+                                                            GoogleFonts.notoSansKr(),
+                                                      ),
+                                                      actions: [
+                                                        TextButton(
+                                                          onPressed: () =>
+                                                              Navigator.pop(
+                                                                ctx,
+                                                                false,
+                                                              ),
+                                                          child: Text(
+                                                            s.get('cancel'),
+                                                            style:
+                                                                GoogleFonts.notoSansKr(),
+                                                          ),
+                                                        ),
+                                                        TextButton(
+                                                          onPressed: () =>
+                                                              Navigator.pop(
+                                                                ctx,
+                                                                true,
+                                                              ),
+                                                          child: Text(
+                                                            s.get('delete'),
+                                                            style:
+                                                                GoogleFonts.notoSansKr(
+                                                                  color:
+                                                                      cs.error,
+                                                                ),
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  );
+                                                  if (confirm == true &&
+                                                      mounted) {
+                                                    await PostService.instance
+                                                        .deletePost(_post.id);
+                                                    if (mounted) {
+                                                      widget.onPostDeleted
+                                                          ?.call(_post);
+                                                      Navigator.pop(context);
+                                                    }
+                                                  }
+                                                },
+                                                child: Padding(
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                        horizontal: 6,
+                                                        vertical: 6,
+                                                      ),
+                                                  child: Text(
+                                                    s.get('delete'),
+                                                    style:
+                                                        GoogleFonts.notoSansKr(
+                                                          fontSize: 13,
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                          color:
+                                                              deleteLabelColor,
+                                                        ),
+                                                  ),
+                                                ),
+                                              ),
+                                          ],
+                                        ],
+                                      ),
+                                    ),
                                   ],
-                                ),
-                              ],
+                                  if (!hideLetterboxdTail) ...[
+                                    // 액션 바 아래 구분선 (댓글 시간순 위) - 얇은 회색선
+                                    Container(
+                                      height: 1,
+                                      color: isTypedReview
+                                          ? Colors.white.withValues(alpha: 0.1)
+                                          : cs.outline.withValues(alpha: 0.4),
+                                    ),
+                                    // 댓글 섹션 (contentWidth로 3행 버튼 오른쪽 끝 통일)
+                                    KeyedSubtree(
+                                      key: _commentsKey,
+                                      child: LayoutBuilder(
+                                        builder: (context, constraints) {
+                                          final contentWidth =
+                                              constraints.maxWidth;
+                                          return Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Container(
+                                                width: double.infinity,
+                                                color: isTypedReview
+                                                    ? const Color(0xFF1C1C1E)
+                                                    : (theme.brightness ==
+                                                              Brightness.light
+                                                          ? cs.surfaceContainerHighest
+                                                          : (theme
+                                                                    .cardTheme
+                                                                    .color ??
+                                                                cs.surface)),
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 20,
+                                                      vertical: 10,
+                                                    ),
+                                                child: Row(
+                                                  children: [
+                                                    Text(
+                                                      isTypedReview
+                                                          ? s
+                                                                .get(
+                                                                  'letterboxdReviewDetailTabPostWithCount',
+                                                                )
+                                                                .replaceAll(
+                                                                  '{n}',
+                                                                  '${post.comments}',
+                                                                )
+                                                          : '${s.get('comments')} ${post.comments}',
+                                                      style: GoogleFonts.notoSansKr(
+                                                        fontSize: 13,
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                        color: isTypedReview
+                                                            ? Colors.white
+                                                                  .withValues(
+                                                                    alpha: 0.88,
+                                                                  )
+                                                            : cs.onSurface,
+                                                      ),
+                                                    ),
+                                                    const Spacer(),
+                                                    ValueListenableBuilder<
+                                                      bool
+                                                    >(
+                                                      valueListenable:
+                                                          _commentSortByTop,
+                                                      builder: (context, sortByTop, _) => PopupMenuButton<bool>(
+                                                        offset: const Offset(
+                                                          0,
+                                                          36,
+                                                        ),
+                                                        shape: RoundedRectangleBorder(
+                                                          borderRadius:
+                                                              BorderRadius.circular(
+                                                                12,
+                                                              ),
+                                                        ),
+                                                        padding:
+                                                            EdgeInsets.zero,
+                                                        onSelected: (value) {
+                                                          _commentSortByTop
+                                                                  .value =
+                                                              value;
+                                                          setState(
+                                                            () => _commentPage =
+                                                                0,
+                                                          );
+                                                        },
+                                                        itemBuilder: (context) => [
+                                                          PopupMenuItem(
+                                                            value: false,
+                                                            child: Text(
+                                                              s.get(
+                                                                'sortByTime',
+                                                              ),
+                                                              style:
+                                                                  GoogleFonts.notoSansKr(
+                                                                    fontSize:
+                                                                        14,
+                                                                  ),
+                                                            ),
+                                                          ),
+                                                          PopupMenuItem(
+                                                            value: true,
+                                                            child: Text(
+                                                              s.get(
+                                                                'sortByTop',
+                                                              ),
+                                                              style:
+                                                                  GoogleFonts.notoSansKr(
+                                                                    fontSize:
+                                                                        14,
+                                                                  ),
+                                                            ),
+                                                          ),
+                                                        ],
+                                                        child: Row(
+                                                          mainAxisSize:
+                                                              MainAxisSize.min,
+                                                          children: [
+                                                            Text(
+                                                              sortByTop
+                                                                  ? s.get(
+                                                                      'sortByTop',
+                                                                    )
+                                                                  : s.get(
+                                                                      'sortByTime',
+                                                                    ),
+                                                              style: GoogleFonts.notoSansKr(
+                                                                fontSize: 13,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w500,
+                                                                color:
+                                                                    isTypedReview
+                                                                    ? Colors
+                                                                          .white
+                                                                          .withValues(
+                                                                            alpha:
+                                                                                0.55,
+                                                                          )
+                                                                    : cs.onSurfaceVariant,
+                                                              ),
+                                                            ),
+                                                            const SizedBox(
+                                                              width: 2,
+                                                            ),
+                                                            Icon(
+                                                              Icons
+                                                                  .keyboard_arrow_down,
+                                                              size: 18,
+                                                              color:
+                                                                  isTypedReview
+                                                                  ? Colors.white
+                                                                        .withValues(
+                                                                          alpha:
+                                                                              0.55,
+                                                                        )
+                                                                  : cs.onSurfaceVariant,
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                              const SizedBox(height: 8),
+                                              // 페이지네이션 적용된 댓글 목록 (빈 목록일 때는 플레이스홀더 없이 아래 입력칸만 사용)
+                                              ValueListenableBuilder<bool>(
+                                                valueListenable:
+                                                    _commentSortByTop,
+                                                builder: (context, sortByTop, _) {
+                                                  if (post.commentsList.isEmpty)
+                                                    return const SizedBox.shrink();
+                                                  final allComments =
+                                                      List<PostComment>.from(
+                                                        post.commentsList,
+                                                      );
+                                                  if (sortByTop) {
+                                                    allComments.sort((a, b) {
+                                                      final voteCmp = b.votes
+                                                          .compareTo(a.votes);
+                                                      if (voteCmp != 0)
+                                                        return voteCmp;
+                                                      final aTime =
+                                                          a
+                                                              .createdAtDate
+                                                              ?.millisecondsSinceEpoch ??
+                                                          int.tryParse(a.id) ??
+                                                          0;
+                                                      final bTime =
+                                                          b
+                                                              .createdAtDate
+                                                              ?.millisecondsSinceEpoch ??
+                                                          int.tryParse(b.id) ??
+                                                          0;
+                                                      return aTime.compareTo(
+                                                        bTime,
+                                                      );
+                                                    });
+                                                  } else {
+                                                    allComments.sort((a, b) {
+                                                      final aTime =
+                                                          a
+                                                              .createdAtDate
+                                                              ?.millisecondsSinceEpoch ??
+                                                          int.tryParse(a.id) ??
+                                                          0;
+                                                      final bTime =
+                                                          b
+                                                              .createdAtDate
+                                                              ?.millisecondsSinceEpoch ??
+                                                          int.tryParse(b.id) ??
+                                                          0;
+                                                      return aTime.compareTo(
+                                                        bTime,
+                                                      );
+                                                    });
+                                                  }
+                                                  final totalPages =
+                                                      (allComments.length /
+                                                              _commentsPerPage)
+                                                          .ceil()
+                                                          .clamp(1, 9999);
+                                                  final safePage = _commentPage
+                                                      .clamp(0, totalPages - 1);
+                                                  final start =
+                                                      safePage *
+                                                      _commentsPerPage;
+                                                  final end =
+                                                      (start + _commentsPerPage)
+                                                          .clamp(
+                                                            0,
+                                                            allComments.length,
+                                                          );
+                                                  // 페이지마다 다른 key로 해당 페이지 목록이 확실히 보이도록 함
+                                                  return Column(
+                                                    key: ValueKey(
+                                                      'comment_list_page_$safePage',
+                                                    ),
+                                                    children: allComments.sublist(start, end).map((
+                                                      c,
+                                                    ) {
+                                                      final tile = _CommentTile(
+                                                        key: ValueKey(c.id),
+                                                        comment: c,
+                                                        strings: s,
+                                                        depth: 0,
+                                                        postId: _post.id,
+                                                        showAuthorProfileMenu:
+                                                            showAuthorProfileMenu,
+                                                        contentWidth:
+                                                            contentWidth,
+                                                        onPostUpdated:
+                                                            (
+                                                              Post p,
+                                                            ) => setState(
+                                                              () =>
+                                                                  _currentPost =
+                                                                      p,
+                                                            ),
+                                                        onReplyTap: (String commentId) {
+                                                          setState(
+                                                            () =>
+                                                                _replyingToCommentId =
+                                                                    commentId,
+                                                          );
+                                                          _commentFocusNode
+                                                              .requestFocus();
+                                                          Future.delayed(
+                                                            const Duration(
+                                                              milliseconds: 350,
+                                                            ),
+                                                            () {
+                                                              if (!mounted)
+                                                                return;
+                                                              final ctx =
+                                                                  _inputCardKey
+                                                                      .currentContext;
+                                                              if (ctx == null ||
+                                                                  !_scrollController
+                                                                      .hasClients)
+                                                                return;
+                                                              final box =
+                                                                  ctx.findRenderObject()
+                                                                      as RenderBox?;
+                                                              if (box == null)
+                                                                return;
+                                                              final scrollBox =
+                                                                  _scrollController
+                                                                          .position
+                                                                          .context
+                                                                          .storageContext
+                                                                          .findRenderObject()
+                                                                      as RenderBox?;
+                                                              if (scrollBox ==
+                                                                  null)
+                                                                return;
+                                                              final cardTopInScroll = box
+                                                                  .localToGlobal(
+                                                                    Offset.zero,
+                                                                    ancestor:
+                                                                        scrollBox,
+                                                                  )
+                                                                  .dy;
+                                                              final cardBottom =
+                                                                  cardTopInScroll +
+                                                                  box
+                                                                      .size
+                                                                      .height +
+                                                                  _scrollController
+                                                                      .offset;
+                                                              final target =
+                                                                  (cardBottom -
+                                                                          _scrollController
+                                                                              .position
+                                                                              .viewportDimension)
+                                                                      .clamp(
+                                                                        0.0,
+                                                                        _scrollController
+                                                                            .position
+                                                                            .maxScrollExtent,
+                                                                      );
+                                                              _scrollController.animateTo(
+                                                                target,
+                                                                duration:
+                                                                    const Duration(
+                                                                      milliseconds:
+                                                                          300,
+                                                                    ),
+                                                                curve: Curves
+                                                                    .easeOut,
+                                                              );
+                                                            },
+                                                          );
+                                                        },
+                                                      );
+                                                      return c.id ==
+                                                              _scrollToCommentId
+                                                          ? KeyedSubtree(
+                                                              key:
+                                                                  _newCommentKey,
+                                                              child: tile,
+                                                            )
+                                                          : tile;
+                                                    }).toList(),
+                                                  );
+                                                },
+                                              ),
+                                            ],
+                                          );
+                                        },
+                                      ),
+                                    ),
+                                    // 댓글 페이지네이션
+                                    Builder(
+                                      builder: (context) {
+                                        final allComments = post.commentsList;
+                                        if (allComments.isEmpty)
+                                          return const SizedBox.shrink();
+                                        final totalPages =
+                                            (allComments.length /
+                                                    _commentsPerPage)
+                                                .ceil()
+                                                .clamp(1, 9999);
+                                        final safePage = _commentPage.clamp(
+                                          0,
+                                          totalPages - 1,
+                                        );
+                                        return Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            vertical: 8,
+                                          ),
+                                          child: Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            children: [
+                                              GestureDetector(
+                                                onTap: safePage > 0
+                                                    ? () {
+                                                        setState(
+                                                          () => _commentPage =
+                                                              safePage - 1,
+                                                        );
+                                                        _savedCommentPageByPostId[_post
+                                                                .id] =
+                                                            safePage - 1;
+                                                        _scrollToComments();
+                                                      }
+                                                    : null,
+                                                child: Padding(
+                                                  padding: const EdgeInsets.all(
+                                                    8,
+                                                  ),
+                                                  child: Icon(
+                                                    LucideIcons.chevron_left,
+                                                    size: 22,
+                                                    color: safePage > 0
+                                                        ? cs.onSurface
+                                                              .withOpacity(0.75)
+                                                        : cs.onSurface
+                                                              .withOpacity(
+                                                                0.18,
+                                                              ),
+                                                  ),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 12),
+                                              Container(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 16,
+                                                      vertical: 6,
+                                                    ),
+                                                decoration: BoxDecoration(
+                                                  color: cs.onSurface
+                                                      .withOpacity(0.05),
+                                                  borderRadius:
+                                                      BorderRadius.circular(20),
+                                                ),
+                                                child: Text(
+                                                  '${safePage + 1} / $totalPages',
+                                                  style: GoogleFonts.notoSansKr(
+                                                    fontSize: 13,
+                                                    fontWeight: FontWeight.w500,
+                                                    color: cs.onSurfaceVariant,
+                                                    letterSpacing: 0.2,
+                                                  ),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 12),
+                                              GestureDetector(
+                                                onTap: safePage < totalPages - 1
+                                                    ? () {
+                                                        setState(
+                                                          () => _commentPage =
+                                                              safePage + 1,
+                                                        );
+                                                        _savedCommentPageByPostId[_post
+                                                                .id] =
+                                                            safePage + 1;
+                                                        _scrollToComments();
+                                                      }
+                                                    : null,
+                                                child: Padding(
+                                                  padding: const EdgeInsets.all(
+                                                    8,
+                                                  ),
+                                                  child: Icon(
+                                                    LucideIcons.chevron_right,
+                                                    size: 22,
+                                                    color:
+                                                        safePage <
+                                                            totalPages - 1
+                                                        ? cs.onSurface
+                                                              .withOpacity(0.75)
+                                                        : cs.onSurface
+                                                              .withOpacity(
+                                                                0.18,
+                                                              ),
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                    const SizedBox(height: 8),
+                                    // 댓글 입력 카드 (배경색과 입력칸 색 사이의 중간색)
+                                    Container(
+                                      key: _inputCardKey,
+                                      margin: const EdgeInsets.symmetric(
+                                        horizontal: 16,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Color.lerp(
+                                          theme.scaffoldBackgroundColor,
+                                          cs.surfaceContainerHighest,
+                                          0.6,
+                                        ),
+                                        borderRadius: BorderRadius.circular(16),
+                                        border: Border.all(
+                                          color: cs.outline.withOpacity(0.2),
+                                        ),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: cs.shadow.withOpacity(0.15),
+                                            blurRadius: 20,
+                                            offset: const Offset(0, 4),
+                                          ),
+                                          BoxShadow(
+                                            color: cs.shadow.withOpacity(0.06),
+                                            blurRadius: 6,
+                                            offset: const Offset(0, 1),
+                                          ),
+                                        ],
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Padding(
+                                            padding: const EdgeInsets.fromLTRB(
+                                              14,
+                                              12,
+                                              14,
+                                              8,
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                Text(
+                                                  '${s.get('writeComment')}  ',
+                                                  style: GoogleFonts.notoSansKr(
+                                                    fontSize: 13,
+                                                    fontWeight: FontWeight.w600,
+                                                    color: cs.onSurface,
+                                                  ),
+                                                ),
+                                                Row(
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
+                                                  children: [
+                                                    Text(
+                                                      '(',
+                                                      style:
+                                                          GoogleFonts.notoSansKr(
+                                                            fontSize: 12,
+                                                            color: cs
+                                                                .onSurfaceVariant,
+                                                            fontWeight:
+                                                                FontWeight.w500,
+                                                          ),
+                                                    ),
+                                                    ShaderMask(
+                                                      blendMode:
+                                                          BlendMode.srcIn,
+                                                      shaderCallback: (bounds) =>
+                                                          const LinearGradient(
+                                                            colors: [
+                                                              Color(0xFFFF6B35),
+                                                              Color(0xFFE63946),
+                                                            ],
+                                                            begin: Alignment
+                                                                .topCenter,
+                                                            end: Alignment
+                                                                .bottomCenter,
+                                                          ).createShader(
+                                                            bounds,
+                                                          ),
+                                                      child: const Icon(
+                                                        Icons
+                                                            .local_fire_department_rounded,
+                                                        size: 13,
+                                                        color: Colors.white,
+                                                      ),
+                                                    ),
+                                                    Text(
+                                                      s.get('activityPoint'),
+                                                      style:
+                                                          GoogleFonts.notoSansKr(
+                                                            fontSize: 12,
+                                                            color: cs
+                                                                .onSurfaceVariant,
+                                                            fontWeight:
+                                                                FontWeight.w500,
+                                                          ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          Divider(
+                                            height: 1,
+                                            thickness: 0.8,
+                                            color: cs.outline.withOpacity(0.1),
+                                          ),
+                                          Padding(
+                                            padding: const EdgeInsets.fromLTRB(
+                                              14,
+                                              8,
+                                              14,
+                                              10,
+                                            ),
+                                            child: _buildInputLayout(cs, s),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                  if (!hideLetterboxdTail) ...[
+                                    const SizedBox(height: 40),
+                                    Container(
+                                      height: _kMorePostsDividerHeight,
+                                      color: theme.colorScheme.outline
+                                          .withOpacity(0.2),
+                                    ),
+                                    SizedBox(
+                                      key: _morePostsSectionKey,
+                                      child: _MorePostsSection(
+                                        key: ValueKey(
+                                          '${_post.id}_$_morePostsTabIndex',
+                                        ),
+                                        excludePostId: _post.id,
+                                        currentUserAuthor: _currentUserAuthor,
+                                        initialTabIndex: _morePostsTabIndex,
+                                        initialPosts: widget.initialBoardPosts,
+                                        onTabChanged: (i) => setState(
+                                          () => _morePostsTabIndex = i,
+                                        ),
+                                        onPostTap: (post) => _navigateToPost(
+                                          post,
+                                          tabIndex: _morePostsTabIndex,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                  // 제일 아래: 홈 메인 탭일 때는 브라우저 바 없음 → 패딩만
+                                  SizedBox(height: bottomScrollPad),
+                                ],
+                              ),
                             ),
                           ),
-                          Divider(height: 1, thickness: 0.8, color: cs.outline.withOpacity(0.1)),
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
-                            child: _buildInputLayout(cs, s),
-                          ),
-                        ],
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 40),
-                    Container(height: _kMorePostsDividerHeight, color: theme.colorScheme.outline.withOpacity(0.2)),
-                    SizedBox(
-                      key: _morePostsSectionKey,
-                      child: _MorePostsSection(
-                        key: ValueKey('${_post.id}_$_morePostsTabIndex'),
-                        excludePostId: _post.id,
-                        currentUserAuthor: _currentUserAuthor,
-                        initialTabIndex: _morePostsTabIndex,
-                        initialPosts: widget.initialBoardPosts,
-                        onTabChanged: (i) => setState(() => _morePostsTabIndex = i),
-                        onPostTap: (post) => _navigateToPost(post, tabIndex: _morePostsTabIndex),
-                      ),
-                    ),
-                    // 제일 아래: 홈 메인 탭일 때는 브라우저 바 없음 → 패딩만
-                    SizedBox(height: bottomScrollPad),
-                      ],
-                    ),
-                  ),
+                  ],
                 ),
-              ),
-            ),
-          ),
-        ],
-        ),
                 Positioned(
                   left: 0,
                   right: 0,
@@ -2502,8 +3958,8 @@ class _PostDetailPageState extends State<PostDetailPage> with WidgetsBindingObse
                     ),
                   ),
                 ),
-        ],
-      );
+              ],
+            );
           },
         ),
       ),
@@ -2526,6 +3982,7 @@ class _MorePostsSection extends StatefulWidget {
   final String excludePostId;
   final String? currentUserAuthor;
   final int initialTabIndex;
+
   /// 홈탭에서 넘긴 게시판 목록이 있으면 즉시 표시(인기글/자유/질문 동일 피드)
   final List<Post>? initialPosts;
   final void Function(int)? onTabChanged;
@@ -2535,12 +3992,14 @@ class _MorePostsSection extends StatefulWidget {
   State<_MorePostsSection> createState() => _MorePostsSectionState();
 }
 
-class _MorePostsSectionState extends State<_MorePostsSection> with SingleTickerProviderStateMixin {
+class _MorePostsSectionState extends State<_MorePostsSection>
+    with SingleTickerProviderStateMixin {
   static const List<String> _feedBoards = ['review', 'talk', 'ask'];
 
   late TabController _tabController;
   final List<List<Post>> _tabFeedPosts = List.generate(3, (_) => []);
-  final List<DocumentSnapshot<Map<String, dynamic>>?> _tabLastDoc = List.generate(3, (_) => null);
+  final List<DocumentSnapshot<Map<String, dynamic>>?> _tabLastDoc =
+      List.generate(3, (_) => null);
   final List<bool> _tabHasMore = List.generate(3, (_) => true);
   final List<bool> _tabLoadingMore = List.generate(3, (_) => false);
   final List<bool> _tabInitialLoading = List.generate(3, (_) => true);
@@ -2571,7 +4030,9 @@ class _MorePostsSectionState extends State<_MorePostsSection> with SingleTickerP
     final initial = widget.initialPosts;
     if (initial != null && initial.isNotEmpty) {
       for (final p in initial) {
-        if (BlockService.instance.isBlocked(p.author) || BlockService.instance.isPostBlocked(p.id)) continue;
+        if (BlockService.instance.isBlocked(p.author) ||
+            BlockService.instance.isPostBlocked(p.id))
+          continue;
         if (p.id == widget.excludePostId) continue;
         for (var t = 0; t < 3; t++) {
           if (postMatchesFeedFilter(p, _feedBoards[t])) {
@@ -2603,7 +4064,8 @@ class _MorePostsSectionState extends State<_MorePostsSection> with SingleTickerP
   /// 글 상세 하단 DramaFeed: 홈과 동일한 국가 기준(us/kr/jp/cn).
   String _viewerLanguageForFeed() {
     return AuthService.instance.isLoggedIn.value
-        ? (UserProfileService.instance.signupCountryNotifier.value ?? LocaleService.instance.locale)
+        ? (UserProfileService.instance.signupCountryNotifier.value ??
+              LocaleService.instance.locale)
         : LocaleService.instance.locale;
   }
 
@@ -2659,11 +4121,14 @@ class _MorePostsSectionState extends State<_MorePostsSection> with SingleTickerP
         cursor = page.lastDocument;
         for (final p in page.posts) {
           if (p.id == widget.excludePostId) continue;
-          if (!BlockService.instance.isBlocked(p.author) && !BlockService.instance.isPostBlocked(p.id)) {
+          if (!BlockService.instance.isBlocked(p.author) &&
+              !BlockService.instance.isPostBlocked(p.id)) {
             accumulated.add(p);
           }
         }
-        if (accumulated.isNotEmpty || !pageHasMore || page.lastDocument == null) {
+        if (accumulated.isNotEmpty ||
+            !pageHasMore ||
+            page.lastDocument == null) {
           break;
         }
       }
@@ -2711,9 +4176,14 @@ class _MorePostsSectionState extends State<_MorePostsSection> with SingleTickerP
           padding: const EdgeInsets.fromLTRB(12, 30, 14, 20),
           alignment: Alignment.centerLeft,
           child: Text(
-              'DramaFeed',
-              style: GoogleFonts.notoSansKr(fontSize: 26, fontWeight: FontWeight.w800, color: cs.onSurface, letterSpacing: -0.5),
+            'DramaFeed',
+            style: GoogleFonts.notoSansKr(
+              fontSize: 26,
+              fontWeight: FontWeight.w800,
+              color: cs.onSurface,
+              letterSpacing: -0.5,
             ),
+          ),
         ),
         // 탭바 (홈탭과 동일한 스타일)
         Container(
@@ -2725,7 +4195,9 @@ class _MorePostsSectionState extends State<_MorePostsSection> with SingleTickerP
               const tabW = 60.0;
               const tabH = 26.0;
               const tabGap = 5.0;
-              final animValue = _tabController.animation?.value ?? _tabController.index.toDouble();
+              final animValue =
+                  _tabController.animation?.value ??
+                  _tabController.index.toDouble();
               final idx = animValue.round().clamp(0, 2);
               final s = CountryScope.of(context).strings;
               return Align(
@@ -2761,22 +4233,32 @@ class _MorePostsSectionState extends State<_MorePostsSection> with SingleTickerP
                               child: Container(
                                 alignment: Alignment.center,
                                 decoration: BoxDecoration(
-                                  border: Border.all(color: cs.outline.withOpacity(0.6), width: 0.7),
+                                  border: Border.all(
+                                    color: cs.outline.withOpacity(0.6),
+                                    width: 0.7,
+                                  ),
                                   borderRadius: BorderRadius.circular(6),
                                 ),
                                 child: Text(
-                                  [s.get('tabReviews'), s.get('tabGeneral'), s.get('tabQnA')][i],
+                                  [
+                                    s.get('tabReviews'),
+                                    s.get('tabGeneral'),
+                                    s.get('tabQnA'),
+                                  ][i],
                                   strutStyle: const StrutStyle(
                                     forceStrutHeight: true,
                                     height: 1.15,
-                                    fontSize: 11,
-                                    leadingDistribution: TextLeadingDistribution.even,
+                                    fontSize: 10,
+                                    leadingDistribution:
+                                        TextLeadingDistribution.even,
                                   ),
                                   style: GoogleFonts.notoSansKr(
-                                    fontSize: 11,
+                                    fontSize: 10,
                                     height: 1.15,
                                     fontWeight: FontWeight.w700,
-                                    color: idx == i ? cs.onInverseSurface : cs.onSurfaceVariant,
+                                    color: idx == i
+                                        ? cs.onInverseSurface
+                                        : cs.onSurfaceVariant,
                                   ),
                                 ),
                               ),
@@ -2791,92 +4273,96 @@ class _MorePostsSectionState extends State<_MorePostsSection> with SingleTickerP
           ),
         ),
         // 탭 아래 영역: IndexedStack 대신 현재 탭만 렌더링 → 다른 탭 높이로 빈 공간 생기는 문제 방지
-        Builder(builder: (context) {
-          final idx = _tabController.index;
-          void onUpdated(Post updated) {
-            setState(() {
-              for (var t = 0; t < 3; t++) {
-                final j = _tabFeedPosts[t].indexWhere((p) => p.id == updated.id);
-                if (j >= 0) {
-                  if (postMatchesFeedFilter(updated, _feedBoards[t])) {
-                    _tabFeedPosts[t][j] = updated;
-                  } else {
-                    _tabFeedPosts[t].removeAt(j);
+        Builder(
+          builder: (context) {
+            final idx = _tabController.index;
+            void onUpdated(Post updated) {
+              setState(() {
+                for (var t = 0; t < 3; t++) {
+                  final j = _tabFeedPosts[t].indexWhere(
+                    (p) => p.id == updated.id,
+                  );
+                  if (j >= 0) {
+                    if (postMatchesFeedFilter(updated, _feedBoards[t])) {
+                      _tabFeedPosts[t][j] = updated;
+                    } else {
+                      _tabFeedPosts[t].removeAt(j);
+                    }
+                  } else if (postMatchesFeedFilter(updated, _feedBoards[t]) &&
+                      updated.id != widget.excludePostId &&
+                      !BlockService.instance.isBlocked(updated.author) &&
+                      !BlockService.instance.isPostBlocked(updated.id)) {
+                    _tabFeedPosts[t].insert(0, updated);
                   }
-                } else if (postMatchesFeedFilter(updated, _feedBoards[t]) &&
-                    updated.id != widget.excludePostId &&
-                    !BlockService.instance.isBlocked(updated.author) &&
-                    !BlockService.instance.isPostBlocked(updated.id)) {
-                  _tabFeedPosts[t].insert(0, updated);
                 }
-              }
-            });
-          }
+              });
+            }
 
-          void onDeleted(Post deleted) {
-            setState(() {
-              for (var t = 0; t < 3; t++) {
-                _tabFeedPosts[t].removeWhere((p) => p.id == deleted.id);
-              }
-            });
-          }
+            void onDeleted(Post deleted) {
+              setState(() {
+                for (var t = 0; t < 3; t++) {
+                  _tabFeedPosts[t].removeWhere((p) => p.id == deleted.id);
+                }
+              });
+            }
 
-          if (idx == 0) {
-            return PopularPostsTab(
-              posts: _postsForTab(0),
-              isLoading: _tabFeedPosts[0].isEmpty && _tabInitialLoading[0],
+            if (idx == 0) {
+              return PopularPostsTab(
+                posts: _postsForTab(0),
+                isLoading: _tabFeedPosts[0].isEmpty && _tabInitialLoading[0],
+                error: _postsError,
+                currentUserAuthor: widget.currentUserAuthor,
+                onRefresh: () => _loadFeedTabPage(0, reset: true),
+                enablePullToRefresh: false,
+                shrinkWrap: true,
+                useReviewLayout: true,
+                useLetterboxdReviewLayout: true,
+                useSimpleFeedLayout: true,
+                reviewLetterboxdInlineFeed: true,
+                feedScrollController: _feedScrollControllers[0],
+                feedLoadingMore: _tabLoadingMore[0],
+                feedHasMore: _tabHasMore[0],
+                onPostUpdated: onUpdated,
+                onPostDeleted: onDeleted,
+                onPostTap: widget.onPostTap,
+              );
+            }
+            if (idx == 1) {
+              return FreeBoardTab(
+                posts: _postsForTab(1),
+                isLoading: _tabFeedPosts[1].isEmpty && _tabInitialLoading[1],
+                error: _postsError,
+                currentUserAuthor: widget.currentUserAuthor,
+                onRefresh: () => _loadFeedTabPage(1, reset: true),
+                enablePullToRefresh: false,
+                shrinkWrap: true,
+                useSimpleFeedLayout: true,
+                feedScrollController: _feedScrollControllers[1],
+                feedLoadingMore: _tabLoadingMore[1],
+                feedHasMore: _tabHasMore[1],
+                onPostUpdated: onUpdated,
+                onPostDeleted: onDeleted,
+                onPostTap: widget.onPostTap,
+              );
+            }
+            return QuestionBoardTab(
+              posts: _postsForTab(2),
+              isLoading: _tabFeedPosts[2].isEmpty && _tabInitialLoading[2],
               error: _postsError,
               currentUserAuthor: widget.currentUserAuthor,
-              onRefresh: () => _loadFeedTabPage(0, reset: true),
+              onRefresh: () => _loadFeedTabPage(2, reset: true),
               enablePullToRefresh: false,
               shrinkWrap: true,
-              useReviewLayout: true,
-              useLetterboxdReviewLayout: true,
               useSimpleFeedLayout: true,
-              reviewLetterboxdInlineFeed: true,
-              feedScrollController: _feedScrollControllers[0],
-              feedLoadingMore: _tabLoadingMore[0],
-              feedHasMore: _tabHasMore[0],
+              feedScrollController: _feedScrollControllers[2],
+              feedLoadingMore: _tabLoadingMore[2],
+              feedHasMore: _tabHasMore[2],
               onPostUpdated: onUpdated,
               onPostDeleted: onDeleted,
               onPostTap: widget.onPostTap,
             );
-          }
-          if (idx == 1) {
-            return FreeBoardTab(
-              posts: _postsForTab(1),
-              isLoading: _tabFeedPosts[1].isEmpty && _tabInitialLoading[1],
-              error: _postsError,
-              currentUserAuthor: widget.currentUserAuthor,
-              onRefresh: () => _loadFeedTabPage(1, reset: true),
-              enablePullToRefresh: false,
-              shrinkWrap: true,
-              useSimpleFeedLayout: true,
-              feedScrollController: _feedScrollControllers[1],
-              feedLoadingMore: _tabLoadingMore[1],
-              feedHasMore: _tabHasMore[1],
-              onPostUpdated: onUpdated,
-              onPostDeleted: onDeleted,
-              onPostTap: widget.onPostTap,
-            );
-          }
-          return QuestionBoardTab(
-            posts: _postsForTab(2),
-            isLoading: _tabFeedPosts[2].isEmpty && _tabInitialLoading[2],
-            error: _postsError,
-            currentUserAuthor: widget.currentUserAuthor,
-            onRefresh: () => _loadFeedTabPage(2, reset: true),
-            enablePullToRefresh: false,
-            shrinkWrap: true,
-            useSimpleFeedLayout: true,
-            feedScrollController: _feedScrollControllers[2],
-            feedLoadingMore: _tabLoadingMore[2],
-            feedHasMore: _tabHasMore[2],
-            onPostUpdated: onUpdated,
-            onPostDeleted: onDeleted,
-            onPostTap: widget.onPostTap,
-          );
-        }),
+          },
+        ),
       ],
     );
   }
@@ -2889,6 +4375,7 @@ class _CommentTile extends StatefulWidget {
     required this.strings,
     this.depth = 0,
     required this.postId,
+    this.showAuthorProfileMenu = true,
     this.contentWidth,
     required this.onPostUpdated,
     this.onReplyTap,
@@ -2898,6 +4385,10 @@ class _CommentTile extends StatefulWidget {
   final dynamic strings;
   final int depth;
   final String postId;
+
+  /// false: 톡/에스크 등 — 닉네임·아바타 탭 시 쪽지/글·댓글 메뉴 비표시
+  final bool showAuthorProfileMenu;
+
   /// 댓글 영역 전체 너비. 지정 시 3행(답글·좋아요·싫어요)을 이 너비의 오른쪽 끝에 맞춤.
   final double? contentWidth;
   final void Function(Post) onPostUpdated;
@@ -2951,7 +4442,10 @@ class _CommentTileState extends State<_CommentTile> {
 
   Future<void> _onLikeTap() async {
     if (!AuthService.instance.isLoggedIn.value) {
-      await Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginPage()));
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginPage()),
+      );
       return;
     }
     if (_votePending) return;
@@ -2974,23 +4468,30 @@ class _CommentTileState extends State<_CommentTile> {
         _isLiked = false;
       }
     });
-    PostService.instance.toggleCommentLike(widget.postId, widget.comment.id).then((updated) {
-      if (!mounted) return;
-      if (updated == null) {
-        setState(() {
-          _isLiked = prevLiked; _isDisliked = prevDisliked;
-          _likeCount = prevLikeCount; _dislikeCount = prevDislikeCount;
+    PostService.instance
+        .toggleCommentLike(widget.postId, widget.comment.id)
+        .then((updated) {
+          if (!mounted) return;
+          if (updated == null) {
+            setState(() {
+              _isLiked = prevLiked;
+              _isDisliked = prevDisliked;
+              _likeCount = prevLikeCount;
+              _dislikeCount = prevDislikeCount;
+            });
+          } else {
+            widget.onPostUpdated(updated);
+          }
+          if (mounted) setState(() => _votePending = false);
         });
-      } else {
-        widget.onPostUpdated(updated);
-      }
-      if (mounted) setState(() => _votePending = false);
-    });
   }
 
   Future<void> _onReplyTap() async {
     if (!AuthService.instance.isLoggedIn.value) {
-      await Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginPage()));
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginPage()),
+      );
       return;
     }
     widget.onReplyTap?.call(widget.comment.id);
@@ -2998,7 +4499,10 @@ class _CommentTileState extends State<_CommentTile> {
 
   Future<void> _onDislikeTap() async {
     if (!AuthService.instance.isLoggedIn.value) {
-      await Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginPage()));
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginPage()),
+      );
       return;
     }
     if (_votePending) return;
@@ -3020,21 +4524,38 @@ class _CommentTileState extends State<_CommentTile> {
         _isDisliked = false;
       }
     });
-    PostService.instance.toggleCommentDislike(widget.postId, widget.comment.id).then((updated) {
-      if (!mounted) return;
-      if (updated == null) {
-        setState(() {
-          _isLiked = prevLiked; _isDisliked = prevDisliked;
-          _likeCount = prevLikeCount; _dislikeCount = prevDislikeCount;
+    PostService.instance
+        .toggleCommentDislike(widget.postId, widget.comment.id)
+        .then((updated) {
+          if (!mounted) return;
+          if (updated == null) {
+            setState(() {
+              _isLiked = prevLiked;
+              _isDisliked = prevDisliked;
+              _likeCount = prevLikeCount;
+              _dislikeCount = prevDislikeCount;
+            });
+          } else {
+            widget.onPostUpdated(updated);
+          }
+          if (mounted) setState(() => _votePending = false);
         });
-      } else {
-        widget.onPostUpdated(updated);
-      }
-      if (mounted) setState(() => _votePending = false);
-    });
   }
 
-  Future<void> _showNicknameMenu(BuildContext context, TapDownDetails details) async {
+  Widget _wrapAuthorTap({required Widget child}) {
+    if (!widget.showAuthorProfileMenu) return child;
+    return GestureDetector(
+      onTapDown: (details) => _showNicknameMenu(context, details),
+      behavior: HitTestBehavior.opaque,
+      child: child,
+    );
+  }
+
+  Future<void> _showNicknameMenu(
+    BuildContext context,
+    TapDownDetails details,
+  ) async {
+    if (!widget.showAuthorProfileMenu) return;
     final s = widget.strings;
     final nickname = widget.comment.author;
     if (nickname.isEmpty) return;
@@ -3055,7 +4576,10 @@ class _CommentTileState extends State<_CommentTile> {
             children: [
               Icon(LucideIcons.mail, size: 16, color: Colors.blue),
               const SizedBox(width: 6),
-              Text(s.get('sendMessageToUser'), style: GoogleFonts.notoSansKr(fontSize: 13)),
+              Text(
+                s.get('sendMessageToUser'),
+                style: GoogleFonts.notoSansKr(fontSize: 13),
+              ),
             ],
           ),
         ),
@@ -3067,7 +4591,10 @@ class _CommentTileState extends State<_CommentTile> {
             children: [
               Icon(LucideIcons.file_text, size: 16, color: Colors.green),
               const SizedBox(width: 6),
-              Text(s.get('viewUserPosts'), style: GoogleFonts.notoSansKr(fontSize: 13)),
+              Text(
+                s.get('viewUserPosts'),
+                style: GoogleFonts.notoSansKr(fontSize: 13),
+              ),
             ],
           ),
         ),
@@ -3079,7 +4606,10 @@ class _CommentTileState extends State<_CommentTile> {
             children: [
               Icon(LucideIcons.message_circle, size: 16, color: Colors.green),
               const SizedBox(width: 6),
-              Text(s.get('viewUserComments'), style: GoogleFonts.notoSansKr(fontSize: 13)),
+              Text(
+                s.get('viewUserComments'),
+                style: GoogleFonts.notoSansKr(fontSize: 13),
+              ),
             ],
           ),
         ),
@@ -3145,7 +4675,13 @@ class _CommentTileState extends State<_CommentTile> {
               children: [
                 Icon(LucideIcons.reply, size: 13, color: cs.onSurfaceVariant),
                 const SizedBox(width: 3),
-                Text(s.get('reply'), style: GoogleFonts.notoSansKr(fontSize: 12, color: cs.onSurfaceVariant)),
+                Text(
+                  s.get('reply'),
+                  style: GoogleFonts.notoSansKr(
+                    fontSize: 12,
+                    color: cs.onSurfaceVariant,
+                  ),
+                ),
               ],
             ),
           ),
@@ -3171,10 +4707,8 @@ class _CommentTileState extends State<_CommentTile> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 왼쪽: 아바타 (닉네임 탭 메뉴)
-          GestureDetector(
-            onTapDown: (details) => _showNicknameMenu(context, details),
-            behavior: HitTestBehavior.opaque,
+          // 왼쪽: 아바타 (리뷰 등에서만 닉네임 메뉴)
+          _wrapAuthorTap(
             child: _PostAuthorAvatar(
               photoUrl: comment.authorPhotoUrl,
               author: comment.author,
@@ -3190,9 +4724,7 @@ class _CommentTileState extends State<_CommentTile> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 // 1행: 닉네임 · 시간
-                GestureDetector(
-                  onTapDown: (details) => _showNicknameMenu(context, details),
-                  behavior: HitTestBehavior.opaque,
+                _wrapAuthorTap(
                   child: Text.rich(
                     TextSpan(
                       children: [
@@ -3219,13 +4751,16 @@ class _CommentTileState extends State<_CommentTile> {
                 ),
                 const SizedBox(height: 4),
                 // 첨부 이미지 (아바타 오른쪽 컬럼에 위치 — 레딧 스타일)
-                if (comment.imageUrl != null && comment.imageUrl!.isNotEmpty) ...[
+                if (comment.imageUrl != null &&
+                    comment.imageUrl!.isNotEmpty) ...[
                   GestureDetector(
                     onTap: () {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => FullScreenImagePage(imageUrls: [comment.imageUrl!]),
+                          builder: (_) => FullScreenImagePage(
+                            imageUrls: [comment.imageUrl!],
+                          ),
                         ),
                       );
                     },
@@ -3241,7 +4776,11 @@ class _CommentTileState extends State<_CommentTile> {
                           errorBuilder: (_, __, ___) => Container(
                             height: 120,
                             color: cs.surfaceContainerHighest,
-                            child: Icon(LucideIcons.image_off, size: 40, color: cs.onSurfaceVariant),
+                            child: Icon(
+                              LucideIcons.image_off,
+                              size: 40,
+                              color: cs.onSurfaceVariant,
+                            ),
                           ),
                         ),
                       ),
@@ -3260,10 +4799,7 @@ class _CommentTileState extends State<_CommentTile> {
                     ),
                   ),
                 // 액션 행 (오른쪽 정렬)
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: actionRow,
-                ),
+                Align(alignment: Alignment.centerRight, child: actionRow),
               ],
             ),
           ),
@@ -3286,15 +4822,20 @@ class _CommentTileState extends State<_CommentTile> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 mainAxisSize: MainAxisSize.min,
-                children: comment.replies.map((r) => _CommentTile(
-                      comment: r,
-                      strings: s,
-                      depth: widget.depth + 1,
-                      postId: widget.postId,
-                      contentWidth: widget.contentWidth,
-                      onPostUpdated: widget.onPostUpdated,
-                      onReplyTap: widget.onReplyTap,
-                    )).toList(),
+                children: comment.replies
+                    .map(
+                      (r) => _CommentTile(
+                        comment: r,
+                        strings: s,
+                        depth: widget.depth + 1,
+                        postId: widget.postId,
+                        showAuthorProfileMenu: widget.showAuthorProfileMenu,
+                        contentWidth: widget.contentWidth,
+                        onPostUpdated: widget.onPostUpdated,
+                        onReplyTap: widget.onReplyTap,
+                      ),
+                    )
+                    .toList(),
               ),
           ],
         ),
@@ -3320,15 +4861,20 @@ class _CommentTileState extends State<_CommentTile> {
             Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
-              children: comment.replies.map((r) => _CommentTile(
-                    comment: r,
-                    strings: s,
-                    depth: widget.depth + 1,
-                    postId: widget.postId,
-                    contentWidth: widget.contentWidth,
-                    onPostUpdated: widget.onPostUpdated,
-                    onReplyTap: widget.onReplyTap,
-                  )).toList(),
+              children: comment.replies
+                  .map(
+                    (r) => _CommentTile(
+                      comment: r,
+                      strings: s,
+                      depth: widget.depth + 1,
+                      postId: widget.postId,
+                      showAuthorProfileMenu: widget.showAuthorProfileMenu,
+                      contentWidth: widget.contentWidth,
+                      onPostUpdated: widget.onPostUpdated,
+                      onReplyTap: widget.onReplyTap,
+                    ),
+                  )
+                  .toList(),
             ),
         ],
       ),
@@ -3371,7 +4917,9 @@ class _ActionChip extends StatelessWidget {
               Icon(
                 icon,
                 size: 16,
-                color: isHighlighted ? cs.primary : cs.onSurfaceVariant.withOpacity(0.65),
+                color: isHighlighted
+                    ? cs.primary
+                    : cs.onSurfaceVariant.withOpacity(0.65),
               ),
               const SizedBox(width: 4),
               Text(
@@ -3379,7 +4927,9 @@ class _ActionChip extends StatelessWidget {
                 style: GoogleFonts.notoSansKr(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
-                  color: isHighlighted ? cs.primary : cs.onSurfaceVariant.withOpacity(0.65),
+                  color: isHighlighted
+                      ? cs.primary
+                      : cs.onSurfaceVariant.withOpacity(0.65),
                 ),
               ),
             ],
@@ -3428,7 +4978,9 @@ class _PostVideoPlayerState extends State<_PostVideoPlayer> {
         _controller.setVolume(1);
         _muted = false;
       }
-      _controller.addListener(() { if (mounted) setState(() {}); });
+      _controller.addListener(() {
+        if (mounted) setState(() {});
+      });
       _controller.play();
     } else {
       cached?.dispose();
@@ -3513,20 +5065,25 @@ class _PostVideoPlayerState extends State<_PostVideoPlayer> {
                         child: VideoPlayer(_controller),
                       ),
                     )
-                  else if (widget.thumbnailUrl != null && widget.thumbnailUrl!.isNotEmpty)
+                  else if (widget.thumbnailUrl != null &&
+                      widget.thumbnailUrl!.isNotEmpty)
                     Stack(
                       fit: StackFit.expand,
                       children: [
                         Image.network(
                           widget.thumbnailUrl!,
                           fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => Container(color: Colors.black),
+                          errorBuilder: (_, __, ___) =>
+                              Container(color: Colors.black),
                         ),
                         const Center(
                           child: SizedBox(
                             width: 36,
                             height: 36,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70),
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white70,
+                            ),
                           ),
                         ),
                       ],
@@ -3538,12 +5095,21 @@ class _PostVideoPlayerState extends State<_PostVideoPlayer> {
                       top: 8,
                       right: 8,
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
                         decoration: BoxDecoration(
                           color: Colors.black54,
                           borderRadius: BorderRadius.circular(4),
                         ),
-                        child: Text('GIF', style: GoogleFonts.notoSansKr(fontSize: 10, color: Colors.white)),
+                        child: Text(
+                          'GIF',
+                          style: GoogleFonts.notoSansKr(
+                            fontSize: 10,
+                            color: Colors.white,
+                          ),
+                        ),
                       ),
                     ),
                 ],
@@ -3565,77 +5131,96 @@ class _PostVideoPlayerState extends State<_PostVideoPlayer> {
                   ),
                 ),
                 child: Row(
-                children: [
-                  IconButton(
-                    icon: Icon(
-                      _controller.value.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                      color: Colors.white,
-                      size: 28,
-                    ),
-                    onPressed: _togglePlayPause,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-                  ),
-                  Expanded(
-                    child: SliderTheme(
-                      data: SliderTheme.of(context).copyWith(
-                        activeTrackColor: Colors.white,
-                        inactiveTrackColor: Colors.white38,
-                        thumbColor: Colors.white,
-                        overlayColor: Colors.white24,
-                      ),
-                      child: Slider(
-                        value: progress,
-                        onChanged: (v) {
-                          if (initialized && totalMs > 0) {
-                            final ms = (v * totalMs).round();
-                            _controller.seekTo(Duration(milliseconds: ms));
-                          }
-                        },
-                      ),
-                    ),
-                  ),
-                  Text(
-                    _formatDuration(position),
-                    style: GoogleFonts.notoSansKr(fontSize: 12, color: Colors.white70),
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    _formatDuration(duration),
-                    style: GoogleFonts.notoSansKr(fontSize: 12, color: Colors.white54),
-                  ),
-                  if (!widget.isGif)
+                  children: [
                     IconButton(
                       icon: Icon(
-                        _muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+                        _controller.value.isPlaying
+                            ? Icons.pause_rounded
+                            : Icons.play_arrow_rounded,
+                        color: Colors.white,
+                        size: 28,
+                      ),
+                      onPressed: _togglePlayPause,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                        minWidth: 40,
+                        minHeight: 40,
+                      ),
+                    ),
+                    Expanded(
+                      child: SliderTheme(
+                        data: SliderTheme.of(context).copyWith(
+                          activeTrackColor: Colors.white,
+                          inactiveTrackColor: Colors.white38,
+                          thumbColor: Colors.white,
+                          overlayColor: Colors.white24,
+                        ),
+                        child: Slider(
+                          value: progress,
+                          onChanged: (v) {
+                            if (initialized && totalMs > 0) {
+                              final ms = (v * totalMs).round();
+                              _controller.seekTo(Duration(milliseconds: ms));
+                            }
+                          },
+                        ),
+                      ),
+                    ),
+                    Text(
+                      _formatDuration(position),
+                      style: GoogleFonts.notoSansKr(
+                        fontSize: 12,
+                        color: Colors.white70,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      _formatDuration(duration),
+                      style: GoogleFonts.notoSansKr(
+                        fontSize: 12,
+                        color: Colors.white54,
+                      ),
+                    ),
+                    if (!widget.isGif)
+                      IconButton(
+                        icon: Icon(
+                          _muted
+                              ? Icons.volume_off_rounded
+                              : Icons.volume_up_rounded,
+                          color: Colors.white,
+                          size: 22,
+                        ),
+                        onPressed: _toggleMute,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(
+                          minWidth: 36,
+                          minHeight: 36,
+                        ),
+                      ),
+                    IconButton(
+                      icon: const Icon(
+                        Icons.fullscreen_rounded,
                         color: Colors.white,
                         size: 22,
                       ),
-                      onPressed: _toggleMute,
+                      onPressed: () {
+                        FullScreenVideoPage.show(
+                          context,
+                          videoUrl: widget.videoUrl,
+                          thumbnailUrl: widget.thumbnailUrl,
+                          isGif: widget.isGif,
+                        );
+                      },
                       padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                      constraints: const BoxConstraints(
+                        minWidth: 36,
+                        minHeight: 36,
+                      ),
                     ),
-                  IconButton(
-                    icon: const Icon(
-                      Icons.fullscreen_rounded,
-                      color: Colors.white,
-                      size: 22,
-                    ),
-                    onPressed: () {
-                      FullScreenVideoPage.show(
-                        context,
-                        videoUrl: widget.videoUrl,
-                        thumbnailUrl: widget.thumbnailUrl,
-                        isGif: widget.isGif,
-                      );
-                    },
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
-          ),
         ],
       ),
     );
@@ -3709,7 +5294,11 @@ class _PostImageCarouselState extends State<_PostImageCarousel> {
             errorWidget: Container(
               color: cs.surfaceContainerHighest,
               child: Center(
-                child: Icon(LucideIcons.image_off, size: 56, color: cs.onSurfaceVariant.withOpacity(0.4)),
+                child: Icon(
+                  LucideIcons.image_off,
+                  size: 56,
+                  color: cs.onSurfaceVariant.withOpacity(0.4),
+                ),
               ),
             ),
             onTap: () => widget.onTap(0),
@@ -3738,7 +5327,11 @@ class _PostImageCarouselState extends State<_PostImageCarousel> {
                       errorWidget: Container(
                         color: cs.surfaceContainerHighest,
                         child: Center(
-                          child: Icon(LucideIcons.image_off, size: 56, color: cs.onSurfaceVariant.withOpacity(0.4)),
+                          child: Icon(
+                            LucideIcons.image_off,
+                            size: 56,
+                            color: cs.onSurfaceVariant.withOpacity(0.4),
+                          ),
                         ),
                       ),
                       onTap: () => widget.onTap(index),
@@ -3750,14 +5343,21 @@ class _PostImageCarouselState extends State<_PostImageCarousel> {
                 top: 10,
                 right: 10,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.black54,
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
                     '${_currentPage + 1}/${widget.imageUrls.length}',
-                    style: GoogleFonts.notoSansKr(fontSize: 9, fontWeight: FontWeight.w500, color: Colors.white),
+                    style: GoogleFonts.notoSansKr(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.white,
+                    ),
                   ),
                 ),
               ),
@@ -3767,7 +5367,10 @@ class _PostImageCarouselState extends State<_PostImageCarousel> {
                 bottom: 10,
                 child: Center(
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.black54,
                       borderRadius: BorderRadius.circular(12),
@@ -3781,7 +5384,9 @@ class _PostImageCarouselState extends State<_PostImageCarousel> {
                           width: isActive ? 8 : 6,
                           height: 6,
                           decoration: BoxDecoration(
-                            color: isActive ? Colors.white : Colors.white.withOpacity(0.4),
+                            color: isActive
+                                ? Colors.white
+                                : Colors.white.withOpacity(0.4),
                             shape: BoxShape.circle,
                           ),
                         );
@@ -3921,21 +5526,22 @@ class _DetailVoteBox extends StatelessWidget {
     final upColor = voteState == 1
         ? primaryColor
         : (useThumbIcons && voteState == 0 && count > 0)
-            ? Colors.black87
-            : baseColor;
+        ? Colors.black87
+        : baseColor;
     final downColor = voteState == -1 ? dislikeActiveColor : baseColor;
     // 숫자 색상: 본인이 누른 경우 활성색, 아무것도 안 누른 경우 옆 댓글/조회수와 동일
     final countColor = voteState == 1
         ? primaryColor
         : voteState == -1
-            ? dislikeActiveColor
-            : useThumbIcons
-                ? (count > 0
-                    ? Colors.black87          // 1 이상: 검은색
-                    : count < 0
-                        ? const Color(0xFFCCCCCC) // 음수: 더 옅은 색
-                        : baseColor)          // 0: 기본 회색
-                : baseColor;
+        ? dislikeActiveColor
+        : useThumbIcons
+        ? (count > 0
+              ? Colors
+                    .black87 // 1 이상: 검은색
+              : count < 0
+              ? const Color(0xFFCCCCCC) // 음수: 더 옅은 색
+              : baseColor) // 0: 기본 회색
+        : baseColor;
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(8),
@@ -3951,8 +5557,16 @@ class _DetailVoteBox extends StatelessWidget {
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(6, 4, 0, 4),
                 child: useThumbIcons
-                    ? Icon(Icons.thumb_up_alt_outlined, size: 14, color: upColor)
-                    : Icon(Icons.arrow_drop_up_rounded, size: 22, color: upColor),
+                    ? Icon(
+                        Icons.thumb_up_alt_outlined,
+                        size: 14,
+                        color: upColor,
+                      )
+                    : Icon(
+                        Icons.arrow_drop_up_rounded,
+                        size: 22,
+                        color: upColor,
+                      ),
               ),
             ),
             Padding(
@@ -3973,8 +5587,16 @@ class _DetailVoteBox extends StatelessWidget {
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(0, 4, 6, 4),
                 child: useThumbIcons
-                    ? Icon(Icons.thumb_down_alt_outlined, size: 14, color: downColor)
-                    : Icon(Icons.arrow_drop_down_rounded, size: 22, color: downColor),
+                    ? Icon(
+                        Icons.thumb_down_alt_outlined,
+                        size: 14,
+                        color: downColor,
+                      )
+                    : Icon(
+                        Icons.arrow_drop_down_rounded,
+                        size: 22,
+                        color: downColor,
+                      ),
               ),
             ),
           ],
