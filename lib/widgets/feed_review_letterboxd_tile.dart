@@ -193,16 +193,11 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
     return post.title.trim();
   }
 
+  // 본문 정규식: 매 빌드마다 새 객체 생성 방지
+  static final _wsRe = RegExp(r'\s+');
+
   @override
-  Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: Listenable.merge([
-        DramaListService.instance.extraNotifier,
-        DramaListService.instance.listNotifier,
-      ]),
-      builder: (context, _) => _buildWithCatalog(context),
-    );
-  }
+  Widget build(BuildContext context) => _buildWithCatalog(context);
 
   Widget _buildWithCatalog(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -212,7 +207,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
     final thumb = post.dramaThumbnail?.trim();
     final hasHttpThumb = thumb != null && thumb.startsWith('http');
     final dramaTitle = _displayDramaTitle(context, post);
-    final body = (post.body ?? '').replaceAll(RegExp(r'\s+'), ' ').trim();
+    final body = (post.body ?? '').replaceAll(_wsRe, ' ').trim();
     final r = (post.rating ?? 0).clamp(0.0, 5.0);
 
     final bodyStyle = GoogleFonts.notoSansKr(

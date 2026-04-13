@@ -4194,8 +4194,8 @@ class _MorePostsSectionState extends State<_MorePostsSection>
         Container(
           color: theme.scaffoldBackgroundColor,
           padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-          child: AnimatedBuilder(
-            animation: _tabController.animation!,
+          child: ListenableBuilder(
+            listenable: _tabController,
             builder: (context, _) {
               final r = (MediaQuery.sizeOf(context).width / 360).clamp(
                 0.85,
@@ -4204,10 +4204,9 @@ class _MorePostsSectionState extends State<_MorePostsSection>
               final tabW = 60.0 * r;
               final tabH = 26.0 * r;
               final tabGap = 5.0 * r;
-              final animValue =
-                  _tabController.animation?.value ??
-                  _tabController.index.toDouble();
-              final idx = animValue.round().clamp(0, 2);
+              // animation.value 대신 index(정수)를 써서 즉시 이동
+              final animValue = _tabController.index.toDouble();
+              final idx = _tabController.index;
               final s = CountryScope.of(context).strings;
               return Align(
                 alignment: Alignment.centerLeft,
@@ -4234,7 +4233,7 @@ class _MorePostsSectionState extends State<_MorePostsSection>
                           left: (tabW + tabGap) * i,
                           top: 0,
                           child: GestureDetector(
-                            onTap: () => _tabController.animateTo(i),
+                            onTap: () => _tabController.animateTo(i, duration: Duration.zero),
                             behavior: HitTestBehavior.opaque,
                             child: SizedBox(
                               width: tabW,

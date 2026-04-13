@@ -136,6 +136,10 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
   String? _lastSearchQuery;
   PostSearchScope? _lastSearchScope;
 
+  // _latestPost O(1) 캐시 — widget.posts 레퍼런스가 바뀌면 재구성
+  Map<String, Post>? _postLookup;
+  List<Post>? _lastPostsForLookup;
+
   final Set<String> _inlineLikeBusy = {};
   final Set<String> _inlineCommentSubmitting = {};
 
@@ -168,13 +172,15 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
     super.dispose();
   }
 
-  Post _latestPost(Post p) {
-    try {
-      return widget.posts.firstWhere((e) => e.id == p.id);
-    } catch (_) {
-      return p;
+  Map<String, Post> get _postsById {
+    if (!identical(_lastPostsForLookup, widget.posts)) {
+      _lastPostsForLookup = widget.posts;
+      _postLookup = {for (final p in widget.posts) p.id: p};
     }
+    return _postLookup!;
   }
+
+  Post _latestPost(Post p) => _postsById[p.id] ?? p;
 
   Future<void> _refreshPostForComments(String postId) async {
     final locale = CountryScope.maybeOf(context)?.country;
@@ -1038,7 +1044,7 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
           ? const NeverScrollableScrollPhysics()
           : const AlwaysScrollableScrollPhysics(),
       padding: EdgeInsets.zero,
-      cacheExtent: 400,
+      cacheExtent: 900,
       itemCount: posts.length + footerCount + 1,
       itemBuilder: (context, index) {
         if (index < posts.length) {
@@ -1047,7 +1053,7 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
             final inline = widget.reviewLetterboxdInlineFeed;
             return RepaintBoundary(
               key: ValueKey(
-                'lb_${post.id}_${inline && _expandedReviewComments.contains(post.id)}',
+                'lb_${post.id}',
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -1310,7 +1316,7 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
           ? const NeverScrollableScrollPhysics()
           : const AlwaysScrollableScrollPhysics(),
       padding: EdgeInsets.zero,
-      cacheExtent: 400,
+      cacheExtent: 900,
       itemCount: paginated.length + 4,
       itemBuilder: (context, index) {
         if (index < paginated.length) {
@@ -1321,7 +1327,7 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
             final inline = widget.reviewLetterboxdInlineFeed;
             return RepaintBoundary(
               key: ValueKey(
-                'lb_${post.id}_${inline && _expandedReviewComments.contains(post.id)}',
+                'lb_${post.id}',
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -2189,7 +2195,7 @@ class _FreeBoardTabState extends State<FreeBoardTab> {
           ? const NeverScrollableScrollPhysics()
           : const AlwaysScrollableScrollPhysics(),
       padding: EdgeInsets.zero,
-      cacheExtent: 400,
+      cacheExtent: 900,
       itemCount: posts.length + footerCount + 1,
       itemBuilder: (context, index) {
         if (index < posts.length) {
@@ -2382,7 +2388,7 @@ class _FreeBoardTabState extends State<FreeBoardTab> {
           ? const NeverScrollableScrollPhysics()
           : const AlwaysScrollableScrollPhysics(),
       padding: EdgeInsets.zero,
-      cacheExtent: 400,
+      cacheExtent: 900,
       itemCount: paginated.length + 4,
       itemBuilder: (context, index) {
         if (index < paginated.length) {

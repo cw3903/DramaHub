@@ -187,16 +187,13 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
     if (_tabLoadingMore[tabIndex]) return;
     if (!reset && !_tabHasMore[tabIndex]) return;
 
-    if (reset) {
-      setState(() {
+    setState(() {
+      if (reset) {
         _tabFeedPosts[tabIndex].clear();
         _tabLastDoc[tabIndex] = null;
         _tabHasMore[tabIndex] = true;
         _postsError = null;
-      });
-    }
-
-    setState(() {
+      }
       if (_tabFeedPosts[tabIndex].isEmpty) {
         _tabInitialLoading[tabIndex] = true;
       }
@@ -599,15 +596,16 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
             children: [
               Row(
                 children: [
-                  AnimatedBuilder(
-                    animation: _tabController.animation!,
+                  ListenableBuilder(
+                    listenable: _tabController,
                     builder: (context, _) {
                       final tabW = 60.0 * r;
                       final tabH = 26.0 * r;
                       final tabGap = 5.0 * r;
                       final leftPad = 14.0 * r;
-                      final animValue = _tabController.animation?.value ?? _tabController.index.toDouble();
-                      final idx = animValue.round().clamp(0, 2);
+                      // animation.value 대신 index(정수)를 써서 즉시 이동
+                      final animValue = _tabController.index.toDouble();
+                      final idx = _tabController.index;
 
                       return Align(
                         alignment: Alignment.centerLeft,
@@ -640,7 +638,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
                                           !_tabInitialLoading[i]) {
                                         setState(() => _tabInitialLoading[i] = true);
                                       }
-                                      _tabController.animateTo(i);
+                                      _tabController.animateTo(i, duration: Duration.zero);
                                     },
                                     behavior: HitTestBehavior.opaque,
                                     child: SizedBox(
