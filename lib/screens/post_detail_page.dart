@@ -1,5 +1,6 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:io';
+import 'dart:math' show max, pi;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/cupertino.dart';
 import '../widgets/browser_nav_bar.dart';
@@ -22,11 +23,10 @@ import '../services/locale_service.dart';
 import '../services/post_service.dart';
 import '../services/user_profile_service.dart';
 import '../theme/app_theme.dart';
-import '../widgets/app_bar_back_icon_button.dart';
 import '../widgets/country_scope.dart';
+import '../widgets/lists_style_subpage_app_bar.dart';
 import '../widgets/share_sheet.dart';
 import '../widgets/review_share_card.dart';
-import '../services/saved_service.dart';
 import '../models/post.dart';
 import '../models/drama.dart';
 import '../services/drama_list_service.dart';
@@ -38,7 +38,6 @@ import 'user_comments_screen.dart';
 import 'full_screen_image_page.dart';
 import 'full_screen_video_page.dart';
 import 'write_post_page.dart';
-import '../widgets/feed_post_card.dart';
 import 'community_search_page.dart';
 import 'notification_screen.dart';
 import '../widgets/optimized_network_image.dart';
@@ -46,11 +45,52 @@ import '../widgets/blind_refresh_indicator.dart';
 import '../widgets/community_board_tabs.dart';
 import 'question_board_tab.dart';
 import 'package:video_player/video_player.dart';
-import '../widgets/feed_post_card.dart' show VideoPreloadCache;
+import '../widgets/feed_post_card.dart'
+    show VideoPreloadCache, TalkAskHeartVote, talkAskIconCountGap;
 
 // 글 상세 하단: 구분선/여백을 상수로 두어 글이 몇 개든 동일하게 보이도록 함
 const double _kBrowserNavBarHeight = 48; // 하단 네비 바 높이 (BrowserNavBar와 동일)
 const double _kMorePostsDividerHeight = 40; // 댓글 영역 ~ 인기/자유/질문 탭 사이 얇은 구분선
+
+const double _kPostDetailUnifiedAuthorAvatarDp = 33.0;
+
+/// 첫 프레임은 가벼운 placeholder만 — 전환이 바로 시작된 뒤 다음 프레임에서 [builder]로 본문 생성
+class _DeferredFrame2Body extends StatefulWidget {
+  const _DeferredFrame2Body({
+    required this.placeholderColor,
+    required this.builder,
+  });
+
+  final Color placeholderColor;
+  final Widget Function() builder;
+
+  @override
+  State<_DeferredFrame2Body> createState() => _DeferredFrame2BodyState();
+}
+
+class _DeferredFrame2BodyState extends State<_DeferredFrame2Body> {
+  bool _ready = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() => _ready = true);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_ready) {
+      return ColoredBox(
+        color: widget.placeholderColor,
+        child: const SizedBox.expand(),
+      );
+    }
+    return widget.builder();
+  }
+}
 
 class _PostDetailPickFromFiles {
   const _PostDetailPickFromFiles();
@@ -112,6 +152,7 @@ class _PostDetailPageState extends State<PostDetailPage>
   final ScrollController _scrollController = ScrollController();
   final GlobalKey _commentsKey = GlobalKey();
   final GlobalKey _inputCardKey = GlobalKey();
+  final GlobalKey _inlineReplyInputKey = GlobalKey();
   final GlobalKey _morePostsSectionKey = GlobalKey();
   final GlobalKey _newCommentKey = GlobalKey();
 
@@ -135,17 +176,25 @@ class _PostDetailPageState extends State<PostDetailPage>
   String? _commentImagePath;
   final ValueNotifier<String?> _commentImagePathNotifier =
       ValueNotifier<String?>(null);
-  int _commentPage = 0;
-  static const int _commentsPerPage = 20;
 
-  /// 글별로 마지막으로 보던 댓글 페이지 (다시 들어왔을 때 복원)
-  static final Map<String, int> _savedCommentPageByPostId = {};
+  /// 현재 화면에 표시 중인 최상위 댓글 수 (무한스크롤)
+  int _visibleCommentCount = 15;
+  static const int _commentsPageSize = 10;
   final ValueNotifier<bool> _commentSortByTop = ValueNotifier(
     false,
   ); // true: 추천순, false: 시간순
   bool _showFab = false;
   late int _morePostsTabIndex;
+
+  /// 초기 라우트 [tabName]으로 탭 인덱스를 한 번만 맞춤(하단에서 다른 글로 이동 후에는 덮어쓰지 않음)
+  bool _morePostsTabSyncedFromRoute = false;
   Timer? _keyboardDebounceTimer;
+
+  /// 톡·에스크 좋아요: 네트워크 디바운스 타이머 (피드 카드와 동일 패턴)
+  Timer? _talkAskLikeDebounce;
+
+  /// 초기 [getPost] 등과 낙관적 좋아요 레이스 시 서버 스냅샷이 덮어쓰지 않도록
+  bool _talkAskLikeInFlight = false;
   bool _isRefreshing = false;
 
   /// Letterboxd 리뷰 상세: 스포일러 본문 공개 여부 (글 바뀌면 초기화)
@@ -268,23 +317,28 @@ class _PostDetailPageState extends State<PostDetailPage>
     _backStack = List.of(widget.initialBackStack);
     _forwardStack = List.of(widget.initialForwardStack);
     _morePostsTabIndex = (widget.initialTabIndex ?? 0).clamp(0, 2);
-    _scrollController.addListener(_updateFabVisibility);
-    _currentPost = widget.post;
-    final n = widget.post.commentsList.length;
-    if (n > 0) {
-      final totalPages = (n / _commentsPerPage).ceil().clamp(1, 9999);
-      if (totalPages > 1) {
-        _commentPage = totalPages - 1;
+    _scrollController.addListener(() {
+      _updateFabVisibility();
+      // 스크롤 끝에서 300px 이내: 댓글 더 불러오기
+      if (_scrollController.hasClients &&
+          _scrollController.position.pixels >=
+              _scrollController.position.maxScrollExtent - 300) {
+        _loadMoreComments();
       }
-    }
-    _loadCurrentUserAuthor();
+    });
+    _currentPost = widget.post;
     final uid = AuthService.instance.currentUser.value?.uid;
     _isLiked = uid != null && widget.post.likedBy.contains(uid);
     _isDisliked = uid != null && widget.post.dislikedBy.contains(uid);
-    if (!widget.offlineSyntheticReview) {
-      _loadLatestPost();
-      _incrementViews();
-    }
+    // 첫 프레임이 화면에 그려진 뒤 비동기 작업 시작 — 전환 애니메이션 jank 방지
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _loadCurrentUserAuthor();
+      if (!widget.offlineSyntheticReview) {
+        _loadLatestPost();
+        _incrementViews();
+      }
+    });
     _commentController.addListener(() {
       final lines = '\n'.allMatches(_commentController.text).length + 2;
       final clamped = lines.clamp(2, 6);
@@ -295,7 +349,8 @@ class _PostDetailPageState extends State<PostDetailPage>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (widget.initialTabIndex == null) {
+    if (widget.initialTabIndex == null && !_morePostsTabSyncedFromRoute) {
+      _morePostsTabSyncedFromRoute = true;
       final s = CountryScope.of(context).strings;
       var idx = 0;
       if (widget.tabName == s.get('tabReviews')) {
@@ -337,15 +392,20 @@ class _PostDetailPageState extends State<PostDetailPage>
     final latest = await PostService.instance.getPost(widget.post.id, locale);
     if (latest != null && mounted) {
       final uid = AuthService.instance.currentUser.value?.uid;
-      final n = latest.commentsList.length;
-      final totalPages = (n / _commentsPerPage).ceil().clamp(1, 9999);
-      if (totalPages > 1) {
-        _commentPage = totalPages - 1;
-      }
       setState(() {
-        _currentPost = latest;
-        _isLiked = uid != null && latest.likedBy.contains(uid);
-        _isDisliked = uid != null && latest.dislikedBy.contains(uid);
+        if (_votePending || _talkAskLikeInFlight) {
+          _currentPost = latest.copyWith(
+            votes: _post.votes,
+            likedBy: _post.likedBy,
+            dislikedBy: _post.dislikedBy,
+            likeCount: _post.likeCount,
+            dislikeCount: _post.dislikeCount,
+          );
+        } else {
+          _currentPost = latest;
+          _isLiked = uid != null && latest.likedBy.contains(uid);
+          _isDisliked = uid != null && latest.dislikedBy.contains(uid);
+        }
         _isRefreshing = false;
       });
     } else if (mounted) {
@@ -455,22 +515,33 @@ class _PostDetailPageState extends State<PostDetailPage>
         setState(() {
           _currentPost = optimisticPost;
           if (parentId == null) {
-            final total = newList.length;
-            final totalPages = (total / _commentsPerPage).ceil().clamp(1, 9999);
-            _commentPage = (totalPages - 1).clamp(0, 9999);
+            // 새 댓글이 보이도록 visible count 확장
+            _visibleCommentCount = newList.length;
             _scrollToCommentId = newComment.id;
           }
         });
       }
       // 서버에서 글 다시 불러와 동기화 (실패해도 이미 화면에는 반영됨)
+      // 단, 서버 데이터에 새 댓글이 없으면(race condition) 낙관적 업데이트를 보존.
       final locale = CountryScope.maybeOf(context)?.country;
       final updated = await PostService.instance.getPost(
-        widget.post.id,
+        _post.id,
         locale,
       );
       if (mounted && updated != null) {
+        final serverHasNewComment = parentId != null
+            ? (PostService.findCommentById(updated.commentsList, parentId)
+                    ?.replies
+                    .any((r) => r.id == newComment.id) ??
+                false)
+            : updated.commentsList.any((c) => c.id == newComment.id);
         setState(() {
-          _currentPost = updated;
+          if (serverHasNewComment) {
+            _currentPost = updated;
+          } else {
+            // 서버가 아직 새 댓글을 반환하지 않음 → 낙관적 업데이트 유지
+            _currentPost = optimisticPost;
+          }
           if (parentId != null) _scrollToCommentId = null;
         });
       }
@@ -537,6 +608,75 @@ class _PostDetailPageState extends State<PostDetailPage>
       return;
     }
     if (widget.offlineSyntheticReview) return;
+
+    final talkOrAsk =
+        postDisplayType(_post) == 'talk' || postDisplayType(_post) == 'ask';
+    if (talkOrAsk) {
+      HapticFeedback.lightImpact();
+      final uid = AuthService.instance.currentUser.value?.uid;
+      final nowLiked = !_isLiked;
+      final prevLiked = _isLiked;
+      final prevDisliked = _isDisliked;
+      final prevPost = _currentPost;
+      final newLikedBy = List<String>.from(_post.likedBy);
+      if (nowLiked) {
+        if (uid != null && !newLikedBy.contains(uid)) newLikedBy.add(uid);
+      } else {
+        newLikedBy.remove(uid);
+      }
+      final likeVoteDelta = nowLiked ? (_isDisliked ? 2 : 1) : -1;
+      var nextLikeCount = _post.likeCount;
+      var nextDislikeCount = _post.dislikeCount;
+      if (nowLiked) {
+        if (_isDisliked) {
+          nextDislikeCount = (nextDislikeCount - 1).clamp(0, 999999);
+          nextLikeCount += 1;
+        } else {
+          nextLikeCount += 1;
+        }
+      } else {
+        nextLikeCount = (nextLikeCount - 1).clamp(0, 999999);
+      }
+      _talkAskLikeInFlight = true;
+      setState(() {
+        _isLiked = nowLiked;
+        _isDisliked = false;
+        _currentPost = _post.copyWith(
+          votes: _post.votes + likeVoteDelta,
+          likedBy: newLikedBy,
+          dislikedBy: nowLiked
+              ? _post.dislikedBy.where((u) => u != uid).toList()
+              : _post.dislikedBy,
+          likeCount: nextLikeCount,
+          dislikeCount: nextDislikeCount,
+        );
+      });
+      final prevVoteForNet = nowLiked ? 0 : 1;
+      _talkAskLikeDebounce?.cancel();
+      _talkAskLikeDebounce = Timer(const Duration(milliseconds: 280), () async {
+        try {
+          if (!mounted) return;
+          final result = await PostService.instance.togglePostLike(
+            widget.post.id,
+            currentVoteState: prevVoteForNet,
+            postAuthorUid: _post.authorUid,
+            postTitle: _post.title,
+          );
+          if (!mounted) return;
+          if (result == null) {
+            setState(() {
+              _isLiked = prevLiked;
+              _isDisliked = prevDisliked;
+              _currentPost = prevPost;
+            });
+          }
+        } finally {
+          if (mounted) _talkAskLikeInFlight = false;
+        }
+      });
+      return;
+    }
+
     if (_votePending) return;
     HapticFeedback.lightImpact();
     final uid = AuthService.instance.currentUser.value?.uid;
@@ -887,11 +1027,12 @@ class _PostDetailPageState extends State<PostDetailPage>
 
   @override
   void dispose() {
-    _savedCommentPageByPostId[widget.post.id] = _commentPage;
     WidgetsBinding.instance.removeObserver(this);
     _scrollController.removeListener(_updateFabVisibility);
     _scrollController.dispose();
     _keyboardDebounceTimer?.cancel();
+    _talkAskLikeDebounce?.cancel();
+    _talkAskLikeInFlight = false;
     _commentController.dispose();
     _commentFocusNode.dispose();
     _commentImagePathNotifier.dispose();
@@ -911,7 +1052,8 @@ class _PostDetailPageState extends State<PostDetailPage>
 
   void _scrollToShowInputCard() {
     if (!mounted || !_scrollController.hasClients) return;
-    final ctx = _inputCardKey.currentContext;
+    final ctx =
+        _inlineReplyInputKey.currentContext ?? _inputCardKey.currentContext;
     if (ctx == null) return;
     final box = ctx.findRenderObject() as RenderBox?;
     if (box == null) return;
@@ -934,6 +1076,17 @@ class _PostDetailPageState extends State<PostDetailPage>
     }
   }
 
+  void _loadMoreComments() {
+    final total = _post.commentsList.length;
+    if (_visibleCommentCount >= total) return;
+    setState(() {
+      _visibleCommentCount = (_visibleCommentCount + _commentsPageSize).clamp(
+        0,
+        total,
+      );
+    });
+  }
+
   void _updateFabVisibility() {
     final ctx = _morePostsSectionKey.currentContext;
     if (ctx == null) return;
@@ -945,14 +1098,39 @@ class _PostDetailPageState extends State<PostDetailPage>
     if (isVisible != _showFab) setState(() => _showFab = isVisible);
   }
 
+  /// DramaFeed 하단 탭 인덱스(0=리뷰, 1=톡, 2=에스크) — 열린 글의 게시판 종류
+  int _feedTabIndexForPost(Post post) {
+    switch (postDisplayType(post)) {
+      case 'review':
+        return 0;
+      case 'ask':
+        return 2;
+      default:
+        return 1;
+    }
+  }
+
+  String _appBarBoardTitle() {
+    final s = CountryScope.of(context).strings;
+    switch (postDisplayType(_post)) {
+      case 'review':
+        return s.get('tabReviews');
+      case 'ask':
+        return s.get('tabQnA');
+      default:
+        return s.get('tabGeneral');
+    }
+  }
+
   // 글 상세 내에서 다른 글로 이동 (히스토리 push)
-  void _navigateToPost(Post post, {int tabIndex = 0}) {
+  void _navigateToPost(Post post) {
+    final nextTab = _feedTabIndexForPost(post);
     setState(() {
       _backStack.add((_post, _morePostsTabIndex));
       _forwardStack.clear();
       _currentPost = post;
-      _morePostsTabIndex = tabIndex.clamp(0, 2);
-      _commentPage = 0;
+      _morePostsTabIndex = nextTab;
+      _visibleCommentCount = 15;
       _commentLines = 2;
       _commentController.clear();
       _replyingToCommentId = null;
@@ -982,7 +1160,7 @@ class _PostDetailPageState extends State<PostDetailPage>
       final (post, tabIndex) = _backStack.removeLast();
       _currentPost = post;
       _morePostsTabIndex = tabIndex.clamp(0, 2);
-      _commentPage = 0;
+      _visibleCommentCount = 15;
       _commentLines = 2;
       _commentController.clear();
       _replyingToCommentId = null;
@@ -1000,7 +1178,7 @@ class _PostDetailPageState extends State<PostDetailPage>
       final (post, tabIndex) = _forwardStack.removeLast();
       _currentPost = post;
       _morePostsTabIndex = tabIndex.clamp(0, 2);
-      _commentPage = 0;
+      _visibleCommentCount = 15;
       _commentLines = 2;
       _commentController.clear();
       _replyingToCommentId = null;
@@ -1089,18 +1267,48 @@ class _PostDetailPageState extends State<PostDetailPage>
     });
   }
 
+  Widget _buildCommentInputCard(
+    ColorScheme cs,
+    dynamic s, {
+    Key? key,
+    EdgeInsetsGeometry margin = const EdgeInsets.symmetric(horizontal: 16),
+  }) {
+    return Container(
+      key: key,
+      margin: margin,
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: cs.outline.withValues(alpha: 0.13)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+        child: _buildInputLayout(cs, s),
+      ),
+    );
+  }
+
   /// TextField를 dispose 없이 유지하여 키보드 유지. hasFocus에 따라 주변 레이아웃만 변경.
   Widget _buildInputLayout(ColorScheme cs, dynamic s) {
     return ListenableBuilder(
       listenable: _commentFocusNode,
       builder: (context, _) {
         final hasFocus = _commentFocusNode.hasFocus;
+        final isDark = Theme.of(context).brightness == Brightness.dark;
         final replyingTo = _replyingToCommentId != null
             ? PostService.findCommentById(
                 _post.commentsList,
                 _replyingToCommentId!,
               )
             : null;
+        final boardKind = postDisplayType(_post);
+        final isTalkAskBoard = boardKind == 'talk' || boardKind == 'ask';
+        final replyingBannerAuthorColor = isTalkAskBoard
+            ? cs.onSurface.withValues(alpha: 0.56)
+            : cs.onSurface;
+        final replyingBannerAuthorWeight = isTalkAskBoard
+            ? FontWeight.w600
+            : FontWeight.w500;
         return Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1120,7 +1328,14 @@ class _PostDetailPageState extends State<PostDetailPage>
                 ),
                 child: Row(
                   children: [
-                    Icon(LucideIcons.reply, size: 14, color: cs.primary),
+                    Transform.rotate(
+                      angle: pi,
+                      child: Icon(
+                        LucideIcons.reply,
+                        size: 14,
+                        color: isDark ? Colors.white : cs.onSurface,
+                      ),
+                    ),
                     const SizedBox(width: 6),
                     Expanded(
                       child: Column(
@@ -1131,8 +1346,8 @@ class _PostDetailPageState extends State<PostDetailPage>
                             replyingTo.author,
                             style: GoogleFonts.notoSansKr(
                               fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: cs.primary,
+                              fontWeight: replyingBannerAuthorWeight,
+                              color: replyingBannerAuthorColor,
                             ),
                           ),
                           Text(
@@ -1218,73 +1433,42 @@ class _PostDetailPageState extends State<PostDetailPage>
       valueListenable: AuthService.instance.isLoggedIn,
       builder: (context, loggedIn, _) {
         if (!loggedIn) {
-          return InkWell(
+          return GestureDetector(
             onTap: () async {
               await Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const LoginPage()),
               );
             },
-            borderRadius: BorderRadius.circular(20),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: cs.surfaceContainerHighest.withOpacity(0.9),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: cs.outline.withOpacity(0.12)),
-              ),
-              alignment: Alignment.centerLeft,
-              child: Text(
-                s.get('joinConversation'),
-                style: GoogleFonts.notoSansKr(
-                  fontSize: 15,
-                  color: cs.onSurfaceVariant,
-                ),
+            child: Text(
+              s.get('joinConversation'),
+              style: GoogleFonts.notoSansKr(
+                fontSize: 14,
+                color: cs.onSurfaceVariant,
               ),
             ),
           );
         }
-        final replyingTo = _replyingToCommentId != null
-            ? PostService.findCommentById(
-                _post.commentsList,
-                _replyingToCommentId!,
-              )
-            : null;
+        final isReplying = _replyingToCommentId != null;
         return TextField(
           controller: _commentController,
           focusNode: _commentFocusNode,
           decoration: InputDecoration(
             isDense: true,
-            hintText: replyingTo != null
-                ? '${replyingTo.author}님에게 답글...'
-                : s.get('joinConversation'),
+            hintText: isReplying ? null : s.get('joinConversation'),
             hintStyle: GoogleFonts.notoSansKr(
-              fontSize: 15,
-              color: cs.onSurfaceVariant,
+              fontSize: 14,
+              color: cs.onSurfaceVariant.withValues(alpha: 0.7),
             ),
-            filled: true,
-            fillColor: cs.surfaceContainerHighest.withOpacity(0.9),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(20),
-              borderSide: BorderSide(color: cs.outline.withOpacity(0.12)),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(20),
-              borderSide: BorderSide(color: cs.outline.withOpacity(0.12)),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(20),
-              borderSide: BorderSide(
-                color: cs.primary.withOpacity(0.5),
-                width: 1.5,
-              ),
-            ),
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 14,
-              vertical: 16,
-            ),
+            filled: false,
+            border: InputBorder.none,
+            enabledBorder: InputBorder.none,
+            focusedBorder: InputBorder.none,
+            contentPadding: isReplying
+                ? const EdgeInsets.fromLTRB(0, 10, 0, 0)
+                : EdgeInsets.zero,
           ),
-          style: GoogleFonts.notoSansKr(fontSize: 15, color: cs.onSurface),
+          style: GoogleFonts.notoSansKr(fontSize: 14, color: cs.onSurface),
           maxLines: 6,
           minLines: _commentLines,
           textInputAction: TextInputAction.newline,
@@ -1454,137 +1638,109 @@ class _PostDetailPageState extends State<PostDetailPage>
     Post post,
   ) {
     final isRecentCompact = widget.hideBelowLetterboxdLike;
-    final short = _letterboxdAuthorShort(post);
-    final title = s
-        .get('letterboxdReviewDetailAppBarTitle')
-        .replaceAll('{name}', short);
-    return ColoredBox(
-      color: isRecentCompact ? theme.scaffoldBackgroundColor : Colors.black,
-      child: SafeArea(
-        bottom: false,
-        child: SizedBox(
-          height: 48,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              AppBarBackIconButton(
-                iconColor: Colors.white,
-                onPressed: () =>
-                    Navigator.pop(context, _buildResult(updatedPost: _post)),
-              ),
-              Expanded(
-                child: Text(
-                  title,
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: GoogleFonts.notoSansKr(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.white,
-                    letterSpacing: 0.1,
-                  ),
-                ),
-              ),
-              PopupMenuButton<String>(
-                color: cs.surface,
-                icon: const Icon(
-                  LucideIcons.ellipsis_vertical,
-                  color: Colors.white,
-                  size: 22,
-                ),
-                padding: EdgeInsets.zero,
-                onSelected: (v) =>
-                    _onLetterboxdPostMenuSelected(v, post, cs, s),
-                itemBuilder: (ctx) => [
-                  PopupMenuItem(
-                    value: 'share',
-                    child: Row(
-                      children: [
-                        Icon(
-                          LucideIcons.share_2,
-                          size: 18,
-                          color: cs.onSurface,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(s.get('share'), style: GoogleFonts.notoSansKr()),
-                      ],
-                    ),
-                  ),
-                  if (_isMine && !widget.offlineSyntheticReview) ...[
-                    PopupMenuItem(
-                      value: 'edit',
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.edit_outlined,
-                            size: 18,
-                            color: cs.onSurface,
-                          ),
-                          const SizedBox(width: 8),
-                          Text(s.get('edit'), style: GoogleFonts.notoSansKr()),
-                        ],
-                      ),
-                    ),
-                    PopupMenuItem(
-                      value: 'delete',
-                      child: Row(
-                        children: [
-                          Icon(Icons.delete_outline, size: 18, color: cs.error),
-                          const SizedBox(width: 8),
-                          Text(
-                            s.get('delete'),
-                            style: GoogleFonts.notoSansKr(color: cs.error),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ] else if (!_isMine &&
-                      isAppModerator() &&
-                      !widget.offlineSyntheticReview) ...[
-                    PopupMenuItem(
-                      value: 'delete',
-                      child: Row(
-                        children: [
-                          Icon(Icons.delete_outline, size: 18, color: cs.error),
-                          const SizedBox(width: 8),
-                          Text(
-                            s.get('delete'),
-                            style: GoogleFonts.notoSansKr(color: cs.error),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ] else if (!_isMine) ...[
-                    PopupMenuItem(
-                      value: 'report',
-                      child: Row(
-                        children: [
-                          Icon(LucideIcons.flag, size: 18, color: cs.error),
-                          const SizedBox(width: 8),
-                          Text(
-                            s.get('report'),
-                            style: GoogleFonts.notoSansKr(color: cs.error),
-                          ),
-                        ],
-                      ),
-                    ),
-                    PopupMenuItem(
-                      value: 'block',
-                      child: Row(
-                        children: [
-                          Icon(LucideIcons.ban, size: 18, color: cs.onSurface),
-                          const SizedBox(width: 8),
-                          Text(s.get('block'), style: GoogleFonts.notoSansKr()),
-                        ],
-                      ),
-                    ),
-                  ],
+    final title = isRecentCompact
+        ? s.get('letterboxdReviewDetailTabReview')
+        : s
+              .get('letterboxdReviewDetailAppBarTitle')
+              .replaceAll('{name}', _letterboxdAuthorShort(post));
+    final headerBg = isRecentCompact
+        ? listsStyleSubpageHeaderBackground(theme)
+        : Colors.black;
+    final menuIconColor = isRecentCompact ? cs.onSurface : Colors.white;
+    return ListsStyleSubpageHeaderBar(
+      title: title,
+      onBack: () => Navigator.pop(context, _buildResult(updatedPost: _post)),
+      backgroundColor: headerBg,
+      titleColor: isRecentCompact ? null : Colors.white,
+      leadingMutedColor: isRecentCompact
+          ? null
+          : Colors.white.withValues(alpha: 0.52),
+      trailing: PopupMenuButton<String>(
+        color: cs.surface,
+        icon: Icon(
+          LucideIcons.ellipsis_vertical,
+          color: menuIconColor,
+          size: 20,
+        ),
+        padding: EdgeInsets.zero,
+        onSelected: (v) => _onLetterboxdPostMenuSelected(v, post, cs, s),
+        itemBuilder: (ctx) => [
+          PopupMenuItem(
+            value: 'share',
+            child: Row(
+              children: [
+                Icon(LucideIcons.share_2, size: 18, color: cs.onSurface),
+                const SizedBox(width: 8),
+                Text(s.get('share'), style: GoogleFonts.notoSansKr()),
+              ],
+            ),
+          ),
+          if (_isMine && !widget.offlineSyntheticReview) ...[
+            PopupMenuItem(
+              value: 'edit',
+              child: Row(
+                children: [
+                  Icon(Icons.edit_outlined, size: 18, color: cs.onSurface),
+                  const SizedBox(width: 8),
+                  Text(s.get('edit'), style: GoogleFonts.notoSansKr()),
                 ],
               ),
-            ],
-          ),
-        ),
+            ),
+            PopupMenuItem(
+              value: 'delete',
+              child: Row(
+                children: [
+                  Icon(Icons.delete_outline, size: 18, color: cs.error),
+                  const SizedBox(width: 8),
+                  Text(
+                    s.get('delete'),
+                    style: GoogleFonts.notoSansKr(color: cs.error),
+                  ),
+                ],
+              ),
+            ),
+          ] else if (!_isMine &&
+              isAppModerator() &&
+              !widget.offlineSyntheticReview) ...[
+            PopupMenuItem(
+              value: 'delete',
+              child: Row(
+                children: [
+                  Icon(Icons.delete_outline, size: 18, color: cs.error),
+                  const SizedBox(width: 8),
+                  Text(
+                    s.get('delete'),
+                    style: GoogleFonts.notoSansKr(color: cs.error),
+                  ),
+                ],
+              ),
+            ),
+          ] else if (!_isMine) ...[
+            PopupMenuItem(
+              value: 'report',
+              child: Row(
+                children: [
+                  Icon(LucideIcons.flag, size: 18, color: cs.error),
+                  const SizedBox(width: 8),
+                  Text(
+                    s.get('report'),
+                    style: GoogleFonts.notoSansKr(color: cs.error),
+                  ),
+                ],
+              ),
+            ),
+            PopupMenuItem(
+              value: 'block',
+              child: Row(
+                children: [
+                  Icon(LucideIcons.ban, size: 18, color: cs.onSurface),
+                  const SizedBox(width: 8),
+                  Text(s.get('block'), style: GoogleFonts.notoSansKr()),
+                ],
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -1814,39 +1970,35 @@ class _PostDetailPageState extends State<PostDetailPage>
   }
 
   Widget _buildGifPhotoReplyRow(ColorScheme cs, dynamic s) {
+    final gifPhotoTint = cs.onSurface.withValues(alpha: 0.78);
     return ValueListenableBuilder<bool>(
       valueListenable: AuthService.instance.isLoggedIn,
       builder: (context, loggedIn, _) {
         if (!loggedIn) return const SizedBox.shrink();
         return Row(
           children: [
-            TextButton(
-              style: TextButton.styleFrom(
-                minimumSize: Size.zero,
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              onPressed: _onGifTap,
-              child: Text(
-                'GIF',
-                style: GoogleFonts.notoSansKr(
-                  fontSize: 12,
-                  color: cs.onSurfaceVariant,
+            GestureDetector(
+              onTap: _onGifTap,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
+                child: Text(
+                  'GIF',
+                  style: GoogleFonts.notoSansKr(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: gifPhotoTint,
+                  ),
                 ),
               ),
             ),
-            IconButton(
-              style: IconButton.styleFrom(
-                minimumSize: Size.zero,
-                padding: const EdgeInsets.all(4),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              icon: Icon(
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: _onPhotoTap,
+              child: Icon(
                 LucideIcons.image_plus,
-                size: 20,
-                color: cs.onSurfaceVariant,
+                size: 18,
+                color: gifPhotoTint,
               ),
-              onPressed: _onPhotoTap,
             ),
             const Spacer(),
             ValueListenableBuilder<String?>(
@@ -1857,27 +2009,24 @@ class _PostDetailPageState extends State<PostDetailPage>
                   builder: (context, value, _) {
                     final hasText = value.text.trim().isNotEmpty;
                     final hasContent = hasText || imagePath != null;
-                    return Material(
-                      color: hasContent
-                          ? cs.primary
-                          : Colors.grey.withOpacity(0.5),
-                      borderRadius: BorderRadius.circular(20),
-                      child: InkWell(
-                        onTap: hasContent ? _submitComment : null,
-                        borderRadius: BorderRadius.circular(14),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 6,
-                          ),
-                          child: Text(
-                            s.get('replySubmit'),
-                            style: GoogleFonts.notoSansKr(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w800,
-                              color: hasContent ? Colors.white : Colors.white70,
-                            ),
-                          ),
+                    return GestureDetector(
+                      onTap: hasContent ? _submitComment : null,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 180),
+                        curve: Curves.easeOut,
+                        padding: const EdgeInsets.all(7),
+                        decoration: BoxDecoration(
+                          color: hasContent
+                              ? cs.primary
+                              : cs.onSurface.withValues(alpha: 0.1),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          LucideIcons.arrow_up,
+                          size: 17,
+                          color: hasContent
+                              ? Colors.white
+                              : cs.onSurfaceVariant.withValues(alpha: 0.45),
                         ),
                       ),
                     );
@@ -2001,7 +2150,7 @@ class _PostDetailPageState extends State<PostDetailPage>
                                   photoUrl: post.authorPhotoUrl,
                                   author: post.author,
                                   colorIndex: post.authorAvatarColorIndex,
-                                  size: 28,
+                                  size: _kPostDetailUnifiedAuthorAvatarDp,
                                 ),
                                 const SizedBox(width: 8),
                                 Expanded(
@@ -2090,7 +2239,7 @@ class _PostDetailPageState extends State<PostDetailPage>
                                     photoUrl: post.authorPhotoUrl,
                                     author: post.author,
                                     colorIndex: post.authorAvatarColorIndex,
-                                    size: 28,
+                                    size: _kPostDetailUnifiedAuthorAvatarDp,
                                   ),
                                   const SizedBox(width: 8),
                                   Expanded(
@@ -2367,11 +2516,13 @@ class _PostDetailPageState extends State<PostDetailPage>
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final isTypedReview = postDisplayType(post) == 'review';
-    final useScaffoldBgForReview = isTypedReview && widget.hideBelowLetterboxdLike;
+    final useScaffoldBgForReview =
+        isTypedReview && widget.hideBelowLetterboxdLike;
     final hideLetterboxdTail = isTypedReview && widget.hideBelowLetterboxdLike;
     final boardKind = postDisplayType(post);
     final showAuthorProfileMenu = boardKind != 'talk' && boardKind != 'ask';
     final hideViewsInTalkAskDetail = boardKind == 'talk' || boardKind == 'ask';
+    final listsHeaderBg = listsStyleSubpageHeaderBackground(theme);
     final deleteLabelColor = (boardKind == 'talk' || boardKind == 'ask')
         ? Colors.redAccent
         : cs.error;
@@ -2387,7 +2538,9 @@ class _PostDetailPageState extends State<PostDetailPage>
         resizeToAvoidBottomInset: true,
         backgroundColor: (isTypedReview && !useScaffoldBgForReview)
             ? _kLetterboxdReviewScreenBg
-            : theme.scaffoldBackgroundColor,
+            : (hideViewsInTalkAskDetail
+                  ? listsHeaderBg
+                  : theme.scaffoldBackgroundColor),
         body: ValueListenableBuilder<bool>(
           valueListenable: HomeTabVisibility.isHomeMainTabSelected,
           builder: (context, isHomeMainTab, _) {
@@ -2397,298 +2550,387 @@ class _PostDetailPageState extends State<PostDetailPage>
                 ? (MediaQuery.paddingOf(context).bottom + 16)
                 : (_kBrowserNavBarHeight +
                       MediaQuery.paddingOf(context).bottom);
-            return Stack(
+            final mainStack = Stack(
               children: [
                 Column(
                   children: [
                     if (!isTypedReview)
-                      // 상단 바: 댓글 0/시간순 영역과 동일한 배경색
-                      Container(
-                        width: double.infinity,
-                        padding: EdgeInsets.fromLTRB(
-                          10,
-                          MediaQuery.of(context).padding.top,
-                          10,
-                          0,
+                      ListsStyleSubpageHeaderBar(
+                        title: _appBarBoardTitle(),
+                        onBack: () => Navigator.pop(
+                          context,
+                          _buildResult(updatedPost: _post),
                         ),
-                        color: theme.cardTheme.color ?? cs.surface,
-                        child: Row(
-                          children: [
-                            Material(
-                              color: Colors.transparent,
-                              child: InkWell(
-                                borderRadius: BorderRadius.circular(24),
-                                onTap: () => Navigator.pop(
-                                  context,
-                                  _buildResult(updatedPost: _post),
-                                ),
-                                child: Padding(
-                                  padding: const EdgeInsets.all(10),
-                                  child: Icon(
-                                    LucideIcons.x,
-                                    size: 22,
-                                    color: cs.onSurface,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            Expanded(
-                              child: Center(
-                                child: Text(
-                                  widget.tabName ?? '',
-                                  style: GoogleFonts.notoSansKr(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w600,
-                                    color: cs.onSurface,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 42),
-                          ],
-                        ),
+                        backgroundColor: listsHeaderBg,
                       ),
                     Expanded(
-                      child: BlindRefreshIndicator(
-                        onRefresh: _loadLatestPost,
-                        spinnerOffsetDown: 15.0,
-                        child: Container(
-                          color: (isTypedReview && !useScaffoldBgForReview)
-                              ? _kLetterboxdReviewScreenBg
-                              : theme.scaffoldBackgroundColor,
-                          child: SingleChildScrollView(
-                            controller: _scrollController,
-                            physics: const AlwaysScrollableScrollPhysics(),
-                            keyboardDismissBehavior:
-                                ScrollViewKeyboardDismissBehavior.onDrag,
-                            padding: EdgeInsets.zero,
-                            child: GestureDetector(
-                              onTap: () => FocusScope.of(context).unfocus(),
-                              behavior: HitTestBehavior.opaque,
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  if (isTypedReview)
-                                    _buildLetterboxdReviewSection(
-                                      context,
-                                      theme,
-                                      cs,
-                                      post,
-                                    ),
-                                  if (!isTypedReview) ...[
-                                    Padding(
-                                      padding: const EdgeInsets.fromLTRB(
-                                        15,
-                                        8,
-                                        15,
-                                        8,
+                      child: _DeferredFrame2Body(
+                        placeholderColor:
+                            (isTypedReview && !useScaffoldBgForReview)
+                            ? _kLetterboxdReviewScreenBg
+                            : theme.scaffoldBackgroundColor,
+                        builder: () => BlindRefreshIndicator(
+                          onRefresh: _loadLatestPost,
+                          spinnerOffsetDown: 15.0,
+                          child: Container(
+                            color: (isTypedReview && !useScaffoldBgForReview)
+                                ? _kLetterboxdReviewScreenBg
+                                : theme.scaffoldBackgroundColor,
+                            child: SingleChildScrollView(
+                              controller: _scrollController,
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              keyboardDismissBehavior:
+                                  ScrollViewKeyboardDismissBehavior.onDrag,
+                              padding: EdgeInsets.zero,
+                              child: GestureDetector(
+                                onTap: () => FocusScope.of(context).unfocus(),
+                                behavior: HitTestBehavior.opaque,
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    if (isTypedReview)
+                                      _buildLetterboxdReviewSection(
+                                        context,
+                                        theme,
+                                        cs,
+                                        post,
                                       ),
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Row(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.center,
-                                            children: [
-                                              // 아바타 + 닉네임/시간
-                                              _PostAuthorAvatar(
-                                                photoUrl: post.authorPhotoUrl,
-                                                author: post.author,
-                                                colorIndex:
-                                                    post.authorAvatarColorIndex,
-                                                size: 38,
-                                              ),
-                                              const SizedBox(width: 10),
-                                              Expanded(
-                                                child: Column(
-                                                  crossAxisAlignment:
-                                                      CrossAxisAlignment.start,
-                                                  mainAxisSize:
-                                                      MainAxisSize.min,
-                                                  children: [
-                                                    GestureDetector(
-                                                      onTapDown: (details) =>
-                                                          _showPostAuthorMenu(
-                                                            context,
-                                                            post.author,
-                                                            details,
-                                                          ),
-                                                      behavior: HitTestBehavior
-                                                          .opaque,
-                                                      child: Text(
-                                                        post.author.startsWith(
-                                                              'u/',
-                                                            )
-                                                            ? post.author
-                                                                  .substring(2)
-                                                            : post.author,
+                                    if (!isTypedReview) ...[
+                                      Padding(
+                                        padding: const EdgeInsets.fromLTRB(
+                                          15,
+                                          8,
+                                          15,
+                                          8,
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.center,
+                                              children: [
+                                                // 아바타 + 닉네임/시간
+                                                _PostAuthorAvatar(
+                                                  photoUrl: post.authorPhotoUrl,
+                                                  author: post.author,
+                                                  colorIndex: post
+                                                      .authorAvatarColorIndex,
+                                                  size:
+                                                      _kPostDetailUnifiedAuthorAvatarDp,
+                                                ),
+                                                const SizedBox(width: 10),
+                                                Expanded(
+                                                  child: Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .start,
+                                                    mainAxisSize:
+                                                        MainAxisSize.min,
+                                                    children: [
+                                                      GestureDetector(
+                                                        onTapDown: (details) =>
+                                                            _showPostAuthorMenu(
+                                                              context,
+                                                              post.author,
+                                                              details,
+                                                            ),
+                                                        behavior:
+                                                            HitTestBehavior
+                                                                .opaque,
+                                                        child: Text(
+                                                          post.author
+                                                                  .startsWith(
+                                                                    'u/',
+                                                                  )
+                                                              ? post.author
+                                                                    .substring(
+                                                                      2,
+                                                                    )
+                                                              : post.author,
+                                                          style:
+                                                              GoogleFonts.notoSansKr(
+                                                                fontSize: 13,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w700,
+                                                                color: cs
+                                                                    .onSurface,
+                                                              ),
+                                                        ),
+                                                      ),
+                                                      const SizedBox(height: 2),
+                                                      Text(
+                                                        post.timeAgo,
                                                         style:
                                                             GoogleFonts.notoSansKr(
-                                                              fontSize: 13,
+                                                              fontSize: 11,
+                                                              color: AppColors
+                                                                  .mediumGrey
+                                                                  .withOpacity(
+                                                                    0.7,
+                                                                  ),
                                                               fontWeight:
                                                                   FontWeight
-                                                                      .w700,
-                                                              color:
-                                                                  cs.onSurface,
+                                                                      .w600,
                                                             ),
                                                       ),
-                                                    ),
-                                                    const SizedBox(height: 2),
-                                                    Text(
-                                                      post.timeAgo,
-                                                      style:
-                                                          GoogleFonts.notoSansKr(
-                                                            fontSize: 11,
-                                                            color: AppColors
-                                                                .mediumGrey
-                                                                .withOpacity(
-                                                                  0.7,
-                                                                ),
-                                                            fontWeight:
-                                                                FontWeight.w600,
-                                                          ),
-                                                    ),
-                                                  ],
-                                                ),
-                                              ),
-                                              // 공유 아이콘
-                                              GestureDetector(
-                                                onTap: () => _sharePostOrReview(
-                                                  context,
-                                                  post,
-                                                ),
-                                                behavior:
-                                                    HitTestBehavior.opaque,
-                                                child: Padding(
-                                                  padding:
-                                                      const EdgeInsets.symmetric(
-                                                        horizontal: 4,
-                                                        vertical: 4,
-                                                      ),
-                                                  child: Icon(
-                                                    LucideIcons.share_2,
-                                                    size: 18,
-                                                    color: cs.onSurfaceVariant,
+                                                    ],
                                                   ),
                                                 ),
-                                              ),
-                                              // 저장 아이콘
-                                              ValueListenableBuilder<
-                                                List<SavedItem>
-                                              >(
-                                                valueListenable: SavedService
-                                                    .instance
-                                                    .savedList,
-                                                builder: (context, _, __) {
-                                                  final isSaved = SavedService
-                                                      .instance
-                                                      .isSaved(post.id);
-                                                  return GestureDetector(
-                                                    onTap: () => SavedService
-                                                        .instance
-                                                        .toggle(
-                                                          SavedItem(
-                                                            id: post.id,
-                                                            title: post.title,
-                                                            views:
-                                                                formatCompactCount(
-                                                                  post.views,
-                                                                ),
-                                                            type: SavedItemType
-                                                                .post,
-                                                            post: post,
-                                                          ),
+                                                // 공유 (톡·에스크: 곡선 화살표 느낌 / 그 외: share_2)
+                                                Tooltip(
+                                                  message: s.get('share'),
+                                                  child: GestureDetector(
+                                                    onTap: () =>
+                                                        _sharePostOrReview(
+                                                          context,
+                                                          post,
                                                         ),
                                                     behavior:
                                                         HitTestBehavior.opaque,
                                                     child: Padding(
                                                       padding:
                                                           const EdgeInsets.symmetric(
-                                                            horizontal: 4,
+                                                            horizontal: 6,
                                                             vertical: 4,
                                                           ),
                                                       child: Icon(
-                                                        isSaved
-                                                            ? Icons.bookmark
-                                                            : Icons
-                                                                  .bookmark_border,
-                                                        size: 20,
-                                                        color: isSaved
-                                                            ? cs.primary
-                                                            : cs.onSurfaceVariant,
+                                                        hideViewsInTalkAskDetail
+                                                            ? Icons
+                                                                  .north_east_rounded
+                                                            : LucideIcons
+                                                                  .share_2,
+                                                        size:
+                                                            hideViewsInTalkAskDetail
+                                                            ? 21
+                                                            : 18,
+                                                        color:
+                                                            cs.onSurfaceVariant,
                                                       ),
                                                     ),
-                                                  );
-                                                },
-                                              ),
-                                              // ··· 버튼 (오른쪽 상단)
-                                              GestureDetector(
-                                                onTapDown: (details) async {
-                                                  final value = await showMenu<String>(
-                                                    context: context,
-                                                    position:
-                                                        RelativeRect.fromLTRB(
-                                                          details
-                                                              .globalPosition
-                                                              .dx,
-                                                          details
-                                                              .globalPosition
-                                                              .dy,
-                                                          details
-                                                                  .globalPosition
-                                                                  .dx +
-                                                              1,
-                                                          details
-                                                                  .globalPosition
-                                                                  .dy +
-                                                              1,
-                                                        ),
-                                                    shape: RoundedRectangleBorder(
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                            10,
+                                                  ),
+                                                ),
+                                                // ··· 버튼 (오른쪽 상단)
+                                                GestureDetector(
+                                                  onTapDown: (details) async {
+                                                    final value = await showMenu<String>(
+                                                      context: context,
+                                                      position: RelativeRect.fromLTRB(
+                                                        details
+                                                            .globalPosition
+                                                            .dx,
+                                                        details
+                                                            .globalPosition
+                                                            .dy,
+                                                        details
+                                                                .globalPosition
+                                                                .dx +
+                                                            1,
+                                                        details
+                                                                .globalPosition
+                                                                .dy +
+                                                            1,
+                                                      ),
+                                                      shape: RoundedRectangleBorder(
+                                                        borderRadius:
+                                                            BorderRadius.circular(
+                                                              10,
+                                                            ),
+                                                      ),
+                                                      color: cs.surface,
+                                                      items: [
+                                                        if (_isMine) ...[
+                                                          PopupMenuItem(
+                                                            value: 'edit',
+                                                            child: Row(
+                                                              children: [
+                                                                Icon(
+                                                                  Icons
+                                                                      .edit_outlined,
+                                                                  size: 18,
+                                                                  color: cs
+                                                                      .onSurface,
+                                                                ),
+                                                                const SizedBox(
+                                                                  width: 10,
+                                                                ),
+                                                                Text(
+                                                                  s.get('edit'),
+                                                                  style:
+                                                                      GoogleFonts.notoSansKr(),
+                                                                ),
+                                                              ],
+                                                            ),
                                                           ),
-                                                    ),
-                                                    color: cs.surface,
-                                                    items: [
-                                                      if (_isMine) ...[
-                                                        PopupMenuItem(
-                                                          value: 'edit',
-                                                          child: Row(
-                                                            children: [
-                                                              Icon(
-                                                                Icons
-                                                                    .edit_outlined,
-                                                                size: 18,
-                                                                color: cs
-                                                                    .onSurface,
-                                                              ),
-                                                              const SizedBox(
-                                                                width: 10,
-                                                              ),
-                                                              Text(
-                                                                s.get('edit'),
+                                                          PopupMenuItem(
+                                                            value: 'delete',
+                                                            child: Row(
+                                                              children: [
+                                                                Icon(
+                                                                  Icons
+                                                                      .delete_outline,
+                                                                  size: 18,
+                                                                  color:
+                                                                      cs.error,
+                                                                ),
+                                                                const SizedBox(
+                                                                  width: 10,
+                                                                ),
+                                                                Text(
+                                                                  s.get(
+                                                                    'delete',
+                                                                  ),
+                                                                  style: GoogleFonts.notoSansKr(
+                                                                    color: cs
+                                                                        .error,
+                                                                  ),
+                                                                ),
+                                                              ],
+                                                            ),
+                                                          ),
+                                                        ] else if (isAppModerator()) ...[
+                                                          PopupMenuItem(
+                                                            value: 'delete',
+                                                            child: Row(
+                                                              children: [
+                                                                Icon(
+                                                                  Icons
+                                                                      .delete_outline,
+                                                                  size: 18,
+                                                                  color:
+                                                                      cs.error,
+                                                                ),
+                                                                const SizedBox(
+                                                                  width: 10,
+                                                                ),
+                                                                Text(
+                                                                  s.get(
+                                                                    'delete',
+                                                                  ),
+                                                                  style: GoogleFonts.notoSansKr(
+                                                                    color: cs
+                                                                        .error,
+                                                                  ),
+                                                                ),
+                                                              ],
+                                                            ),
+                                                          ),
+                                                        ] else ...[
+                                                          PopupMenuItem(
+                                                            value: 'report',
+                                                            child: Row(
+                                                              children: [
+                                                                Icon(
+                                                                  LucideIcons
+                                                                      .flag,
+                                                                  size: 18,
+                                                                  color:
+                                                                      cs.error,
+                                                                ),
+                                                                const SizedBox(
+                                                                  width: 10,
+                                                                ),
+                                                                Text(
+                                                                  s.get(
+                                                                    'report',
+                                                                  ),
+                                                                  style: GoogleFonts.notoSansKr(
+                                                                    color: cs
+                                                                        .error,
+                                                                  ),
+                                                                ),
+                                                              ],
+                                                            ),
+                                                          ),
+                                                          PopupMenuItem(
+                                                            value: 'block',
+                                                            child: Row(
+                                                              children: [
+                                                                Icon(
+                                                                  LucideIcons
+                                                                      .ban,
+                                                                  size: 18,
+                                                                  color: cs
+                                                                      .onSurface,
+                                                                ),
+                                                                const SizedBox(
+                                                                  width: 10,
+                                                                ),
+                                                                Text(
+                                                                  s.get(
+                                                                    'block',
+                                                                  ),
+                                                                  style:
+                                                                      GoogleFonts.notoSansKr(),
+                                                                ),
+                                                              ],
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ],
+                                                    );
+                                                    if (!mounted ||
+                                                        value == null)
+                                                      return;
+                                                    if (value == 'edit') {
+                                                      final updated =
+                                                          await Navigator.push<
+                                                            Post
+                                                          >(
+                                                            context,
+                                                            MaterialPageRoute(
+                                                              builder: (_) =>
+                                                                  WritePostPage(
+                                                                    initialPost:
+                                                                        _post,
+                                                                  ),
+                                                            ),
+                                                          );
+                                                      if (updated != null &&
+                                                          mounted)
+                                                        setState(
+                                                          () => _currentPost =
+                                                              updated,
+                                                        );
+                                                    } else if (value ==
+                                                        'delete') {
+                                                      final confirm = await showDialog<bool>(
+                                                        context: context,
+                                                        builder: (ctx) => AlertDialog(
+                                                          title: Text(
+                                                            s.get('delete'),
+                                                            style:
+                                                                GoogleFonts.notoSansKr(),
+                                                          ),
+                                                          content: Text(
+                                                            s.get(
+                                                              'deletePostConfirm',
+                                                            ),
+                                                            style:
+                                                                GoogleFonts.notoSansKr(),
+                                                          ),
+                                                          actions: [
+                                                            TextButton(
+                                                              onPressed: () =>
+                                                                  Navigator.pop(
+                                                                    ctx,
+                                                                    false,
+                                                                  ),
+                                                              child: Text(
+                                                                s.get('cancel'),
                                                                 style:
                                                                     GoogleFonts.notoSansKr(),
                                                               ),
-                                                            ],
-                                                          ),
-                                                        ),
-                                                        PopupMenuItem(
-                                                          value: 'delete',
-                                                          child: Row(
-                                                            children: [
-                                                              Icon(
-                                                                Icons
-                                                                    .delete_outline,
-                                                                size: 18,
-                                                                color: cs.error,
-                                                              ),
-                                                              const SizedBox(
-                                                                width: 10,
-                                                              ),
-                                                              Text(
+                                                            ),
+                                                            TextButton(
+                                                              onPressed: () =>
+                                                                  Navigator.pop(
+                                                                    ctx,
+                                                                    true,
+                                                                  ),
+                                                              child: Text(
                                                                 s.get('delete'),
                                                                 style:
                                                                     GoogleFonts.notoSansKr(
@@ -2696,49 +2938,79 @@ class _PostDetailPageState extends State<PostDetailPage>
                                                                           .error,
                                                                     ),
                                                               ),
-                                                            ],
-                                                          ),
+                                                            ),
+                                                          ],
                                                         ),
-                                                      ] else if (isAppModerator()) ...[
-                                                        PopupMenuItem(
-                                                          value: 'delete',
-                                                          child: Row(
-                                                            children: [
-                                                              Icon(
-                                                                Icons
-                                                                    .delete_outline,
-                                                                size: 18,
-                                                                color: cs.error,
-                                                              ),
-                                                              const SizedBox(
-                                                                width: 10,
-                                                              ),
-                                                              Text(
-                                                                s.get('delete'),
+                                                      );
+                                                      if (confirm == true &&
+                                                          mounted) {
+                                                        await PostService
+                                                            .instance
+                                                            .deletePost(
+                                                              _post.id,
+                                                            );
+                                                        if (mounted) {
+                                                          widget.onPostDeleted
+                                                              ?.call(_post);
+                                                          Navigator.pop(
+                                                            context,
+                                                          );
+                                                        }
+                                                      }
+                                                    } else if (value ==
+                                                        'report') {
+                                                      await showDialog<void>(
+                                                        context: context,
+                                                        builder: (ctx) => AlertDialog(
+                                                          title: Text(
+                                                            s.get(
+                                                              'reportPostTitle',
+                                                            ),
+                                                            style:
+                                                                GoogleFonts.notoSansKr(),
+                                                          ),
+                                                          content: Text(
+                                                            s.get(
+                                                              'reportPostMessage',
+                                                            ),
+                                                            style:
+                                                                GoogleFonts.notoSansKr(),
+                                                          ),
+                                                          actions: [
+                                                            TextButton(
+                                                              onPressed: () =>
+                                                                  Navigator.pop(
+                                                                    ctx,
+                                                                  ),
+                                                              child: Text(
+                                                                s.get('cancel'),
                                                                 style:
-                                                                    GoogleFonts.notoSansKr(
-                                                                      color: cs
-                                                                          .error,
+                                                                    GoogleFonts.notoSansKr(),
+                                                              ),
+                                                            ),
+                                                            TextButton(
+                                                              onPressed: () {
+                                                                Navigator.pop(
+                                                                  ctx,
+                                                                );
+                                                                ScaffoldMessenger.of(
+                                                                  context,
+                                                                ).showSnackBar(
+                                                                  SnackBar(
+                                                                    content: Text(
+                                                                      s.get(
+                                                                        'reportSubmitted',
+                                                                      ),
+                                                                      style:
+                                                                          GoogleFonts.notoSansKr(),
                                                                     ),
-                                                              ),
-                                                            ],
-                                                          ),
-                                                        ),
-                                                      ] else ...[
-                                                        PopupMenuItem(
-                                                          value: 'report',
-                                                          child: Row(
-                                                            children: [
-                                                              Icon(
-                                                                LucideIcons
-                                                                    .flag,
-                                                                size: 18,
-                                                                color: cs.error,
-                                                              ),
-                                                              const SizedBox(
-                                                                width: 10,
-                                                              ),
-                                                              Text(
+                                                                    behavior:
+                                                                        SnackBarBehavior
+                                                                            .floating,
+                                                                  ),
+                                                                );
+                                                              },
+                                                              child: Text(
                                                                 s.get('report'),
                                                                 style:
                                                                     GoogleFonts.notoSansKr(
@@ -2746,36 +3018,332 @@ class _PostDetailPageState extends State<PostDetailPage>
                                                                           .error,
                                                                     ),
                                                               ),
-                                                            ],
-                                                          ),
+                                                            ),
+                                                          ],
                                                         ),
-                                                        PopupMenuItem(
-                                                          value: 'block',
-                                                          child: Row(
-                                                            children: [
-                                                              Icon(
-                                                                LucideIcons.ban,
-                                                                size: 18,
-                                                                color: cs
-                                                                    .onSurface,
+                                                      );
+                                                    } else if (value ==
+                                                        'block') {
+                                                      final confirm = await showDialog<bool>(
+                                                        context: context,
+                                                        builder: (ctx) => AlertDialog(
+                                                          title: Text(
+                                                            s.get(
+                                                              'blockPostTitle',
+                                                            ),
+                                                            style:
+                                                                GoogleFonts.notoSansKr(),
+                                                          ),
+                                                          content: Text(
+                                                            s.get(
+                                                              'blockPostMessage',
+                                                            ),
+                                                            style:
+                                                                GoogleFonts.notoSansKr(),
+                                                          ),
+                                                          actions: [
+                                                            TextButton(
+                                                              onPressed: () =>
+                                                                  Navigator.pop(
+                                                                    ctx,
+                                                                    false,
+                                                                  ),
+                                                              child: Text(
+                                                                s.get('cancel'),
+                                                                style:
+                                                                    GoogleFonts.notoSansKr(),
                                                               ),
-                                                              const SizedBox(
-                                                                width: 10,
-                                                              ),
-                                                              Text(
+                                                            ),
+                                                            TextButton(
+                                                              onPressed: () =>
+                                                                  Navigator.pop(
+                                                                    ctx,
+                                                                    true,
+                                                                  ),
+                                                              child: Text(
                                                                 s.get('block'),
                                                                 style:
                                                                     GoogleFonts.notoSansKr(),
                                                               ),
-                                                            ],
-                                                          ),
+                                                            ),
+                                                          ],
                                                         ),
-                                                      ],
+                                                      );
+                                                      if (confirm == true &&
+                                                          mounted) {
+                                                        await BlockService
+                                                            .instance
+                                                            .blockPost(
+                                                              _post.id,
+                                                            );
+                                                        if (mounted) {
+                                                          ScaffoldMessenger.of(
+                                                            context,
+                                                          ).showSnackBar(
+                                                            SnackBar(
+                                                              content: Text(
+                                                                s.get(
+                                                                  'blockPostDone',
+                                                                ),
+                                                                style:
+                                                                    GoogleFonts.notoSansKr(),
+                                                              ),
+                                                              behavior:
+                                                                  SnackBarBehavior
+                                                                      .floating,
+                                                            ),
+                                                          );
+                                                          Navigator.pop(
+                                                            context,
+                                                          );
+                                                        }
+                                                      }
+                                                    }
+                                                  },
+                                                  behavior:
+                                                      HitTestBehavior.opaque,
+                                                  child: Padding(
+                                                    padding:
+                                                        const EdgeInsets.symmetric(
+                                                          horizontal: 4,
+                                                          vertical: 4,
+                                                        ),
+                                                    child: Icon(
+                                                      LucideIcons.ellipsis,
+                                                      size: 17,
+                                                      color:
+                                                          cs.onSurfaceVariant,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 16),
+                                            Text(
+                                              post.title,
+                                              style: GoogleFonts.notoSansKr(
+                                                fontSize: 21,
+                                                fontWeight: FontWeight.w700,
+                                                color: cs.onSurface,
+                                                height: 1.4,
+                                                letterSpacing: -0.3,
+                                              ),
+                                            ),
+                                            if (post.hasVideo &&
+                                                post.videoUrl != null &&
+                                                post.videoUrl!.isNotEmpty) ...[
+                                              const SizedBox(height: 16),
+                                              ClipRRect(
+                                                borderRadius:
+                                                    BorderRadius.circular(20),
+                                                child: _PostVideoPlayer(
+                                                  videoUrl: post.videoUrl!,
+                                                  thumbnailUrl:
+                                                      post.videoThumbnailUrl,
+                                                  isGif: post.isGif == true,
+                                                ),
+                                              ),
+                                            ] else if (post.hasImage &&
+                                                post.imageUrls.isNotEmpty) ...[
+                                              const SizedBox(height: 16),
+                                              ClipRRect(
+                                                borderRadius:
+                                                    BorderRadius.circular(20),
+                                                child: _PostImageCarousel(
+                                                  imageUrls: post.imageUrls,
+                                                  imageDimensions:
+                                                      post.imageDimensions,
+                                                  onTap: (index) =>
+                                                      FullScreenImagePage.show(
+                                                        context,
+                                                        post.imageUrls,
+                                                        initialIndex: index,
+                                                      ),
+                                                ),
+                                              ),
+                                            ] else if (post.hasImage) ...[
+                                              const SizedBox(height: 16),
+                                              AspectRatio(
+                                                aspectRatio: 1 / 1.15,
+                                                child: Container(
+                                                  decoration: BoxDecoration(
+                                                    color: cs
+                                                        .surfaceContainerHighest,
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          20,
+                                                        ),
+                                                  ),
+                                                  child: Center(
+                                                    child: Icon(
+                                                      LucideIcons.image,
+                                                      size: 56,
+                                                      color: cs.onSurfaceVariant
+                                                          .withOpacity(0.4),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                            if (post.body != null &&
+                                                post.body!.isNotEmpty) ...[
+                                              const SizedBox(height: 14),
+                                              Text(
+                                                post.body!,
+                                                style: GoogleFonts.notoSansKr(
+                                                  fontSize: 15,
+                                                  color: cs.onSurface,
+                                                  height: 1.7,
+                                                ),
+                                              ),
+                                            ],
+                                            if (post.linkUrl != null &&
+                                                post.linkUrl!.isNotEmpty) ...[
+                                              const SizedBox(height: 12),
+                                              Row(
+                                                children: [
+                                                  Icon(
+                                                    LucideIcons.link,
+                                                    size: 18,
+                                                    color: cs.primary,
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                  Expanded(
+                                                    child: Text(
+                                                      post.linkUrl!,
+                                                      style:
+                                                          GoogleFonts.notoSansKr(
+                                                            fontSize: 14,
+                                                            color: cs.primary,
+                                                            decoration:
+                                                                TextDecoration
+                                                                    .underline,
+                                                          ),
+                                                      maxLines: 2,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ],
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(height: 18),
+                                      // 액션 바
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                          left: 4,
+                                          right: 15,
+                                          top: 4,
+                                          bottom: 15,
+                                        ),
+                                        child: Row(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.center,
+                                          children: [
+                                            // 톡·에스크: 피드와 동일 하트 / 그 외 투표박스
+                                            if (hideViewsInTalkAskDetail)
+                                              TalkAskHeartVote(
+                                                voteState: _isLiked ? 1 : 0,
+                                                count: _likeCount,
+                                                onTap: _onLikeTap,
+                                                compact: false,
+                                              )
+                                            else
+                                              _DetailVoteBox(
+                                                voteState: _isLiked
+                                                    ? 1
+                                                    : (_isDisliked ? -1 : 0),
+                                                count: _likeCount,
+                                                onUp: _onLikeTap,
+                                                onDown: _onDislikeTap,
+                                                primaryColor: cs.primary,
+                                              ),
+                                            const SizedBox(width: 4),
+                                            // 댓글
+                                            GestureDetector(
+                                              onTap: _onCommentTap,
+                                              child: Padding(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      vertical: 12,
+                                                    ),
+                                                child: Row(
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.center,
+                                                  children: [
+                                                    SizedBox(
+                                                      width: 24,
+                                                      height: 24,
+                                                      child: Center(
+                                                        child: Icon(
+                                                          LucideIcons
+                                                              .message_circle,
+                                                          size: 18,
+                                                          color: cs
+                                                              .onSurfaceVariant,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    if (post.comments > 0) ...[
+                                                      SizedBox(
+                                                        width:
+                                                            talkAskIconCountGap,
+                                                      ),
+                                                      Text(
+                                                        formatCompactCount(
+                                                          post.comments,
+                                                        ),
+                                                        style: GoogleFonts.notoSansKr(
+                                                          fontSize: 13,
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                          height: 1.0,
+                                                          color: cs
+                                                              .onSurfaceVariant,
+                                                        ),
+                                                      ),
                                                     ],
-                                                  );
-                                                  if (!mounted || value == null)
-                                                    return;
-                                                  if (value == 'edit') {
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                            if (!hideViewsInTalkAskDetail) ...[
+                                              const SizedBox(width: 14),
+                                              Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  Icon(
+                                                    LucideIcons.eye,
+                                                    size: 16,
+                                                    color: cs.onSurfaceVariant,
+                                                  ),
+                                                  const SizedBox(width: 4),
+                                                  Text(
+                                                    formatCompactCount(
+                                                      post.views,
+                                                    ),
+                                                    style:
+                                                        GoogleFonts.notoSansKr(
+                                                          fontSize: 12,
+                                                          fontWeight:
+                                                              FontWeight.w500,
+                                                          color: cs
+                                                              .onSurfaceVariant,
+                                                        ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ],
+                                            if (_canDeletePost) ...[
+                                              const Spacer(),
+                                              if (_isMine)
+                                                GestureDetector(
+                                                  onTap: () async {
                                                     final updated =
                                                         await Navigator.push<
                                                           Post
@@ -2795,8 +3363,27 @@ class _PostDetailPageState extends State<PostDetailPage>
                                                         () => _currentPost =
                                                             updated,
                                                       );
-                                                  } else if (value ==
-                                                      'delete') {
+                                                  },
+                                                  child: Padding(
+                                                    padding:
+                                                        const EdgeInsets.symmetric(
+                                                          horizontal: 6,
+                                                          vertical: 6,
+                                                        ),
+                                                    child: Text(
+                                                      s.get('edit'),
+                                                      style:
+                                                          GoogleFonts.notoSansKr(
+                                                            fontSize: 13,
+                                                            color: cs
+                                                                .onSurfaceVariant,
+                                                          ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              if (_canDeletePost)
+                                                GestureDetector(
+                                                  onTap: () async {
                                                     final confirm = await showDialog<bool>(
                                                       context: context,
                                                       builder: (ctx) => AlertDialog(
@@ -2853,601 +3440,185 @@ class _PostDetailPageState extends State<PostDetailPage>
                                                         Navigator.pop(context);
                                                       }
                                                     }
-                                                  } else if (value ==
-                                                      'report') {
-                                                    await showDialog<void>(
-                                                      context: context,
-                                                      builder: (ctx) => AlertDialog(
-                                                        title: Text(
-                                                          s.get(
-                                                            'reportPostTitle',
-                                                          ),
-                                                          style:
-                                                              GoogleFonts.notoSansKr(),
+                                                  },
+                                                  child: Padding(
+                                                    padding:
+                                                        const EdgeInsets.symmetric(
+                                                          horizontal: 6,
+                                                          vertical: 6,
                                                         ),
-                                                        content: Text(
-                                                          s.get(
-                                                            'reportPostMessage',
+                                                    child: Text(
+                                                      s.get('delete'),
+                                                      style:
+                                                          GoogleFonts.notoSansKr(
+                                                            fontSize: 13,
+                                                            fontWeight:
+                                                                FontWeight.w600,
+                                                            color:
+                                                                deleteLabelColor,
                                                           ),
-                                                          style:
-                                                              GoogleFonts.notoSansKr(),
-                                                        ),
-                                                        actions: [
-                                                          TextButton(
-                                                            onPressed: () =>
-                                                                Navigator.pop(
-                                                                  ctx,
-                                                                ),
-                                                            child: Text(
-                                                              s.get('cancel'),
-                                                              style:
-                                                                  GoogleFonts.notoSansKr(),
-                                                            ),
-                                                          ),
-                                                          TextButton(
-                                                            onPressed: () {
-                                                              Navigator.pop(
-                                                                ctx,
-                                                              );
-                                                              ScaffoldMessenger.of(
-                                                                context,
-                                                              ).showSnackBar(
-                                                                SnackBar(
-                                                                  content: Text(
-                                                                    s.get(
-                                                                      'reportSubmitted',
-                                                                    ),
-                                                                    style:
-                                                                        GoogleFonts.notoSansKr(),
-                                                                  ),
-                                                                  behavior:
-                                                                      SnackBarBehavior
-                                                                          .floating,
-                                                                ),
-                                                              );
-                                                            },
-                                                            child: Text(
-                                                              s.get('report'),
-                                                              style:
-                                                                  GoogleFonts.notoSansKr(
-                                                                    color: cs
-                                                                        .error,
-                                                                  ),
-                                                            ),
-                                                          ),
-                                                        ],
-                                                      ),
-                                                    );
-                                                  } else if (value == 'block') {
-                                                    final confirm = await showDialog<bool>(
-                                                      context: context,
-                                                      builder: (ctx) => AlertDialog(
-                                                        title: Text(
-                                                          s.get(
-                                                            'blockPostTitle',
-                                                          ),
-                                                          style:
-                                                              GoogleFonts.notoSansKr(),
-                                                        ),
-                                                        content: Text(
-                                                          s.get(
-                                                            'blockPostMessage',
-                                                          ),
-                                                          style:
-                                                              GoogleFonts.notoSansKr(),
-                                                        ),
-                                                        actions: [
-                                                          TextButton(
-                                                            onPressed: () =>
-                                                                Navigator.pop(
-                                                                  ctx,
-                                                                  false,
-                                                                ),
-                                                            child: Text(
-                                                              s.get('cancel'),
-                                                              style:
-                                                                  GoogleFonts.notoSansKr(),
-                                                            ),
-                                                          ),
-                                                          TextButton(
-                                                            onPressed: () =>
-                                                                Navigator.pop(
-                                                                  ctx,
-                                                                  true,
-                                                                ),
-                                                            child: Text(
-                                                              s.get('block'),
-                                                              style:
-                                                                  GoogleFonts.notoSansKr(),
-                                                            ),
-                                                          ),
-                                                        ],
-                                                      ),
-                                                    );
-                                                    if (confirm == true &&
-                                                        mounted) {
-                                                      await BlockService
-                                                          .instance
-                                                          .blockPost(_post.id);
-                                                      if (mounted) {
-                                                        ScaffoldMessenger.of(
-                                                          context,
-                                                        ).showSnackBar(
-                                                          SnackBar(
-                                                            content: Text(
-                                                              s.get(
-                                                                'blockPostDone',
-                                                              ),
-                                                              style:
-                                                                  GoogleFonts.notoSansKr(),
-                                                            ),
-                                                            behavior:
-                                                                SnackBarBehavior
-                                                                    .floating,
-                                                          ),
-                                                        );
-                                                        Navigator.pop(context);
-                                                      }
-                                                    }
-                                                  }
-                                                },
-                                                behavior:
-                                                    HitTestBehavior.opaque,
-                                                child: Padding(
-                                                  padding:
-                                                      const EdgeInsets.symmetric(
-                                                        horizontal: 4,
-                                                        vertical: 4,
-                                                      ),
-                                                  child: Icon(
-                                                    LucideIcons.ellipsis,
-                                                    size: 17,
-                                                    color: cs.onSurfaceVariant,
+                                                    ),
                                                   ),
                                                 ),
-                                              ),
                                             ],
-                                          ),
-                                          const SizedBox(height: 16),
-                                          Text(
-                                            post.title,
-                                            style: GoogleFonts.notoSansKr(
-                                              fontSize: 21,
-                                              fontWeight: FontWeight.w700,
-                                              color: cs.onSurface,
-                                              height: 1.4,
-                                              letterSpacing: -0.3,
-                                            ),
-                                          ),
-                                          if (post.hasVideo &&
-                                              post.videoUrl != null &&
-                                              post.videoUrl!.isNotEmpty) ...[
-                                            const SizedBox(height: 16),
-                                            ClipRRect(
-                                              borderRadius:
-                                                  BorderRadius.circular(20),
-                                              child: _PostVideoPlayer(
-                                                videoUrl: post.videoUrl!,
-                                                thumbnailUrl:
-                                                    post.videoThumbnailUrl,
-                                                isGif: post.isGif == true,
-                                              ),
-                                            ),
-                                          ] else if (post.hasImage &&
-                                              post.imageUrls.isNotEmpty) ...[
-                                            const SizedBox(height: 16),
-                                            ClipRRect(
-                                              borderRadius:
-                                                  BorderRadius.circular(20),
-                                              child: _PostImageCarousel(
-                                                imageUrls: post.imageUrls,
-                                                imageDimensions:
-                                                    post.imageDimensions,
-                                                onTap: (index) =>
-                                                    FullScreenImagePage.show(
-                                                      context,
-                                                      post.imageUrls,
-                                                      initialIndex: index,
-                                                    ),
-                                              ),
-                                            ),
-                                          ] else if (post.hasImage) ...[
-                                            const SizedBox(height: 16),
-                                            AspectRatio(
-                                              aspectRatio: 1 / 1.15,
-                                              child: Container(
-                                                decoration: BoxDecoration(
-                                                  color: cs
-                                                      .surfaceContainerHighest,
-                                                  borderRadius:
-                                                      BorderRadius.circular(20),
-                                                ),
-                                                child: Center(
-                                                  child: Icon(
-                                                    LucideIcons.image,
-                                                    size: 56,
-                                                    color: cs.onSurfaceVariant
-                                                        .withOpacity(0.4),
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
                                           ],
-                                          if (post.body != null &&
-                                              post.body!.isNotEmpty) ...[
-                                            const SizedBox(height: 14),
-                                            Text(
-                                              post.body!,
-                                              style: GoogleFonts.notoSansKr(
-                                                fontSize: 15,
-                                                color: cs.onSurface,
-                                                height: 1.7,
-                                              ),
-                                            ),
-                                          ],
-                                          if (post.linkUrl != null &&
-                                              post.linkUrl!.isNotEmpty) ...[
-                                            const SizedBox(height: 12),
-                                            Row(
-                                              children: [
-                                                Icon(
-                                                  LucideIcons.link,
-                                                  size: 18,
-                                                  color: cs.primary,
-                                                ),
-                                                const SizedBox(width: 8),
-                                                Expanded(
-                                                  child: Text(
-                                                    post.linkUrl!,
-                                                    style:
-                                                        GoogleFonts.notoSansKr(
-                                                          fontSize: 14,
-                                                          color: cs.primary,
-                                                          decoration:
-                                                              TextDecoration
-                                                                  .underline,
-                                                        ),
-                                                    maxLines: 2,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ],
-                                        ],
+                                        ),
                                       ),
-                                    ),
-                                    const SizedBox(height: 18),
-                                    // 액션 바
-                                    Padding(
-                                      padding: const EdgeInsets.only(
-                                        left: 4,
-                                        right: 15,
-                                        top: 4,
-                                        bottom: 15,
+                                    ],
+                                    if (!hideLetterboxdTail) ...[
+                                      // 액션 바 아래 구분선 (댓글 시간순 위) - 얇은 회색선
+                                      Container(
+                                        height: 1,
+                                        color: isTypedReview
+                                            ? Colors.white.withValues(
+                                                alpha: 0.1,
+                                              )
+                                            : cs.outline.withValues(alpha: 0.4),
                                       ),
-                                      child: Row(
-                                        children: [
-                                          // 투표박스
-                                          _DetailVoteBox(
-                                            voteState: _isLiked
-                                                ? 1
-                                                : (_isDisliked ? -1 : 0),
-                                            count: _likeCount,
-                                            onUp: _onLikeTap,
-                                            onDown: _onDislikeTap,
-                                            primaryColor: cs.primary,
-                                          ),
-                                          const SizedBox(width: 4),
-                                          // 댓글
-                                          GestureDetector(
-                                            onTap: _onCommentTap,
-                                            child: Row(
-                                              mainAxisSize: MainAxisSize.min,
+                                      // 댓글 섹션 (contentWidth로 3행 버튼 오른쪽 끝 통일)
+                                      KeyedSubtree(
+                                        key: _commentsKey,
+                                        child: LayoutBuilder(
+                                          builder: (context, constraints) {
+                                            final contentWidth =
+                                                constraints.maxWidth;
+                                            return Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
                                               children: [
-                                                Icon(
-                                                  LucideIcons.message_circle,
-                                                  size: 16,
-                                                  color: cs.onSurfaceVariant,
-                                                ),
-                                                const SizedBox(width: 4),
-                                                Text(
-                                                  formatCompactCount(
-                                                    post.comments,
-                                                  ),
-                                                  style: GoogleFonts.notoSansKr(
-                                                    fontSize: 12,
-                                                    fontWeight: FontWeight.w500,
-                                                    color: cs.onSurfaceVariant,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                          if (!hideViewsInTalkAskDetail) ...[
-                                            const SizedBox(width: 14),
-                                            Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                Icon(
-                                                  LucideIcons.eye,
-                                                  size: 16,
-                                                  color: cs.onSurfaceVariant,
-                                                ),
-                                                const SizedBox(width: 4),
-                                                Text(
-                                                  formatCompactCount(
-                                                    post.views,
-                                                  ),
-                                                  style: GoogleFonts.notoSansKr(
-                                                    fontSize: 12,
-                                                    fontWeight: FontWeight.w500,
-                                                    color: cs.onSurfaceVariant,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ],
-                                          if (_canDeletePost) ...[
-                                            const Spacer(),
-                                            if (_isMine)
-                                              GestureDetector(
-                                                onTap: () async {
-                                                  final updated =
-                                                      await Navigator.push<
-                                                        Post
-                                                      >(
-                                                        context,
-                                                        MaterialPageRoute(
-                                                          builder: (_) =>
-                                                              WritePostPage(
-                                                                initialPost:
-                                                                    _post,
-                                                              ),
-                                                        ),
-                                                      );
-                                                  if (updated != null &&
-                                                      mounted)
-                                                    setState(
-                                                      () => _currentPost =
-                                                          updated,
-                                                    );
-                                                },
-                                                child: Padding(
+                                                Container(
+                                                  width: double.infinity,
+                                                  color: isTypedReview
+                                                      ? const Color(0xFF1C1C1E)
+                                                      : (theme.brightness ==
+                                                                Brightness.light
+                                                            ? cs.surfaceContainerHighest
+                                                            : (theme
+                                                                      .cardTheme
+                                                                      .color ??
+                                                                  cs.surface)),
                                                   padding:
                                                       const EdgeInsets.symmetric(
-                                                        horizontal: 6,
-                                                        vertical: 6,
+                                                        horizontal: 20,
+                                                        vertical: 10,
                                                       ),
-                                                  child: Text(
-                                                    s.get('edit'),
-                                                    style:
-                                                        GoogleFonts.notoSansKr(
-                                                          fontSize: 13,
-                                                          color: cs
-                                                              .onSurfaceVariant,
-                                                        ),
-                                                  ),
-                                                ),
-                                              ),
-                                            if (_canDeletePost)
-                                              GestureDetector(
-                                                onTap: () async {
-                                                  final confirm = await showDialog<bool>(
-                                                    context: context,
-                                                    builder: (ctx) => AlertDialog(
-                                                      title: Text(
-                                                        s.get('delete'),
-                                                        style:
-                                                            GoogleFonts.notoSansKr(),
-                                                      ),
-                                                      content: Text(
-                                                        s.get(
-                                                          'deletePostConfirm',
-                                                        ),
-                                                        style:
-                                                            GoogleFonts.notoSansKr(),
-                                                      ),
-                                                      actions: [
-                                                        TextButton(
-                                                          onPressed: () =>
-                                                              Navigator.pop(
-                                                                ctx,
-                                                                false,
-                                                              ),
-                                                          child: Text(
-                                                            s.get('cancel'),
-                                                            style:
-                                                                GoogleFonts.notoSansKr(),
-                                                          ),
-                                                        ),
-                                                        TextButton(
-                                                          onPressed: () =>
-                                                              Navigator.pop(
-                                                                ctx,
-                                                                true,
-                                                              ),
-                                                          child: Text(
-                                                            s.get('delete'),
-                                                            style:
-                                                                GoogleFonts.notoSansKr(
-                                                                  color:
-                                                                      cs.error,
-                                                                ),
-                                                          ),
-                                                        ),
-                                                      ],
-                                                    ),
-                                                  );
-                                                  if (confirm == true &&
-                                                      mounted) {
-                                                    await PostService.instance
-                                                        .deletePost(_post.id);
-                                                    if (mounted) {
-                                                      widget.onPostDeleted
-                                                          ?.call(_post);
-                                                      Navigator.pop(context);
-                                                    }
-                                                  }
-                                                },
-                                                child: Padding(
-                                                  padding:
-                                                      const EdgeInsets.symmetric(
-                                                        horizontal: 6,
-                                                        vertical: 6,
-                                                      ),
-                                                  child: Text(
-                                                    s.get('delete'),
-                                                    style:
-                                                        GoogleFonts.notoSansKr(
+                                                  child: Row(
+                                                    children: [
+                                                      Text(
+                                                        isTypedReview
+                                                            ? s
+                                                                  .get(
+                                                                    'letterboxdReviewDetailTabPostWithCount',
+                                                                  )
+                                                                  .replaceAll(
+                                                                    '{n}',
+                                                                    '${post.comments}',
+                                                                  )
+                                                            : '${s.get('comments')} ${post.comments}',
+                                                        style: GoogleFonts.notoSansKr(
                                                           fontSize: 13,
                                                           fontWeight:
                                                               FontWeight.w600,
-                                                          color:
-                                                              deleteLabelColor,
-                                                        ),
-                                                  ),
-                                                ),
-                                              ),
-                                          ],
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                  if (!hideLetterboxdTail) ...[
-                                    // 액션 바 아래 구분선 (댓글 시간순 위) - 얇은 회색선
-                                    Container(
-                                      height: 1,
-                                      color: isTypedReview
-                                          ? Colors.white.withValues(alpha: 0.1)
-                                          : cs.outline.withValues(alpha: 0.4),
-                                    ),
-                                    // 댓글 섹션 (contentWidth로 3행 버튼 오른쪽 끝 통일)
-                                    KeyedSubtree(
-                                      key: _commentsKey,
-                                      child: LayoutBuilder(
-                                        builder: (context, constraints) {
-                                          final contentWidth =
-                                              constraints.maxWidth;
-                                          return Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Container(
-                                                width: double.infinity,
-                                                color: isTypedReview
-                                                    ? const Color(0xFF1C1C1E)
-                                                    : (theme.brightness ==
-                                                              Brightness.light
-                                                          ? cs.surfaceContainerHighest
-                                                          : (theme
-                                                                    .cardTheme
-                                                                    .color ??
-                                                                cs.surface)),
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                      horizontal: 20,
-                                                      vertical: 10,
-                                                    ),
-                                                child: Row(
-                                                  children: [
-                                                    Text(
-                                                      isTypedReview
-                                                          ? s
-                                                                .get(
-                                                                  'letterboxdReviewDetailTabPostWithCount',
-                                                                )
-                                                                .replaceAll(
-                                                                  '{n}',
-                                                                  '${post.comments}',
-                                                                )
-                                                          : '${s.get('comments')} ${post.comments}',
-                                                      style: GoogleFonts.notoSansKr(
-                                                        fontSize: 13,
-                                                        fontWeight:
-                                                            FontWeight.w600,
-                                                        color: isTypedReview
-                                                            ? Colors.white
-                                                                  .withValues(
-                                                                    alpha: 0.88,
-                                                                  )
-                                                            : cs.onSurface,
-                                                      ),
-                                                    ),
-                                                    const Spacer(),
-                                                    ValueListenableBuilder<
-                                                      bool
-                                                    >(
-                                                      valueListenable:
-                                                          _commentSortByTop,
-                                                      builder: (context, sortByTop, _) => PopupMenuButton<bool>(
-                                                        offset: const Offset(
-                                                          0,
-                                                          36,
-                                                        ),
-                                                        shape: RoundedRectangleBorder(
-                                                          borderRadius:
-                                                              BorderRadius.circular(
-                                                                12,
-                                                              ),
-                                                        ),
-                                                        padding:
-                                                            EdgeInsets.zero,
-                                                        onSelected: (value) {
-                                                          _commentSortByTop
-                                                                  .value =
-                                                              value;
-                                                          setState(
-                                                            () => _commentPage =
-                                                                0,
-                                                          );
-                                                        },
-                                                        itemBuilder: (context) => [
-                                                          PopupMenuItem(
-                                                            value: false,
-                                                            child: Text(
-                                                              s.get(
-                                                                'sortByTime',
-                                                              ),
-                                                              style:
-                                                                  GoogleFonts.notoSansKr(
-                                                                    fontSize:
-                                                                        14,
-                                                                  ),
-                                                            ),
-                                                          ),
-                                                          PopupMenuItem(
-                                                            value: true,
-                                                            child: Text(
-                                                              s.get(
-                                                                'sortByTop',
-                                                              ),
-                                                              style:
-                                                                  GoogleFonts.notoSansKr(
-                                                                    fontSize:
-                                                                        14,
-                                                                  ),
-                                                            ),
-                                                          ),
-                                                        ],
-                                                        child: Row(
-                                                          mainAxisSize:
-                                                              MainAxisSize.min,
-                                                          children: [
-                                                            Text(
-                                                              sortByTop
-                                                                  ? s.get(
-                                                                      'sortByTop',
+                                                          color: isTypedReview
+                                                              ? Colors.white
+                                                                    .withValues(
+                                                                      alpha:
+                                                                          0.88,
                                                                     )
-                                                                  : s.get(
-                                                                      'sortByTime',
+                                                              : cs.onSurface,
+                                                        ),
+                                                      ),
+                                                      const Spacer(),
+                                                      ValueListenableBuilder<
+                                                        bool
+                                                      >(
+                                                        valueListenable:
+                                                            _commentSortByTop,
+                                                        builder: (context, sortByTop, _) => PopupMenuButton<bool>(
+                                                          offset: const Offset(
+                                                            0,
+                                                            36,
+                                                          ),
+                                                          shape: RoundedRectangleBorder(
+                                                            borderRadius:
+                                                                BorderRadius.circular(
+                                                                  12,
+                                                                ),
+                                                          ),
+                                                          padding:
+                                                              EdgeInsets.zero,
+                                                          onSelected: (value) {
+                                                            _commentSortByTop
+                                                                    .value =
+                                                                value;
+                                                            setState(
+                                                              () =>
+                                                                  _visibleCommentCount =
+                                                                      15,
+                                                            );
+                                                          },
+                                                          itemBuilder: (context) => [
+                                                            PopupMenuItem(
+                                                              value: false,
+                                                              child: Text(
+                                                                s.get(
+                                                                  'sortByTime',
+                                                                ),
+                                                                style:
+                                                                    GoogleFonts.notoSansKr(
+                                                                      fontSize:
+                                                                          14,
                                                                     ),
-                                                              style: GoogleFonts.notoSansKr(
-                                                                fontSize: 13,
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .w500,
+                                                              ),
+                                                            ),
+                                                            PopupMenuItem(
+                                                              value: true,
+                                                              child: Text(
+                                                                s.get(
+                                                                  'sortByTop',
+                                                                ),
+                                                                style:
+                                                                    GoogleFonts.notoSansKr(
+                                                                      fontSize:
+                                                                          14,
+                                                                    ),
+                                                              ),
+                                                            ),
+                                                          ],
+                                                          child: Row(
+                                                            mainAxisSize:
+                                                                MainAxisSize
+                                                                    .min,
+                                                            children: [
+                                                              Text(
+                                                                sortByTop
+                                                                    ? s.get(
+                                                                        'sortByTop',
+                                                                      )
+                                                                    : s.get(
+                                                                        'sortByTime',
+                                                                      ),
+                                                                style: GoogleFonts.notoSansKr(
+                                                                  fontSize: 13,
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .w500,
+                                                                  color:
+                                                                      isTypedReview
+                                                                      ? Colors.white.withValues(
+                                                                          alpha:
+                                                                              0.55,
+                                                                        )
+                                                                      : cs.onSurfaceVariant,
+                                                                ),
+                                                              ),
+                                                              const SizedBox(
+                                                                width: 2,
+                                                              ),
+                                                              Icon(
+                                                                Icons
+                                                                    .keyboard_arrow_down,
+                                                                size: 18,
                                                                 color:
                                                                     isTypedReview
                                                                     ? Colors
@@ -3458,486 +3629,305 @@ class _PostDetailPageState extends State<PostDetailPage>
                                                                           )
                                                                     : cs.onSurfaceVariant,
                                                               ),
-                                                            ),
-                                                            const SizedBox(
-                                                              width: 2,
-                                                            ),
-                                                            Icon(
-                                                              Icons
-                                                                  .keyboard_arrow_down,
-                                                              size: 18,
-                                                              color:
-                                                                  isTypedReview
-                                                                  ? Colors.white
-                                                                        .withValues(
-                                                                          alpha:
-                                                                              0.55,
-                                                                        )
-                                                                  : cs.onSurfaceVariant,
-                                                            ),
-                                                          ],
+                                                            ],
+                                                          ),
                                                         ),
                                                       ),
-                                                    ),
-                                                  ],
+                                                    ],
+                                                  ),
                                                 ),
-                                              ),
-                                              const SizedBox(height: 8),
-                                              // 페이지네이션 적용된 댓글 목록 (빈 목록일 때는 플레이스홀더 없이 아래 입력칸만 사용)
-                                              ValueListenableBuilder<bool>(
-                                                valueListenable:
-                                                    _commentSortByTop,
-                                                builder: (context, sortByTop, _) {
-                                                  if (post.commentsList.isEmpty)
-                                                    return const SizedBox.shrink();
-                                                  final allComments =
-                                                      List<PostComment>.from(
-                                                        post.commentsList,
-                                                      );
-                                                  if (sortByTop) {
-                                                    allComments.sort((a, b) {
-                                                      final voteCmp = b.votes
-                                                          .compareTo(a.votes);
-                                                      if (voteCmp != 0)
-                                                        return voteCmp;
-                                                      final aTime =
-                                                          a
-                                                              .createdAtDate
-                                                              ?.millisecondsSinceEpoch ??
-                                                          int.tryParse(a.id) ??
-                                                          0;
-                                                      final bTime =
-                                                          b
-                                                              .createdAtDate
-                                                              ?.millisecondsSinceEpoch ??
-                                                          int.tryParse(b.id) ??
-                                                          0;
-                                                      return aTime.compareTo(
-                                                        bTime,
-                                                      );
-                                                    });
-                                                  } else {
-                                                    allComments.sort((a, b) {
-                                                      final aTime =
-                                                          a
-                                                              .createdAtDate
-                                                              ?.millisecondsSinceEpoch ??
-                                                          int.tryParse(a.id) ??
-                                                          0;
-                                                      final bTime =
-                                                          b
-                                                              .createdAtDate
-                                                              ?.millisecondsSinceEpoch ??
-                                                          int.tryParse(b.id) ??
-                                                          0;
-                                                      return aTime.compareTo(
-                                                        bTime,
-                                                      );
-                                                    });
-                                                  }
-                                                  final totalPages =
-                                                      (allComments.length /
-                                                              _commentsPerPage)
-                                                          .ceil()
-                                                          .clamp(1, 9999);
-                                                  final safePage = _commentPage
-                                                      .clamp(0, totalPages - 1);
-                                                  final start =
-                                                      safePage *
-                                                      _commentsPerPage;
-                                                  final end =
-                                                      (start + _commentsPerPage)
-                                                          .clamp(
-                                                            0,
-                                                            allComments.length,
-                                                          );
-                                                  // 페이지마다 다른 key로 해당 페이지 목록이 확실히 보이도록 함
-                                                  return Column(
-                                                    key: ValueKey(
-                                                      'comment_list_page_$safePage',
-                                                    ),
-                                                    children: allComments.sublist(start, end).map((
-                                                      c,
-                                                    ) {
-                                                      final tile = _CommentTile(
-                                                        key: ValueKey(c.id),
-                                                        comment: c,
-                                                        strings: s,
-                                                        depth: 0,
-                                                        postId: _post.id,
-                                                        showAuthorProfileMenu:
-                                                            showAuthorProfileMenu,
-                                                        contentWidth:
-                                                            contentWidth,
-                                                        onPostUpdated:
-                                                            (
-                                                              Post p,
-                                                            ) => setState(
-                                                              () =>
-                                                                  _currentPost =
-                                                                      p,
-                                                            ),
-                                                        onReplyTap: (String commentId) {
-                                                          setState(
-                                                            () =>
-                                                                _replyingToCommentId =
-                                                                    commentId,
-                                                          );
-                                                          _commentFocusNode
-                                                              .requestFocus();
-                                                          Future.delayed(
-                                                            const Duration(
-                                                              milliseconds: 350,
-                                                            ),
-                                                            () {
-                                                              if (!mounted)
-                                                                return;
-                                                              final ctx =
-                                                                  _inputCardKey
-                                                                      .currentContext;
-                                                              if (ctx == null ||
-                                                                  !_scrollController
-                                                                      .hasClients)
-                                                                return;
-                                                              final box =
-                                                                  ctx.findRenderObject()
-                                                                      as RenderBox?;
-                                                              if (box == null)
-                                                                return;
-                                                              final scrollBox =
-                                                                  _scrollController
-                                                                          .position
-                                                                          .context
-                                                                          .storageContext
-                                                                          .findRenderObject()
-                                                                      as RenderBox?;
-                                                              if (scrollBox ==
-                                                                  null)
-                                                                return;
-                                                              final cardTopInScroll = box
-                                                                  .localToGlobal(
-                                                                    Offset.zero,
-                                                                    ancestor:
-                                                                        scrollBox,
+                                                const SizedBox(height: 8),
+                                                // 댓글 목록 (무한스크롤)
+                                                ValueListenableBuilder<bool>(
+                                                  valueListenable:
+                                                      _commentSortByTop,
+                                                  builder: (context, sortByTop, _) {
+                                                    if (post
+                                                        .commentsList
+                                                        .isEmpty)
+                                                      return const SizedBox.shrink();
+                                                    final allComments =
+                                                        List<PostComment>.from(
+                                                          post.commentsList,
+                                                        );
+                                                    if (sortByTop) {
+                                                      allComments.sort((a, b) {
+                                                        final voteCmp = b.votes
+                                                            .compareTo(a.votes);
+                                                        if (voteCmp != 0)
+                                                          return voteCmp;
+                                                        final aTime =
+                                                            a
+                                                                .createdAtDate
+                                                                ?.millisecondsSinceEpoch ??
+                                                            int.tryParse(
+                                                              a.id,
+                                                            ) ??
+                                                            0;
+                                                        final bTime =
+                                                            b
+                                                                .createdAtDate
+                                                                ?.millisecondsSinceEpoch ??
+                                                            int.tryParse(
+                                                              b.id,
+                                                            ) ??
+                                                            0;
+                                                        return aTime.compareTo(
+                                                          bTime,
+                                                        );
+                                                      });
+                                                    } else {
+                                                      allComments.sort((a, b) {
+                                                        final aTime =
+                                                            a
+                                                                .createdAtDate
+                                                                ?.millisecondsSinceEpoch ??
+                                                            int.tryParse(
+                                                              a.id,
+                                                            ) ??
+                                                            0;
+                                                        final bTime =
+                                                            b
+                                                                .createdAtDate
+                                                                ?.millisecondsSinceEpoch ??
+                                                            int.tryParse(
+                                                              b.id,
+                                                            ) ??
+                                                            0;
+                                                        return aTime.compareTo(
+                                                          bTime,
+                                                        );
+                                                      });
+                                                    }
+                                                    final visible =
+                                                        _visibleCommentCount
+                                                            .clamp(
+                                                              0,
+                                                              allComments
+                                                                  .length,
+                                                            );
+                                                    final hasMore =
+                                                        visible <
+                                                        allComments.length;
+                                                    return Column(
+                                                      children: [
+                                                        ...allComments.take(visible).map((
+                                                          c,
+                                                        ) {
+                                                          final tile = _CommentTile(
+                                                            key: ValueKey(c.id),
+                                                            comment: c,
+                                                            strings: s,
+                                                            depth: 0,
+                                                            postId: _post.id,
+                                                            showAuthorProfileMenu:
+                                                                showAuthorProfileMenu,
+                                                            contentWidth:
+                                                                contentWidth,
+                                                            replyingToCommentId:
+                                                                _replyingToCommentId,
+                                                            buildInlineReplyCard:
+                                                                _replyingToCommentId !=
+                                                                    null
+                                                                ? () => _buildCommentInputCard(
+                                                                    cs,
+                                                                    s,
+                                                                    key:
+                                                                        _inlineReplyInputKey,
+                                                                    margin:
+                                                                        EdgeInsets
+                                                                            .zero,
                                                                   )
-                                                                  .dy;
-                                                              final cardBottom =
-                                                                  cardTopInScroll +
-                                                                  box
-                                                                      .size
-                                                                      .height +
-                                                                  _scrollController
-                                                                      .offset;
-                                                              final target =
-                                                                  (cardBottom -
-                                                                          _scrollController
+                                                                : null,
+                                                            onPostUpdated:
+                                                                (
+                                                                  Post p,
+                                                                ) => setState(
+                                                                  () =>
+                                                                      _currentPost =
+                                                                          p,
+                                                                ),
+                                                            onReplyTap: (String commentId) {
+                                                              setState(
+                                                                () => _replyingToCommentId =
+                                                                    commentId,
+                                                              );
+                                                              _commentFocusNode
+                                                                  .requestFocus();
+                                                              Future.delayed(
+                                                                const Duration(
+                                                                  milliseconds:
+                                                                      350,
+                                                                ),
+                                                                () {
+                                                                  if (!mounted)
+                                                                    return;
+                                                                  final ctx =
+                                                                      _inlineReplyInputKey
+                                                                          .currentContext ??
+                                                                      _inputCardKey
+                                                                          .currentContext;
+                                                                  if (ctx ==
+                                                                          null ||
+                                                                      !_scrollController
+                                                                          .hasClients)
+                                                                    return;
+                                                                  final box =
+                                                                      ctx.findRenderObject()
+                                                                          as RenderBox?;
+                                                                  if (box ==
+                                                                      null)
+                                                                    return;
+                                                                  final scrollBox =
+                                                                      _scrollController
                                                                               .position
-                                                                              .viewportDimension)
-                                                                      .clamp(
-                                                                        0.0,
-                                                                        _scrollController
-                                                                            .position
-                                                                            .maxScrollExtent,
-                                                                      );
-                                                              _scrollController.animateTo(
-                                                                target,
-                                                                duration:
-                                                                    const Duration(
+                                                                              .context
+                                                                              .storageContext
+                                                                              .findRenderObject()
+                                                                          as RenderBox?;
+                                                                  if (scrollBox ==
+                                                                      null)
+                                                                    return;
+                                                                  final cardTopInScroll = box
+                                                                      .localToGlobal(
+                                                                        Offset
+                                                                            .zero,
+                                                                        ancestor:
+                                                                            scrollBox,
+                                                                      )
+                                                                      .dy;
+                                                                  final cardBottom =
+                                                                      cardTopInScroll +
+                                                                      box
+                                                                          .size
+                                                                          .height +
+                                                                      _scrollController
+                                                                          .offset;
+                                                                  final target =
+                                                                      (cardBottom -
+                                                                              _scrollController.position.viewportDimension)
+                                                                          .clamp(
+                                                                            0.0,
+                                                                            _scrollController.position.maxScrollExtent,
+                                                                          );
+                                                                  _scrollController.animateTo(
+                                                                    target,
+                                                                    duration: const Duration(
                                                                       milliseconds:
                                                                           300,
                                                                     ),
-                                                                curve: Curves
-                                                                    .easeOut,
+                                                                    curve: Curves
+                                                                        .easeOut,
+                                                                  );
+                                                                },
                                                               );
                                                             },
+                                                            reviewReplyIconLayout:
+                                                                isTypedReview,
                                                           );
-                                                        },
-                                                      );
-                                                      return c.id ==
-                                                              _scrollToCommentId
-                                                          ? KeyedSubtree(
-                                                              key:
-                                                                  _newCommentKey,
-                                                              child: tile,
-                                                            )
-                                                          : tile;
-                                                    }).toList(),
-                                                  );
-                                                },
-                                              ),
-                                            ],
-                                          );
-                                        },
-                                      ),
-                                    ),
-                                    // 댓글 페이지네이션
-                                    Builder(
-                                      builder: (context) {
-                                        final allComments = post.commentsList;
-                                        if (allComments.isEmpty)
-                                          return const SizedBox.shrink();
-                                        final totalPages =
-                                            (allComments.length /
-                                                    _commentsPerPage)
-                                                .ceil()
-                                                .clamp(1, 9999);
-                                        final safePage = _commentPage.clamp(
-                                          0,
-                                          totalPages - 1,
-                                        );
-                                        return Padding(
-                                          padding: const EdgeInsets.symmetric(
-                                            vertical: 8,
-                                          ),
-                                          child: Row(
-                                            mainAxisAlignment:
-                                                MainAxisAlignment.center,
-                                            children: [
-                                              GestureDetector(
-                                                onTap: safePage > 0
-                                                    ? () {
-                                                        setState(
-                                                          () => _commentPage =
-                                                              safePage - 1,
-                                                        );
-                                                        _savedCommentPageByPostId[_post
-                                                                .id] =
-                                                            safePage - 1;
-                                                        _scrollToComments();
-                                                      }
-                                                    : null,
-                                                child: Padding(
-                                                  padding: const EdgeInsets.all(
-                                                    8,
-                                                  ),
-                                                  child: Icon(
-                                                    LucideIcons.chevron_left,
-                                                    size: 22,
-                                                    color: safePage > 0
-                                                        ? cs.onSurface
-                                                              .withOpacity(0.75)
-                                                        : cs.onSurface
-                                                              .withOpacity(
-                                                                0.18,
+                                                          return c.id ==
+                                                                  _scrollToCommentId
+                                                              ? KeyedSubtree(
+                                                                  key:
+                                                                      _newCommentKey,
+                                                                  child: tile,
+                                                                )
+                                                              : tile;
+                                                        }),
+                                                        // 더 보기 버튼 (무한스크롤 수동 트리거)
+                                                        if (hasMore)
+                                                          Padding(
+                                                            padding:
+                                                                const EdgeInsets.symmetric(
+                                                                  vertical: 12,
+                                                                ),
+                                                            child: GestureDetector(
+                                                              onTap:
+                                                                  _loadMoreComments,
+                                                              child: Container(
+                                                                padding:
+                                                                    const EdgeInsets.symmetric(
+                                                                      horizontal:
+                                                                          20,
+                                                                      vertical:
+                                                                          8,
+                                                                    ),
+                                                                decoration: BoxDecoration(
+                                                                  color: cs
+                                                                      .onSurface
+                                                                      .withValues(
+                                                                        alpha:
+                                                                            0.06,
+                                                                      ),
+                                                                  borderRadius:
+                                                                      BorderRadius.circular(
+                                                                        20,
+                                                                      ),
+                                                                ),
+                                                                child: Text(
+                                                                  '댓글 ${allComments.length - visible}개 더 보기',
+                                                                  style: GoogleFonts.notoSansKr(
+                                                                    fontSize:
+                                                                        13,
+                                                                    color: cs
+                                                                        .onSurfaceVariant,
+                                                                    fontWeight:
+                                                                        FontWeight
+                                                                            .w500,
+                                                                  ),
+                                                                ),
                                                               ),
-                                                  ),
-                                                ),
-                                              ),
-                                              const SizedBox(width: 12),
-                                              Container(
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                      horizontal: 16,
-                                                      vertical: 6,
-                                                    ),
-                                                decoration: BoxDecoration(
-                                                  color: cs.onSurface
-                                                      .withOpacity(0.05),
-                                                  borderRadius:
-                                                      BorderRadius.circular(20),
-                                                ),
-                                                child: Text(
-                                                  '${safePage + 1} / $totalPages',
-                                                  style: GoogleFonts.notoSansKr(
-                                                    fontSize: 13,
-                                                    fontWeight: FontWeight.w500,
-                                                    color: cs.onSurfaceVariant,
-                                                    letterSpacing: 0.2,
-                                                  ),
-                                                ),
-                                              ),
-                                              const SizedBox(width: 12),
-                                              GestureDetector(
-                                                onTap: safePage < totalPages - 1
-                                                    ? () {
-                                                        setState(
-                                                          () => _commentPage =
-                                                              safePage + 1,
-                                                        );
-                                                        _savedCommentPageByPostId[_post
-                                                                .id] =
-                                                            safePage + 1;
-                                                        _scrollToComments();
-                                                      }
-                                                    : null,
-                                                child: Padding(
-                                                  padding: const EdgeInsets.all(
-                                                    8,
-                                                  ),
-                                                  child: Icon(
-                                                    LucideIcons.chevron_right,
-                                                    size: 22,
-                                                    color:
-                                                        safePage <
-                                                            totalPages - 1
-                                                        ? cs.onSurface
-                                                              .withOpacity(0.75)
-                                                        : cs.onSurface
-                                                              .withOpacity(
-                                                                0.18,
-                                                              ),
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        );
-                                      },
-                                    ),
-                                    const SizedBox(height: 8),
-                                    // 댓글 입력 카드 (배경색과 입력칸 색 사이의 중간색)
-                                    Container(
-                                      key: _inputCardKey,
-                                      margin: const EdgeInsets.symmetric(
-                                        horizontal: 16,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Color.lerp(
-                                          theme.scaffoldBackgroundColor,
-                                          cs.surfaceContainerHighest,
-                                          0.6,
-                                        ),
-                                        borderRadius: BorderRadius.circular(16),
-                                        border: Border.all(
-                                          color: cs.outline.withOpacity(0.2),
-                                        ),
-                                        boxShadow: [
-                                          BoxShadow(
-                                            color: cs.shadow.withOpacity(0.15),
-                                            blurRadius: 20,
-                                            offset: const Offset(0, 4),
-                                          ),
-                                          BoxShadow(
-                                            color: cs.shadow.withOpacity(0.06),
-                                            blurRadius: 6,
-                                            offset: const Offset(0, 1),
-                                          ),
-                                        ],
-                                      ),
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Padding(
-                                            padding: const EdgeInsets.fromLTRB(
-                                              14,
-                                              12,
-                                              14,
-                                              8,
-                                            ),
-                                            child: Row(
-                                              children: [
-                                                Text(
-                                                  '${s.get('writeComment')}  ',
-                                                  style: GoogleFonts.notoSansKr(
-                                                    fontSize: 13,
-                                                    fontWeight: FontWeight.w600,
-                                                    color: cs.onSurface,
-                                                  ),
-                                                ),
-                                                Row(
-                                                  mainAxisSize:
-                                                      MainAxisSize.min,
-                                                  children: [
-                                                    Text(
-                                                      '(',
-                                                      style:
-                                                          GoogleFonts.notoSansKr(
-                                                            fontSize: 12,
-                                                            color: cs
-                                                                .onSurfaceVariant,
-                                                            fontWeight:
-                                                                FontWeight.w500,
+                                                            ),
                                                           ),
-                                                    ),
-                                                    ShaderMask(
-                                                      blendMode:
-                                                          BlendMode.srcIn,
-                                                      shaderCallback: (bounds) =>
-                                                          const LinearGradient(
-                                                            colors: [
-                                                              Color(0xFFFF6B35),
-                                                              Color(0xFFE63946),
-                                                            ],
-                                                            begin: Alignment
-                                                                .topCenter,
-                                                            end: Alignment
-                                                                .bottomCenter,
-                                                          ).createShader(
-                                                            bounds,
-                                                          ),
-                                                      child: const Icon(
-                                                        Icons
-                                                            .local_fire_department_rounded,
-                                                        size: 13,
-                                                        color: Colors.white,
-                                                      ),
-                                                    ),
-                                                    Text(
-                                                      s.get('activityPoint'),
-                                                      style:
-                                                          GoogleFonts.notoSansKr(
-                                                            fontSize: 12,
-                                                            color: cs
-                                                                .onSurfaceVariant,
-                                                            fontWeight:
-                                                                FontWeight.w500,
-                                                          ),
-                                                    ),
-                                                  ],
+                                                      ],
+                                                    );
+                                                  },
                                                 ),
                                               ],
-                                            ),
-                                          ),
-                                          Divider(
-                                            height: 1,
-                                            thickness: 0.8,
-                                            color: cs.outline.withOpacity(0.1),
-                                          ),
-                                          Padding(
-                                            padding: const EdgeInsets.fromLTRB(
-                                              14,
-                                              8,
-                                              14,
-                                              10,
-                                            ),
-                                            child: _buildInputLayout(cs, s),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                  if (!hideLetterboxdTail) ...[
-                                    const SizedBox(height: 40),
-                                    Container(
-                                      height: _kMorePostsDividerHeight,
-                                      color: theme.colorScheme.outline
-                                          .withOpacity(0.2),
-                                    ),
-                                    SizedBox(
-                                      key: _morePostsSectionKey,
-                                      child: _MorePostsSection(
-                                        key: ValueKey(
-                                          '${_post.id}_$_morePostsTabIndex',
-                                        ),
-                                        excludePostId: _post.id,
-                                        currentUserAuthor: _currentUserAuthor,
-                                        initialTabIndex: _morePostsTabIndex,
-                                        initialPosts: widget.initialBoardPosts,
-                                        onTabChanged: (i) => setState(
-                                          () => _morePostsTabIndex = i,
-                                        ),
-                                        onPostTap: (post) => _navigateToPost(
-                                          post,
-                                          tabIndex: _morePostsTabIndex,
+                                            );
+                                          },
                                         ),
                                       ),
-                                    ),
+                                      if (_replyingToCommentId == null) ...[
+                                        const SizedBox(height: 8),
+                                        _buildCommentInputCard(
+                                          cs,
+                                          s,
+                                          key: _inputCardKey,
+                                        ),
+                                      ],
+                                    ],
+                                    if (!hideLetterboxdTail) ...[
+                                      const SizedBox(height: 40),
+                                      Container(
+                                        height: _kMorePostsDividerHeight,
+                                        color: theme.colorScheme.outline
+                                            .withOpacity(0.2),
+                                      ),
+                                      SizedBox(
+                                        key: _morePostsSectionKey,
+                                        child: _MorePostsSection(
+                                          key: ValueKey(
+                                            '${_post.id}_$_morePostsTabIndex',
+                                          ),
+                                          excludePostId: _post.id,
+                                          currentUserAuthor: _currentUserAuthor,
+                                          initialTabIndex: _morePostsTabIndex,
+                                          initialPosts:
+                                              widget.initialBoardPosts,
+                                          onTabChanged: (i) => setState(
+                                            () => _morePostsTabIndex = i,
+                                          ),
+                                          onPostTap: _navigateToPost,
+                                          feedAuthorAvatarSize:
+                                              _kPostDetailUnifiedAuthorAvatarDp,
+                                        ),
+                                      ),
+                                    ],
+                                    // 제일 아래: 홈 메인 탭일 때는 브라우저 바 없음 → 패딩만
+                                    SizedBox(height: bottomScrollPad),
                                   ],
-                                  // 제일 아래: 홈 메인 탭일 때는 브라우저 바 없음 → 패딩만
-                                  SizedBox(height: bottomScrollPad),
-                                ],
+                                ),
                               ),
                             ),
                           ),
@@ -3970,6 +3960,12 @@ class _PostDetailPageState extends State<PostDetailPage>
                 ),
               ],
             );
+            return hideViewsInTalkAskDetail
+                ? AnnotatedRegion<SystemUiOverlayStyle>(
+                    value: listsStyleSubpageSystemOverlay(theme, listsHeaderBg),
+                    child: mainStack,
+                  )
+                : mainStack;
           },
         ),
       ),
@@ -3987,6 +3983,7 @@ class _MorePostsSection extends StatefulWidget {
     this.initialPosts,
     this.onTabChanged,
     this.onPostTap,
+    this.feedAuthorAvatarSize,
   });
 
   final String excludePostId;
@@ -3997,6 +3994,9 @@ class _MorePostsSection extends StatefulWidget {
   final List<Post>? initialPosts;
   final void Function(int)? onTabChanged;
   final void Function(Post)? onPostTap;
+
+  /// null이면 피드 카드 기본 아바타. 글 상세에서는 본문·댓글과 동일 크기로 전달.
+  final double? feedAuthorAvatarSize;
 
   @override
   State<_MorePostsSection> createState() => _MorePostsSectionState();
@@ -4238,7 +4238,10 @@ class _MorePostsSectionState extends State<_MorePostsSection>
                           left: (tabW + tabGap) * i,
                           top: 0,
                           child: GestureDetector(
-                            onTap: () => _tabController.animateTo(i, duration: Duration.zero),
+                            onTap: () => _tabController.animateTo(
+                              i,
+                              duration: Duration.zero,
+                            ),
                             behavior: HitTestBehavior.opaque,
                             child: SizedBox(
                               width: tabW,
@@ -4339,6 +4342,7 @@ class _MorePostsSectionState extends State<_MorePostsSection>
                 onPostUpdated: onUpdated,
                 onPostDeleted: onDeleted,
                 onPostTap: widget.onPostTap,
+                feedAuthorAvatarSize: widget.feedAuthorAvatarSize,
               );
             }
             if (idx == 1) {
@@ -4357,6 +4361,7 @@ class _MorePostsSectionState extends State<_MorePostsSection>
                 onPostUpdated: onUpdated,
                 onPostDeleted: onDeleted,
                 onPostTap: widget.onPostTap,
+                feedAuthorAvatarSize: widget.feedAuthorAvatarSize,
               );
             }
             return QuestionBoardTab(
@@ -4374,6 +4379,7 @@ class _MorePostsSectionState extends State<_MorePostsSection>
               onPostUpdated: onUpdated,
               onPostDeleted: onDeleted,
               onPostTap: widget.onPostTap,
+              feedAuthorAvatarSize: widget.feedAuthorAvatarSize,
             );
           },
         ),
@@ -4393,6 +4399,9 @@ class _CommentTile extends StatefulWidget {
     this.contentWidth,
     required this.onPostUpdated,
     this.onReplyTap,
+    this.replyingToCommentId,
+    this.buildInlineReplyCard,
+    this.reviewReplyIconLayout = false,
   });
 
   final PostComment comment;
@@ -4408,6 +4417,11 @@ class _CommentTile extends StatefulWidget {
   final void Function(Post) onPostUpdated;
   final void Function(String commentId)? onReplyTap;
 
+  /// Reply 탭 시 이 id와 일치하는 타일 아래에 [buildInlineReplyCard] 표시
+  final String? replyingToCommentId;
+  final Widget Function()? buildInlineReplyCard;
+  final bool reviewReplyIconLayout;
+
   @override
   State<_CommentTile> createState() => _CommentTileState();
 }
@@ -4418,6 +4432,9 @@ class _CommentTileState extends State<_CommentTile> {
   late int _likeCount;
   late int _dislikeCount;
   bool _votePending = false;
+
+  /// 톡·에스크: 답글을 접었다가 '답글 N개 더보기'로 펼침
+  bool _talkAskRepliesExpanded = false;
 
   @override
   void initState() {
@@ -4431,6 +4448,9 @@ class _CommentTileState extends State<_CommentTile> {
   @override
   void didUpdateWidget(covariant _CommentTile oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.comment.id != widget.comment.id) {
+      _talkAskRepliesExpanded = false;
+    }
     if (oldWidget.comment.id == widget.comment.id &&
         (oldWidget.comment.likedBy != widget.comment.likedBy ||
             oldWidget.comment.dislikedBy != widget.comment.dislikedBy ||
@@ -4672,10 +4692,585 @@ class _CommentTileState extends State<_CommentTile> {
     final s = widget.strings;
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    final useAlignedButtons = widget.contentWidth != null;
+    final isDark = theme.brightness == Brightness.dark;
+    // showAuthorProfileMenu == false → 톡·에스크 게시판
+    final isTalkAsk = !widget.showAuthorProfileMenu;
     final contentWidth = widget.contentWidth ?? double.infinity;
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final commentImgLogicalW = contentWidth.isFinite
+        ? contentWidth
+        : MediaQuery.sizeOf(context).width;
+    final commentImgCacheW = (commentImgLogicalW * dpr).round().clamp(1, 4096);
+    final commentImgCacheH = (400 * dpr).round().clamp(1, 4096);
 
-    // 3행: 답글 · 좋아요 · 숫자 · 싫어요 — 테두리 없이 인라인
+    // ── 톡·에스크 전용 새 레이아웃 ─────────────────────────────────
+    if (isTalkAsk) {
+      final isReply = widget.depth > 0;
+      final metaColor = cs.onSurface.withValues(alpha: 0.44);
+      // 닉·본문을 살짝 줄이고 아바타만 키워 한 블록 높이를 맞추기 쉽게
+      final avatarSize = isReply ? 26.0 : _kPostDetailUnifiedAuthorAvatarDp;
+      final authorNameColor = cs.onSurface.withValues(alpha: 0.56);
+      final authorFontSize = isReply ? 10.0 : 11.0;
+      final timeFontSize = isReply ? 8.0 : 8.5;
+      final hasImage = comment.imageUrl != null && comment.imageUrl!.isNotEmpty;
+      final hasText = comment.text.trim().isNotEmpty;
+
+      /// 닉↔본문 기준 간격. 본문↔Reply 도 동일 (텍스트 Stack에서 [bodyMicroUpPx] 만큼만 본문을 위로 당김)
+      final gapNameToBody = 1.0;
+      const bodyMicroUpPx = 1.0;
+      final gapTalkAskNameBodyReply = gapNameToBody - bodyMicroUpPx;
+
+      /// 본문 마지막 줄 아래 line-height 여백을 줄여 본문↔Reply 가 닉↔본문과 비슷하게 보이게
+      const talkAskBodyTextHeightBehavior = TextHeightBehavior(
+        applyHeightToLastDescent: false,
+      );
+      final bodyFontSize = isReply ? 12.0 : 13.0;
+      final bodyTextStyle = GoogleFonts.notoSansKr(
+        fontSize: bodyFontSize,
+        color: cs.onSurface,
+        height: 1.38,
+      );
+
+      Widget nameRow() {
+        return Transform.translate(
+          offset: const Offset(0, -1.5),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Flexible(
+                child: _wrapAuthorTap(
+                  child: Text(
+                    comment.author,
+                    style: GoogleFonts.notoSansKr(
+                      fontSize: authorFontSize,
+                      fontWeight: FontWeight.w600,
+                      color: authorNameColor,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                comment.displayTimeAgo,
+                style: GoogleFonts.notoSansKr(
+                  fontSize: timeFontSize,
+                  color: metaColor,
+                ),
+              ),
+            ],
+          ),
+        );
+      }
+
+      // 톡·에스크 텍스트만: 2줄 이상 → 하트=1째 줄 오른쪽·세로중앙, 숫자=2째 줄 오른쪽·세로중앙.
+      // 1줄 → 하트=본문 블록 세로중앙, 숫자=Reply 행과 맞춤.
+      const talkAskLikeColW = 40.0;
+      const talkAskLikeCountDownNudge = 1.0;
+      const talkAskBodyVisualUpNudge = 1.5;
+      const heartIconSize = 16.0;
+      const heartVPad = 4.0;
+      final heartBlockH = heartVPad + heartIconSize + heartVPad;
+
+      final commentBody = LayoutBuilder(
+        builder: (context, cons) {
+          final innerMaxW = cons.maxWidth;
+          final textColumnMaxW = (innerMaxW - avatarSize - 8 - talkAskLikeColW)
+              .clamp(1.0, 9999.0);
+          final textScaler = MediaQuery.textScalerOf(context);
+          final textDir = Directionality.of(context);
+          final authorLineStyle = GoogleFonts.notoSansKr(
+            fontSize: authorFontSize,
+            fontWeight: FontWeight.w600,
+            color: authorNameColor,
+          );
+          final timeLineStyle = GoogleFonts.notoSansKr(
+            fontSize: timeFontSize,
+            color: metaColor,
+          );
+          final tpAuthorLine = TextPainter(
+            text: TextSpan(
+              text: comment.author.isEmpty ? ' ' : comment.author,
+              style: authorLineStyle,
+            ),
+            textDirection: textDir,
+            maxLines: 1,
+            textScaler: textScaler,
+          )..layout(maxWidth: textColumnMaxW);
+          final tpTimeLine = TextPainter(
+            text: TextSpan(text: comment.displayTimeAgo, style: timeLineStyle),
+            textDirection: textDir,
+            maxLines: 1,
+            textScaler: textScaler,
+          )..layout();
+          final nameBlockH = max(tpAuthorLine.height, tpTimeLine.height);
+
+          final replyStyle = GoogleFonts.notoSansKr(
+            fontSize: authorFontSize,
+            fontWeight: FontWeight.w500,
+            color: metaColor,
+            height: 1.2,
+          );
+          final tpReply = TextPainter(
+            text: TextSpan(text: 'Reply', style: replyStyle),
+            textDirection: textDir,
+            maxLines: 1,
+            textScaler: textScaler,
+          )..layout();
+          final replyRowH = max(tpReply.height + 2.0, 18.0);
+
+          // Reply와 동일 크기·행고정 (좋아요 수만 색상 변화)
+          final countStyle = GoogleFonts.notoSansKr(
+            fontSize: authorFontSize,
+            fontWeight: FontWeight.w500,
+            color: _isLiked ? Colors.redAccent : metaColor,
+            height: 1.2,
+          );
+          // 좋아요 수 0↔1 전환 시 높이가 달라지며 아래 레이아웃이 밀리지 않도록 숫자 줄 높이 고정
+          final tpCountSlot = TextPainter(
+            text: TextSpan(
+              text: '0',
+              style: GoogleFonts.notoSansKr(
+                fontSize: authorFontSize,
+                fontWeight: FontWeight.w500,
+                color: metaColor,
+                height: 1.2,
+              ),
+            ),
+            textDirection: textDir,
+            maxLines: 1,
+            textScaler: textScaler,
+          )..layout();
+          final countSlotH = tpCountSlot.height;
+
+          final avatarChip = _wrapAuthorTap(
+            child: _PostAuthorAvatar(
+              photoUrl: comment.authorPhotoUrl,
+              author: comment.author,
+              colorIndex: comment.authorAvatarColorIndex,
+              size: avatarSize,
+            ),
+          );
+
+          Widget imageBlock() {
+            return GestureDetector(
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) =>
+                      FullScreenImagePage(imageUrls: [comment.imageUrl!]),
+                ),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 320),
+                  child: Image.network(
+                    comment.imageUrl!,
+                    width: double.infinity,
+                    fit: BoxFit.fitWidth,
+                    alignment: Alignment.topLeft,
+                    cacheWidth: commentImgCacheW,
+                    cacheHeight: commentImgCacheH,
+                    errorBuilder: (_, __, ___) => Container(
+                      height: 100,
+                      color: cs.surfaceContainerHighest,
+                      child: Icon(
+                        LucideIcons.image_off,
+                        size: 36,
+                        color: cs.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }
+
+          Widget heartHitTarget() {
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _onLikeTap,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: heartVPad),
+                child: Icon(
+                  _isLiked ? Icons.favorite : Icons.favorite_border,
+                  size: heartIconSize,
+                  color: _isLiked ? Colors.redAccent : metaColor,
+                ),
+              ),
+            );
+          }
+
+          if (hasImage) {
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                avatarChip,
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      nameRow(),
+                      SizedBox(height: gapNameToBody),
+                      IntrinsicHeight(
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  imageBlock(),
+                                  if (hasText) ...[
+                                    const SizedBox(height: 4),
+                                    Transform.translate(
+                                      offset: const Offset(
+                                        0,
+                                        -talkAskBodyVisualUpNudge,
+                                      ),
+                                      child: Text(
+                                        comment.text,
+                                        style: bodyTextStyle,
+                                        textHeightBehavior:
+                                            talkAskBodyTextHeightBehavior,
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                            SizedBox(
+                              width: talkAskLikeColW,
+                              child: Center(child: heartHitTarget()),
+                            ),
+                          ],
+                        ),
+                      ),
+                      SizedBox(height: gapNameToBody),
+                      IntrinsicHeight(
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Expanded(
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: () async => await _onReplyTap(),
+                                child: Text('Reply', style: replyStyle),
+                              ),
+                            ),
+                            SizedBox(
+                              width: talkAskLikeColW,
+                              height: countSlotH,
+                              child: Center(
+                                child: _likeCount > 0
+                                    ? Text(
+                                        formatCompactCount(_likeCount),
+                                        textAlign: TextAlign.center,
+                                        style: countStyle,
+                                      )
+                                    : const SizedBox.shrink(),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          }
+
+          final yBodyTop = nameBlockH + gapTalkAskNameBodyReply;
+
+          double bodyH = 0;
+          List<LineMetrics>? bodyLineMetrics;
+          if (hasText) {
+            final tpBody = TextPainter(
+              text: TextSpan(text: comment.text, style: bodyTextStyle),
+              textDirection: textDir,
+              maxLines: null,
+              textScaler: textScaler,
+              textHeightBehavior: talkAskBodyTextHeightBehavior,
+            )..layout(maxWidth: textColumnMaxW);
+            bodyH = tpBody.height;
+            bodyLineMetrics = tpBody.computeLineMetrics();
+          }
+
+          double countH = countSlotH;
+          if (_likeCount > 0) {
+            final tpC = TextPainter(
+              text: TextSpan(
+                text: formatCompactCount(_likeCount),
+                style: countStyle,
+              ),
+              textDirection: textDir,
+              maxLines: 1,
+              textScaler: textScaler,
+            )..layout();
+            countH = max(countSlotH, tpC.height);
+          }
+
+          final double heartTop;
+          final double countTop;
+          final double replyRowTop;
+          if (hasText && bodyH > 0 && bodyLineMetrics != null) {
+            final lines = bodyLineMetrics;
+            if (lines.length >= 2) {
+              final h0 = lines[0].height;
+              final h1 = lines[1].height;
+              final line0CenterY = yBodyTop + h0 / 2;
+              final line1CenterY = yBodyTop + h0 + h1 / 2;
+              heartTop = line0CenterY - heartBlockH / 2;
+              countTop = line1CenterY - countH / 2 + talkAskLikeCountDownNudge;
+              replyRowTop = yBodyTop + bodyH + gapTalkAskNameBodyReply;
+            } else {
+              replyRowTop = yBodyTop + bodyH + gapTalkAskNameBodyReply;
+              heartTop = yBodyTop + bodyH / 2 - heartBlockH / 2;
+              final countCenterY = replyRowTop + replyRowH / 2;
+              var ct = countCenterY - countH / 2 + talkAskLikeCountDownNudge;
+              final replyBandMin = replyRowTop;
+              final replyBandMax = replyRowTop + replyRowH - countH;
+              countTop = replyBandMax >= replyBandMin
+                  ? ct.clamp(replyBandMin, replyBandMax)
+                  : replyBandMin;
+            }
+          } else {
+            replyRowTop = hasText
+                ? yBodyTop + bodyH + gapTalkAskNameBodyReply
+                : yBodyTop;
+            heartTop = yBodyTop + replyRowH / 2 - heartBlockH / 2;
+            final countCenterY = replyRowTop + replyRowH / 2;
+            var ct = countCenterY - countH / 2 + talkAskLikeCountDownNudge;
+            final replyBandMin = replyRowTop;
+            final replyBandMax = replyRowTop + replyRowH - countH;
+            countTop = replyBandMax >= replyBandMin
+                ? ct.clamp(replyBandMin, replyBandMax)
+                : replyBandMin;
+          }
+
+          final contentBottom = max(
+            hasText ? yBodyTop + bodyH + gapTalkAskNameBodyReply : replyRowTop,
+            replyRowTop + replyRowH,
+          );
+          var stackH = max(
+            contentBottom,
+            max(heartTop + heartBlockH, countTop + countH),
+          );
+          stackH = max(stackH, avatarSize);
+
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              avatarChip,
+              const SizedBox(width: 8),
+              Expanded(
+                child: SizedBox(
+                  height: stackH,
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      Positioned(
+                        left: 0,
+                        right: talkAskLikeColW,
+                        top: 0,
+                        child: nameRow(),
+                      ),
+                      if (hasText)
+                        Positioned(
+                          left: 0,
+                          right: talkAskLikeColW,
+                          top: yBodyTop,
+                          child: Transform.translate(
+                            offset: const Offset(0, -talkAskBodyVisualUpNudge),
+                            child: Text(
+                              comment.text,
+                              style: bodyTextStyle,
+                              textHeightBehavior: talkAskBodyTextHeightBehavior,
+                            ),
+                          ),
+                        ),
+                      Positioned(
+                        left: 0,
+                        right: talkAskLikeColW,
+                        top: replyRowTop,
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () async => await _onReplyTap(),
+                          child: Text('Reply', style: replyStyle),
+                        ),
+                      ),
+                      Positioned(
+                        right: 0,
+                        top: heartTop,
+                        width: talkAskLikeColW,
+                        height: heartBlockH,
+                        child: Center(child: heartHitTarget()),
+                      ),
+                      Positioned(
+                        right: 0,
+                        top: countTop,
+                        width: talkAskLikeColW,
+                        height: countH,
+                        child: Center(
+                          child: _likeCount > 0
+                              ? Text(
+                                  formatCompactCount(_likeCount),
+                                  textAlign: TextAlign.center,
+                                  style: countStyle,
+                                )
+                              : const SizedBox.shrink(),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      );
+
+      final List<Widget> replyWidgets = comment.replies
+          .map(
+            (r) => _CommentTile(
+              comment: r,
+              strings: s,
+              depth: widget.depth + 1,
+              postId: widget.postId,
+              showAuthorProfileMenu: widget.showAuthorProfileMenu,
+              contentWidth: widget.contentWidth,
+              onPostUpdated: widget.onPostUpdated,
+              onReplyTap: widget.onReplyTap,
+              replyingToCommentId: widget.replyingToCommentId,
+              buildInlineReplyCard: widget.buildInlineReplyCard,
+              reviewReplyIconLayout: widget.reviewReplyIconLayout,
+            ),
+          )
+          .toList();
+
+      // depth 0: 전체 너비, 하단 구분선 + 답글 목록
+      if (!isReply) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 2),
+              child: commentBody,
+            ),
+            if (comment.replies.isNotEmpty && !_talkAskRepliesExpanded)
+              Padding(
+                padding: EdgeInsets.fromLTRB(16 + avatarSize + 8, 0, 16, 4),
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => setState(() => _talkAskRepliesExpanded = true),
+                  child: Text.rich(
+                    TextSpan(
+                      style: GoogleFonts.notoSansKr(
+                        fontSize: 12,
+                        color: metaColor,
+                        height: 1.25,
+                      ),
+                      children: [
+                        const TextSpan(text: '\u2014 '),
+                        TextSpan(
+                          text: '답글 ${comment.replies.length}개 더보기',
+                          style: GoogleFonts.notoSansKr(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: metaColor,
+                            height: 1.25,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            if (comment.replies.isNotEmpty && _talkAskRepliesExpanded)
+              ...replyWidgets,
+            if (widget.replyingToCommentId == widget.comment.id &&
+                widget.buildInlineReplyCard != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: widget.buildInlineReplyCard!(),
+              ),
+            const SizedBox(height: 10),
+          ],
+        );
+      }
+
+      // depth 1+: 들여쓰기 + 연한 배경으로 구분 (세로선 없음)
+      final replyBg = isDark
+          ? cs.surface.withValues(alpha: 0.0) // dark: 배경 변화 없이 여백만
+          : cs.surfaceContainerHighest.withValues(alpha: 0.6);
+      return Container(
+        margin: const EdgeInsets.only(left: 36),
+        decoration: BoxDecoration(
+          color: replyBg,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 2),
+              child: commentBody,
+            ),
+            if (comment.replies.isNotEmpty && !_talkAskRepliesExpanded)
+              Padding(
+                padding: EdgeInsets.fromLTRB(12 + avatarSize + 8, 0, 12, 4),
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => setState(() => _talkAskRepliesExpanded = true),
+                  child: Text.rich(
+                    TextSpan(
+                      style: GoogleFonts.notoSansKr(
+                        fontSize: 12,
+                        color: metaColor,
+                        height: 1.25,
+                      ),
+                      children: [
+                        const TextSpan(text: '\u2014 '),
+                        TextSpan(
+                          text: '답글 ${comment.replies.length}개 더보기',
+                          style: GoogleFonts.notoSansKr(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: metaColor,
+                            height: 1.25,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            if (comment.replies.isNotEmpty && _talkAskRepliesExpanded)
+              ...replyWidgets,
+            if (widget.replyingToCommentId == widget.comment.id &&
+                widget.buildInlineReplyCard != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                child: widget.buildInlineReplyCard!(),
+              ),
+          ],
+        ),
+      );
+    }
+
+    // ── 기존 리뷰 등 게시판 레이아웃 (변경 없음) ─────────────────────
+    final metaGray = cs.onSurfaceVariant;
+    final isReviewReply = widget.reviewReplyIconLayout;
+
+    // 3행: 답글 + 투표박스 (오른쪽 정렬)
     final actionRow = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -4683,24 +5278,11 @@ class _CommentTileState extends State<_CommentTile> {
           onTap: () async => await _onReplyTap(),
           behavior: HitTestBehavior.opaque,
           child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(LucideIcons.reply, size: 13, color: cs.onSurfaceVariant),
-                const SizedBox(width: 3),
-                Text(
-                  s.get('reply'),
-                  style: GoogleFonts.notoSansKr(
-                    fontSize: 12,
-                    color: cs.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
+            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
+            child: Icon(LucideIcons.message_circle, size: 14, color: metaGray),
           ),
         ),
-        const SizedBox(width: 12),
+        const SizedBox(width: 6),
         _DetailVoteBox(
           voteState: _isLiked ? 1 : (_isDisliked ? -1 : 0),
           count: _likeCount,
@@ -4708,12 +5290,12 @@ class _CommentTileState extends State<_CommentTile> {
           onDown: _onDislikeTap,
           primaryColor: cs.primary,
           useThumbIcons: true,
-          thumbBaseColor: cs.onSurfaceVariant,
+          thumbBaseColor: metaGray,
         ),
       ],
     );
 
-    // 1·2·3행 영역 (Padding 포함) — 레딧 스타일: 아바타 왼쪽 고정, 콘텐츠 오른쪽 컬럼
+    // 1·2·3행 영역 (Padding 포함) — 레딧 스타일: 아바타 왼쪽 고정
     final rowsSection = Padding(
       padding: widget.depth == 0
           ? const EdgeInsets.fromLTRB(16, 12, 16, 8)
@@ -4721,23 +5303,36 @@ class _CommentTileState extends State<_CommentTile> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 왼쪽: 아바타 (리뷰 등에서만 닉네임 메뉴)
-          _wrapAuthorTap(
-            child: _PostAuthorAvatar(
-              photoUrl: comment.authorPhotoUrl,
-              author: comment.author,
-              colorIndex: comment.authorAvatarColorIndex,
-              size: 28,
+          if (!isReviewReply)
+            _wrapAuthorTap(
+              child: _PostAuthorAvatar(
+                photoUrl: comment.authorPhotoUrl,
+                author: comment.author,
+                colorIndex: comment.authorAvatarColorIndex,
+                size: 28,
+              ),
+            )
+          else
+            SizedBox(
+              width: 56,
+              child: Align(
+                alignment: Alignment.topRight,
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Icon(
+                    LucideIcons.reply,
+                    size: 13,
+                    color: metaGray.withValues(alpha: 0.9),
+                  ),
+                ),
+              ),
             ),
-          ),
-          const SizedBox(width: 6),
-          // 오른쪽: 닉네임·시간 / 이미지 / 텍스트 / 액션
+          SizedBox(width: isReviewReply ? 8 : 6),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
               children: [
-                // 1행: 닉네임 · 시간
                 _wrapAuthorTap(
                   child: Text.rich(
                     TextSpan(
@@ -4754,7 +5349,7 @@ class _CommentTileState extends State<_CommentTile> {
                           text: ' · ${comment.displayTimeAgo}',
                           style: GoogleFonts.notoSansKr(
                             fontSize: 12,
-                            color: cs.onSurfaceVariant,
+                            color: metaGray,
                           ),
                         ),
                       ],
@@ -4764,7 +5359,6 @@ class _CommentTileState extends State<_CommentTile> {
                   ),
                 ),
                 const SizedBox(height: 4),
-                // 첨부 이미지 (아바타 오른쪽 컬럼에 위치 — 레딧 스타일)
                 if (comment.imageUrl != null &&
                     comment.imageUrl!.isNotEmpty) ...[
                   GestureDetector(
@@ -4787,13 +5381,15 @@ class _CommentTileState extends State<_CommentTile> {
                           width: double.infinity,
                           fit: BoxFit.fitWidth,
                           alignment: Alignment.topLeft,
+                          cacheWidth: commentImgCacheW,
+                          cacheHeight: commentImgCacheH,
                           errorBuilder: (_, __, ___) => Container(
                             height: 120,
                             color: cs.surfaceContainerHighest,
                             child: Icon(
                               LucideIcons.image_off,
                               size: 40,
-                              color: cs.onSurfaceVariant,
+                              color: metaGray,
                             ),
                           ),
                         ),
@@ -4802,7 +5398,6 @@ class _CommentTileState extends State<_CommentTile> {
                   ),
                   const SizedBox(height: 3),
                 ],
-                // 내용 (텍스트)
                 if (comment.text.trim().isNotEmpty)
                   Text(
                     comment.text,
@@ -4812,7 +5407,6 @@ class _CommentTileState extends State<_CommentTile> {
                       height: 1.45,
                     ),
                   ),
-                // 액션 행 (오른쪽 정렬)
                 Align(alignment: Alignment.centerRight, child: actionRow),
               ],
             ),
@@ -4821,7 +5415,7 @@ class _CommentTileState extends State<_CommentTile> {
       ),
     );
 
-    // depth 0: 풀 width 카드 (레딧 스타일 - 좌우 여백 없음)
+    // depth 0: 풀 width (리뷰 등)
     if (widget.depth == 0) {
       return Container(
         color: theme.brightness == Brightness.light
@@ -4847,23 +5441,37 @@ class _CommentTileState extends State<_CommentTile> {
                         contentWidth: widget.contentWidth,
                         onPostUpdated: widget.onPostUpdated,
                         onReplyTap: widget.onReplyTap,
+                        replyingToCommentId: widget.replyingToCommentId,
+                        buildInlineReplyCard: widget.buildInlineReplyCard,
+                        reviewReplyIconLayout: widget.reviewReplyIconLayout,
                       ),
                     )
                     .toList(),
+              ),
+            if (widget.replyingToCommentId == widget.comment.id &&
+                widget.buildInlineReplyCard != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                child: widget.buildInlineReplyCard!(),
               ),
           ],
         ),
       );
     }
 
-    // depth 1+: 대댓글 - 왼쪽 세로선 + 들여쓰기 + 하위 답글도 표시
+    // depth 1+: 왼쪽 세로선 + 들여쓰기
     final isFirstReply = widget.depth == 1;
     return Container(
-      margin: EdgeInsets.only(left: isFirstReply ? 20 : 12),
-      padding: const EdgeInsets.only(left: 6),
+      margin: EdgeInsets.only(
+        left: isReviewReply ? (isFirstReply ? 64 : 56) : (isFirstReply ? 20 : 12),
+      ),
+      padding: isReviewReply ? EdgeInsets.zero : const EdgeInsets.only(left: 6),
       decoration: BoxDecoration(
         border: Border(
-          left: BorderSide(color: cs.outline.withOpacity(0.6), width: 0.7),
+          left: BorderSide(
+            color: cs.outline.withValues(alpha: 0.6),
+            width: 0.7,
+          ),
         ),
       ),
       child: Column(
@@ -4886,9 +5494,18 @@ class _CommentTileState extends State<_CommentTile> {
                       contentWidth: widget.contentWidth,
                       onPostUpdated: widget.onPostUpdated,
                       onReplyTap: widget.onReplyTap,
+                      replyingToCommentId: widget.replyingToCommentId,
+                      buildInlineReplyCard: widget.buildInlineReplyCard,
+                      reviewReplyIconLayout: widget.reviewReplyIconLayout,
                     ),
                   )
                   .toList(),
+            ),
+          if (widget.replyingToCommentId == widget.comment.id &&
+              widget.buildInlineReplyCard != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(0, 4, 16, 8),
+              child: widget.buildInlineReplyCard!(),
             ),
         ],
       ),
@@ -4954,7 +5571,6 @@ class _ActionChip extends StatelessWidget {
   }
 }
 
-/// 글 상세·피드 공통: 가로 1 기준 세로 최대 1.4
 const double _detailMaxHeightPerWidth = 1.4;
 
 /// 글 상세 영상 재생: 탭 시 재생/일시정지, 하단 컨트롤 바(재생, 진행바, 시간, 음소거)
@@ -5055,6 +5671,10 @@ class _PostVideoPlayerState extends State<_PostVideoPlayer> {
     final totalMs = duration.inMilliseconds;
     final posMs = position.inMilliseconds;
     final progress = totalMs > 0 ? (posMs / totalMs).clamp(0.0, 1.0) : 0.0;
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final screenW = MediaQuery.sizeOf(context).width;
+    final videoThumbCacheW = (screenW * dpr).round().clamp(1, 2048);
+    final videoThumbCacheH = (videoThumbCacheW * 1.3).round().clamp(1, 2048);
 
     // 가로 비율에 맞게: 1:1.3 프레임에 꽉 채우고 세로는 잘림 (cover)
     const double aspectRatio = 1 / 1.3;
@@ -5087,6 +5707,8 @@ class _PostVideoPlayerState extends State<_PostVideoPlayer> {
                         Image.network(
                           widget.thumbnailUrl!,
                           fit: BoxFit.cover,
+                          cacheWidth: videoThumbCacheW,
+                          cacheHeight: videoThumbCacheH,
                           errorBuilder: (_, __, ___) =>
                               Container(color: Colors.black),
                         ),
@@ -5479,12 +6101,16 @@ class _PostAuthorAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (photoUrl != null && photoUrl!.isNotEmpty) {
+      final dpr = MediaQuery.devicePixelRatioOf(context);
+      final avatarCache = (size * dpr).round().clamp(1, 512);
       return ClipOval(
         child: Image.network(
           photoUrl!,
           width: size,
           height: size,
           fit: BoxFit.cover,
+          cacheWidth: avatarCache,
+          cacheHeight: avatarCache,
           errorBuilder: (_, __, ___) => _buildDefault(),
         ),
       );

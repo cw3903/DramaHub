@@ -22,6 +22,18 @@ import '../screens/login_page.dart';
 
 const int _postsPerPage = 20;
 
+/// 리뷰 인라인 댓글 렌더링용 flatten 엔트리(depth 보존)
+/// depth 0: 루트 댓글, depth 1+: 대댓글
+class _InlineReviewCommentEntry {
+  const _InlineReviewCommentEntry({
+    required this.comment,
+    required this.depth,
+  });
+
+  final PostComment comment;
+  final int depth;
+}
+
 /// 하단 네비 바만 겹치지 않을 정도의 여백 (과한 빈 공간 방지)
 double _listBottomPadding(BuildContext context) =>
     48 + MediaQuery.of(context).padding.bottom;
@@ -61,7 +73,7 @@ bool commentContainsQuery(PostComment c, String q) {
 Widget reviewInlineActionHitTarget({
   required VoidCallback onTap,
   required Widget visual,
-  EdgeInsets outsets = const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+  EdgeInsets outsets = const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
 }) {
   return Stack(
     clipBehavior: Clip.none,
@@ -111,6 +123,7 @@ class PopularPostsTab extends StatefulWidget {
     this.feedLoadingMore = false,
     this.feedHasMore = true,
     this.reviewLetterboxdInlineFeed = false,
+    this.feedAuthorAvatarSize,
   });
 
   final List<Post> posts;
@@ -142,6 +155,9 @@ class PopularPostsTab extends StatefulWidget {
   final bool feedLoadingMore;
   final bool feedHasMore;
   final bool reviewLetterboxdInlineFeed;
+
+  /// 글 상세 DramaFeed: 피드 카드 작성자 아바타 직경. null이면 카드 기본.
+  final double? feedAuthorAvatarSize;
 
   @override
   State<PopularPostsTab> createState() => _PopularPostsTabState();
@@ -462,78 +478,145 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
 
   void _toggleReviewBodyComments(Post post) {
     final id = post.id;
-    final opening = !_expandedReviewComments.contains(id);
+    final wasOpen = _expandedReviewComments.contains(id);
     setState(() {
-      if (opening) {
-        _expandedReviewComments.add(id);
-      } else {
+      if (wasOpen) {
         _expandedReviewComments.remove(id);
+      } else {
+        // 여러 리뷰의 댓글을 동시에 펼칠 수 있게 유지
+        _expandedReviewComments.add(id);
+        _inlineCommentControllers.putIfAbsent(id, TextEditingController.new);
       }
     });
-    if (opening) _refreshPostForComments(id);
+    if (!wasOpen) _refreshPostForComments(id);
   }
 
-  void _flattenCommentsInto(List<PostComment> roots, List<PostComment> out) {
+  void _flattenCommentsInto(
+    List<PostComment> roots,
+    List<_InlineReviewCommentEntry> out, {
+    int depth = 0,
+  }) {
     for (final c in roots) {
-      out.add(c);
-      if (c.replies.isNotEmpty) _flattenCommentsInto(c.replies, out);
+      out.add(_InlineReviewCommentEntry(comment: c, depth: depth));
+      if (c.replies.isNotEmpty) {
+        _flattenCommentsInto(c.replies, out, depth: depth + 1);
+      }
     }
   }
 
-  Widget _buildFlatCommentRow(PostComment c, ColorScheme cs) {
+  Widget _buildFlatCommentRow(_InlineReviewCommentEntry entry, ColorScheme cs) {
+    final c = entry.comment;
+    final isReply = entry.depth > 0;
+    // 인라인 리뷰 카드 기준: 썸네일 우측 끝(x≈68) 라인과 리플라이 아이콘 끝을 맞춤.
+    // 리스트 좌우 패딩(12)을 감안해 leading 폭을 56으로 두고 아이콘을 우측 정렬.
+    const replyLeadingW = 56.0;
+    final extraIndent = (entry.depth - 1).clamp(0, 8) * 10.0;
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  c.author.startsWith('u/') ? c.author.substring(2) : c.author,
-                  style: GoogleFonts.notoSansKr(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: cs.onSurface,
+      child: Padding(
+        padding: EdgeInsets.only(left: extraIndent),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (isReply)
+              SizedBox(
+                width: replyLeadingW,
+                child: Align(
+                  alignment: Alignment.topRight,
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Icon(
+                      LucideIcons.reply,
+                      size: 13,
+                      color: cs.onSurfaceVariant.withValues(alpha: 0.86),
+                    ),
                   ),
                 ),
+              )
+            else
+              const SizedBox(width: 0),
+            if (isReply) const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          c.author.startsWith('u/')
+                              ? c.author.substring(2)
+                              : c.author,
+                          style: GoogleFonts.notoSansKr(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: cs.onSurface,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        c.displayTimeAgo,
+                        style: GoogleFonts.notoSansKr(
+                          fontSize: 11,
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    c.text,
+                    style: GoogleFonts.notoSansKr(
+                      fontSize: 13,
+                      height: 1.4,
+                      color: cs.onSurfaceVariant,
+                    ),
+                  ),
+                ],
               ),
-              Text(
-                c.displayTimeAgo,
-                style: GoogleFonts.notoSansKr(
-                  fontSize: 11,
-                  color: cs.onSurfaceVariant,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Text(
-            c.text,
-            style: GoogleFonts.notoSansKr(
-              fontSize: 13,
-              height: 1.4,
-              color: cs.onSurfaceVariant,
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildReviewInlineCommentsListPanel(Post post, ColorScheme cs) {
+  /// 본문 탭 펼침: 댓글 있으면 목록 + 입력줄, 없으면 입력줄만(오버레이와 동일 입력 UI).
+  Widget _buildReviewExpandedInlineCommentSection(
+    BuildContext context,
+    Post post,
+    ColorScheme cs,
+  ) {
+    final id = post.id;
+    _inlineCommentControllers.putIfAbsent(id, TextEditingController.new);
+    final ctrl = _inlineCommentControllers[id]!;
     final p = _latestPost(post);
-    final flat = <PostComment>[];
+    final flat = <_InlineReviewCommentEntry>[];
     _flattenCommentsInto(p.commentsList, flat);
-    if (flat.isEmpty) return const SizedBox.shrink();
+    final hasComments = flat.isNotEmpty;
+
     return ColoredBox(
       color: cs.surfaceContainerHighest.withValues(alpha: 0.4),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: flat.map((c) => _buildFlatCommentRow(c, cs)).toList(),
-        ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (hasComments)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: flat.map((c) => _buildFlatCommentRow(c, cs)).toList(),
+              ),
+            ),
+          _ReviewFeedInlineComposer(
+            controller: ctrl,
+            isSubmitting: _inlineCommentSubmitting.contains(id),
+            autofocus: !hasComments,
+            onSend: () => _submitInlineComment(post, successPopContext: null),
+          ),
+        ],
       ),
     );
   }
@@ -1143,11 +1226,16 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
                     currentUserAuthor: currentUserAuthor,
                     onPostUpdated: onPostUpdated,
                     onPostDeleted: onPostDeleted,
+                    authorAvatarSize: widget.feedAuthorAvatarSize,
                   ),
                   if (inline && _expandedReviewComments.contains(post.id))
                     KeyedSubtree(
                       key: ValueKey('rv_inline_comments_${post.id}'),
-                      child: _buildReviewInlineCommentsListPanel(post, cs),
+                      child: _buildReviewExpandedInlineCommentSection(
+                        context,
+                        post,
+                        cs,
+                      ),
                     ),
                 ],
               ),
@@ -1178,6 +1266,7 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
                         ? () => widget.onPostTap!(post)
                         : null,
                     onUserBlocked: widget.onUserBlocked,
+                    authorAvatarSize: widget.feedAuthorAvatarSize,
                   ),
           );
         }
@@ -1203,7 +1292,7 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
     );
     return GestureDetector(
       onTap: () => FocusScope.of(context).unfocus(),
-      behavior: HitTestBehavior.translucent,
+      behavior: HitTestBehavior.deferToChild,
       child: _wrapRefresh(listView),
     );
   }
@@ -1417,11 +1506,16 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
                     currentUserAuthor: currentUserAuthor,
                     onPostUpdated: onPostUpdated,
                     onPostDeleted: onPostDeleted,
+                    authorAvatarSize: widget.feedAuthorAvatarSize,
                   ),
                   if (inline && _expandedReviewComments.contains(post.id))
                     KeyedSubtree(
                       key: ValueKey('rv_inline_comments_${post.id}'),
-                      child: _buildReviewInlineCommentsListPanel(post, cs),
+                      child: _buildReviewExpandedInlineCommentSection(
+                        context,
+                        post,
+                        cs,
+                      ),
                     ),
                 ],
               ),
@@ -1452,6 +1546,7 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
                         ? () => widget.onPostTap!(post)
                         : null,
                     onUserBlocked: widget.onUserBlocked,
+                    authorAvatarSize: widget.feedAuthorAvatarSize,
                   ),
           );
         }
@@ -1473,8 +1568,179 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
         FocusScope.of(context).unfocus();
         if (_showPageInput) setState(() => _showPageInput = false);
       },
-      behavior: HitTestBehavior.translucent,
+      behavior: HitTestBehavior.deferToChild,
       child: _wrapRefresh(listView),
+    );
+  }
+}
+
+/// 리뷰 Letterboxd 인라인 펼침 하단: 피드에 붙는 댓글 입력(오버레이 하단바와 동일 스타일).
+class _ReviewFeedInlineComposer extends StatelessWidget {
+  const _ReviewFeedInlineComposer({
+    required this.controller,
+    required this.isSubmitting,
+    required this.autofocus,
+    required this.onSend,
+  });
+
+  final TextEditingController controller;
+  final bool isSubmitting;
+  final bool autofocus;
+  final Future<void> Function() onSend;
+
+  static const Color _sendBlue = Color(0xFF0A84FF);
+
+  Widget _defaultAvatar(int colorIdx, double size) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: UserProfileService.bgColorFromIndex(colorIdx),
+        shape: BoxShape.circle,
+      ),
+      child: Center(
+        child: Icon(
+          Icons.person,
+          size: size * 0.55,
+          color: UserProfileService.iconColorFromIndex(colorIdx),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final sendLabel =
+        CountryScope.maybeOf(context)?.strings.get('replySubmit') ?? '';
+
+    return Material(
+      color: Colors.transparent,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(10, 2, 10, 8),
+        child: ListenableBuilder(
+          listenable: Listenable.merge([
+            UserProfileService.instance.profileImageUrlNotifier,
+            UserProfileService.instance.avatarColorNotifier,
+            controller,
+          ]),
+          builder: (context, _) {
+            final rawUrl =
+                UserProfileService.instance.profileImageUrlNotifier.value;
+            final url = rawUrl?.trim();
+            final colorIdx =
+                UserProfileService.instance.avatarColorNotifier.value ?? 0;
+            const avatarSize = 32.0;
+            final Widget avatar = (url != null && url.isNotEmpty)
+                ? ClipOval(
+                    child: OptimizedNetworkImage.avatar(
+                      imageUrl: url,
+                      size: avatarSize,
+                      errorWidget: _defaultAvatar(colorIdx, avatarSize),
+                    ),
+                  )
+                : _defaultAvatar(colorIdx, avatarSize);
+            final canSend =
+                !isSubmitting && controller.text.trim().isNotEmpty;
+            final sendBg =
+                canSend ? _sendBlue : cs.onSurface.withValues(alpha: 0.22);
+            final sendIconColor =
+                canSend ? Colors.white : cs.onSurface.withValues(alpha: 0.38);
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                avatar,
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: controller,
+                    autofocus: autofocus,
+                    minLines: 1,
+                    maxLines: 6,
+                    style: GoogleFonts.notoSansKr(
+                      fontSize: 14,
+                      height: 1.32,
+                    ),
+                    decoration: InputDecoration(
+                      filled: true,
+                      fillColor: theme.brightness == Brightness.dark
+                          ? cs.surfaceContainerHigh
+                          : cs.surface,
+                      isDense: true,
+                      contentPadding: const EdgeInsets.fromLTRB(
+                        14,
+                        8,
+                        4,
+                        8,
+                      ),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(22),
+                        borderSide: BorderSide(
+                          color: cs.outline.withValues(alpha: 0.28),
+                        ),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(22),
+                        borderSide: BorderSide(
+                          color: cs.outline.withValues(alpha: 0.28),
+                        ),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(22),
+                        borderSide: BorderSide(
+                          color: cs.outline.withValues(alpha: 0.45),
+                        ),
+                      ),
+                      suffixIcon: Padding(
+                        padding: const EdgeInsets.fromLTRB(0, 4, 4, 4),
+                        child: Material(
+                          color: sendBg,
+                          shape: const CircleBorder(),
+                          clipBehavior: Clip.antiAlias,
+                          child: InkWell(
+                            customBorder: const CircleBorder(),
+                            onTap: (!canSend || isSubmitting)
+                                ? null
+                                : () {
+                                    unawaited(onSend());
+                                  },
+                            child: SizedBox(
+                              width: 30,
+                              height: 30,
+                              child: Center(
+                                child: isSubmitting
+                                    ? const SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: Colors.white,
+                                        ),
+                                      )
+                                    : Icon(
+                                        Icons.arrow_upward,
+                                        color: sendIconColor,
+                                        size: 17,
+                                        semanticLabel: sendLabel,
+                                      ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      suffixIconConstraints: const BoxConstraints(
+                        minWidth: 40,
+                        minHeight: 36,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
     );
   }
 }
@@ -1500,6 +1766,22 @@ class _ReviewCommentComposerOverlayState
 
   static const Color _sendBlue = Color(0xFF0A84FF);
 
+  void _onControllerText() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_onControllerText);
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_onControllerText);
+    super.dispose();
+  }
+
   Widget _defaultAvatar(int colorIdx, double size) {
     return Container(
       width: size,
@@ -1519,7 +1801,7 @@ class _ReviewCommentComposerOverlayState
   }
 
   Future<void> _onTapSend(BuildContext overlayContext) async {
-    if (_sending) return;
+    if (_sending || widget.controller.text.trim().isEmpty) return;
     setState(() => _sending = true);
     try {
       await widget.onSend(overlayContext);
@@ -1565,11 +1847,12 @@ class _ReviewCommentComposerOverlayState
                   top: false,
                   maintainBottomViewPadding: true,
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+                    padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
                     child: ListenableBuilder(
                       listenable: Listenable.merge([
                         UserProfileService.instance.profileImageUrlNotifier,
                         UserProfileService.instance.avatarColorNotifier,
+                        widget.controller,
                       ]),
                       builder: (context, _) {
                         final rawUrl = UserProfileService
@@ -1583,20 +1866,28 @@ class _ReviewCommentComposerOverlayState
                                 .avatarColorNotifier
                                 .value ??
                             0;
+                        const avatarSize = 32.0;
                         final Widget avatar = (url != null && url.isNotEmpty)
                             ? ClipOval(
                                 child: OptimizedNetworkImage.avatar(
                                   imageUrl: url,
-                                  size: 36,
-                                  errorWidget: _defaultAvatar(colorIdx, 36),
+                                  size: avatarSize,
+                                  errorWidget:
+                                      _defaultAvatar(colorIdx, avatarSize),
                                 ),
                               )
-                            : _defaultAvatar(colorIdx, 36);
+                            : _defaultAvatar(colorIdx, avatarSize);
+                        final canSend =
+                            !_sending && widget.controller.text.trim().isNotEmpty;
+                        final sendBg =
+                            canSend ? _sendBlue : cs.onSurface.withValues(alpha: 0.22);
+                        final sendIconColor =
+                            canSend ? Colors.white : cs.onSurface.withValues(alpha: 0.38);
                         return Row(
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
                             avatar,
-                            const SizedBox(width: 10),
+                            const SizedBox(width: 8),
                             Expanded(
                               child: TextField(
                                 controller: widget.controller,
@@ -1604,8 +1895,8 @@ class _ReviewCommentComposerOverlayState
                                 minLines: 1,
                                 maxLines: 6,
                                 style: GoogleFonts.notoSansKr(
-                                  fontSize: 15,
-                                  height: 1.35,
+                                  fontSize: 14,
+                                  height: 1.32,
                                 ),
                                 decoration: InputDecoration(
                                   filled: true,
@@ -1614,25 +1905,25 @@ class _ReviewCommentComposerOverlayState
                                       : cs.surface,
                                   isDense: true,
                                   contentPadding: const EdgeInsets.fromLTRB(
-                                    16,
-                                    12,
-                                    6,
-                                    12,
+                                    14,
+                                    8,
+                                    4,
+                                    8,
                                   ),
                                   border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(26),
+                                    borderRadius: BorderRadius.circular(22),
                                     borderSide: BorderSide(
                                       color: cs.outline.withValues(alpha: 0.28),
                                     ),
                                   ),
                                   enabledBorder: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(26),
+                                    borderRadius: BorderRadius.circular(22),
                                     borderSide: BorderSide(
                                       color: cs.outline.withValues(alpha: 0.28),
                                     ),
                                   ),
                                   focusedBorder: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(26),
+                                    borderRadius: BorderRadius.circular(22),
                                     borderSide: BorderSide(
                                       color: cs.outline.withValues(alpha: 0.45),
                                     ),
@@ -1640,28 +1931,27 @@ class _ReviewCommentComposerOverlayState
                                   suffixIcon: Padding(
                                     padding: const EdgeInsets.fromLTRB(
                                       0,
-                                      6,
-                                      6,
-                                      6,
+                                      4,
+                                      4,
+                                      4,
                                     ),
                                     child: Material(
-                                      color: _sendBlue,
+                                      color: sendBg,
                                       shape: const CircleBorder(),
                                       clipBehavior: Clip.antiAlias,
                                       child: InkWell(
                                         customBorder: const CircleBorder(),
-                                        onTap: () {
-                                          if (_sending) return;
-                                          _onTapSend(context);
-                                        },
+                                        onTap: (!canSend || _sending)
+                                            ? null
+                                            : () => _onTapSend(context),
                                         child: SizedBox(
-                                          width: 34,
-                                          height: 34,
+                                          width: 30,
+                                          height: 30,
                                           child: Center(
                                             child: _sending
                                                 ? const SizedBox(
-                                                    width: 18,
-                                                    height: 18,
+                                                    width: 16,
+                                                    height: 16,
                                                     child:
                                                         CircularProgressIndicator(
                                                           strokeWidth: 2,
@@ -1670,8 +1960,8 @@ class _ReviewCommentComposerOverlayState
                                                   )
                                                 : Icon(
                                                     Icons.arrow_upward,
-                                                    color: Colors.white,
-                                                    size: 19,
+                                                    color: sendIconColor,
+                                                    size: 17,
                                                     semanticLabel: sendLabel,
                                                   ),
                                           ),
@@ -1680,8 +1970,8 @@ class _ReviewCommentComposerOverlayState
                                     ),
                                   ),
                                   suffixIconConstraints: const BoxConstraints(
-                                    minWidth: 46,
-                                    minHeight: 46,
+                                    minWidth: 40,
+                                    minHeight: 36,
                                   ),
                                 ),
                               ),
@@ -1720,6 +2010,7 @@ class FreeBoardTab extends StatefulWidget {
     this.feedScrollController,
     this.feedLoadingMore = false,
     this.feedHasMore = true,
+    this.feedAuthorAvatarSize,
   });
 
   final List<Post> posts;
@@ -1737,6 +2028,7 @@ class FreeBoardTab extends StatefulWidget {
   final ScrollController? feedScrollController;
   final bool feedLoadingMore;
   final bool feedHasMore;
+  final double? feedAuthorAvatarSize;
 
   @override
   State<FreeBoardTab> createState() => _FreeBoardTabState();
@@ -2267,6 +2559,7 @@ class _FreeBoardTabState extends State<FreeBoardTab> {
                   ? () => widget.onPostTap!(post)
                   : null,
               onUserBlocked: widget.onUserBlocked,
+              authorAvatarSize: widget.feedAuthorAvatarSize,
             ),
           );
         }
@@ -2292,7 +2585,7 @@ class _FreeBoardTabState extends State<FreeBoardTab> {
     );
     return GestureDetector(
       onTap: () => FocusScope.of(context).unfocus(),
-      behavior: HitTestBehavior.translucent,
+      behavior: HitTestBehavior.deferToChild,
       child: _wrapRefresh(listView),
     );
   }
@@ -2460,6 +2753,7 @@ class _FreeBoardTabState extends State<FreeBoardTab> {
                   ? () => widget.onPostTap!(post)
                   : null,
               onUserBlocked: widget.onUserBlocked,
+              authorAvatarSize: widget.feedAuthorAvatarSize,
             ),
           );
         }
@@ -2481,7 +2775,7 @@ class _FreeBoardTabState extends State<FreeBoardTab> {
         FocusScope.of(context).unfocus();
         if (_showPageInput) setState(() => _showPageInput = false);
       },
-      behavior: HitTestBehavior.translucent,
+      behavior: HitTestBehavior.deferToChild,
       child: _wrapRefresh(listView),
     );
   }

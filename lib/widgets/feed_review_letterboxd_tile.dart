@@ -32,6 +32,8 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
     this.currentUserAuthor,
     this.onPostUpdated,
     this.onPostDeleted,
+    /// null이면 22. 글 상세 DramaFeed에서 본문·댓글과 맞출 때 지정.
+    this.authorAvatarSize,
   });
 
   final Post post;
@@ -43,6 +45,8 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
   final String? currentUserAuthor;
   final void Function(Post)? onPostUpdated;
   final void Function(Post)? onPostDeleted;
+
+  final double? authorAvatarSize;
 
   static const double _thumbW = 68;
   static const double _thumbH = 96;
@@ -334,17 +338,17 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
             textAlign: TextAlign.end,
             style: GoogleFonts.notoSansKr(
               fontSize: 13,
-              fontWeight: FontWeight.w500,
-              color: cs.onSurfaceVariant.withValues(alpha: 0.55),
+              fontWeight: FontWeight.w700,
+              color: cs.onSurfaceVariant.withValues(alpha: 0.62),
             ),
           ),
         ),
-        const SizedBox(width: 8),
+        const SizedBox(width: 4),
         _LetterboxdAuthorAvatar(
           photoUrl: post.authorPhotoUrl,
           author: post.author,
           colorIndex: post.authorAvatarColorIndex,
-          size: 22,
+          size: authorAvatarSize ?? 22,
         ),
       ],
     );
@@ -395,14 +399,9 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (showEditInRow)
-            TextButton(
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                foregroundColor: ownerActionGray,
-              ),
-              onPressed: () async {
+            _TapBehindGesture(
+              outsets: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              onTap: () async {
                 final updated = await Navigator.push<Post>(
                   context,
                   MaterialPageRoute(
@@ -425,14 +424,9 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
               ),
             ),
           if (showDeleteInRow)
-            TextButton(
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                foregroundColor: Colors.redAccent,
-              ),
-              onPressed: () async {
+            _TapBehindGesture(
+              outsets: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              onTap: () async {
                 final confirmed = await showDialog<bool>(
                   context: context,
                   builder: (ctx) => AlertDialog(
@@ -612,6 +606,42 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
         onTap: onTap,
         child: content,
       ),
+    );
+  }
+}
+
+/// 스플래시 없이 터치만 확장 (수정·삭제 링크 등).
+class _TapBehindGesture extends StatelessWidget {
+  const _TapBehindGesture({
+    required this.child,
+    required this.onTap,
+    this.outsets = const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+  });
+
+  final Widget child;
+  final VoidCallback onTap;
+  final EdgeInsets outsets;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      fit: StackFit.passthrough,
+      alignment: Alignment.center,
+      children: [
+        Positioned(
+          left: -outsets.left,
+          top: -outsets.top,
+          right: -outsets.right,
+          bottom: -outsets.bottom,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onTap,
+            child: const SizedBox.expand(),
+          ),
+        ),
+        IgnorePointer(child: child),
+      ],
     );
   }
 }
