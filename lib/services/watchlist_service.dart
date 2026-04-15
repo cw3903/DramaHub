@@ -68,17 +68,50 @@ class WatchlistService {
     _lastUid = null;
   }
 
-  /// 타 유저 프로필 메뉴 카운트용.
+  /// 타 유저 워치리스트 조회.
+  Future<List<WatchlistItem>> fetchForUid(String uid) async {
+    final u = uid.trim();
+    if (u.isEmpty) return [];
+    try {
+      QuerySnapshot<Map<String, dynamic>> snap;
+      try {
+        snap = await _firestore
+            .collection('users')
+            .doc(u)
+            .collection('watchlist')
+            .orderBy('addedAt', descending: true)
+            .get();
+      } catch (_) {
+        snap = await _firestore
+            .collection('users')
+            .doc(u)
+            .collection('watchlist')
+            .get();
+      }
+      final items = snap.docs
+          .map((d) => WatchlistItem.fromDoc(d.id, d.data()))
+          .where((e) => e.dramaId.isNotEmpty)
+          .toList();
+      items.sort((a, b) => b.addedAt.compareTo(a.addedAt));
+      return items;
+    } catch (e, st) {
+      debugPrint('WatchlistService.fetchForUid: $e\n$st');
+      return [];
+    }
+  }
+
+  /// 타 유저 프로필 메뉴 카운트용. Firestore `count()` 집계 사용.
   Future<int> countWatchlistForUid(String uid) async {
     final u = uid.trim();
     if (u.isEmpty) return 0;
     try {
-      final snap = await _firestore
+      final agg = await _firestore
           .collection('users')
           .doc(u)
           .collection('watchlist')
+          .count()
           .get();
-      return snap.docs.length;
+      return agg.count ?? 0;
     } catch (e, st) {
       debugPrint('WatchlistService.countWatchlistForUid: $e\n$st');
       return 0;

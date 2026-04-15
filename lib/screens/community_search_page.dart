@@ -1,15 +1,39 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
+
 import '../models/post.dart';
+import '../services/drama_list_service.dart';
 import '../services/post_service.dart';
+import '../services/user_profile_service.dart';
+import '../services/watchlist_service.dart';
 import '../utils/format_utils.dart';
 import '../widgets/country_scope.dart';
+import '../widgets/lists_style_subpage_app_bar.dart';
+import '../widgets/optimized_network_image.dart';
+import '../widgets/review_arrow_tag_chip.dart';
+import 'drama_detail_page.dart';
 import 'post_detail_page.dart';
 
 /// 통합 검색 페이지 - 제목 / 내용 / 댓글 / 닉네임 검색
 class CommunitySearchPage extends StatefulWidget {
-  const CommunitySearchPage({super.key});
+  const CommunitySearchPage({
+    super.key,
+    this.initialQuery,
+    this.reviewDramaId,
+    this.reviewDramaPosterUrl,
+  });
+
+  /// 검색창에 미리 넣을 문자열(태그 탭 등).
+  final String? initialQuery;
+
+  /// 리뷰 글 태그 탭 시: 해당 리뷰의 드라마 ID(포스터 그리드만 표시).
+  final String? reviewDramaId;
+
+  /// [reviewDramaId] 썸네일 폴백(Firestore 스냅샷).
+  final String? reviewDramaPosterUrl;
 
   @override
   State<CommunitySearchPage> createState() => _CommunitySearchPageState();
@@ -30,7 +54,28 @@ class _CommunitySearchPageState extends State<CommunitySearchPage> {
   @override
   void initState() {
     super.initState();
-    _focusNode.requestFocus();
+    final seed = widget.initialQuery?.trim() ?? '';
+    if (_reviewTagDramaMode) {
+      if (seed.isNotEmpty) {
+        _controller.text = seed;
+        _query = seed;
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        _focusNode.unfocus();
+        await DramaListService.instance.loadFromAsset();
+      });
+    } else if (seed.isNotEmpty) {
+      _controller.text = seed;
+      _query = seed;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _focusNode.unfocus();
+        _fetchIfNeeded();
+      });
+    } else {
+      _focusNode.requestFocus();
+    }
   }
 
   @override
@@ -66,6 +111,9 @@ class _CommunitySearchPageState extends State<CommunitySearchPage> {
         if ((post.body ?? '').toLowerCase().contains(lower)) return true;
         if (post.author.toLowerCase().contains(lower)) return true;
         if (_anyCommentContains(post.commentsList, lower)) return true;
+        for (final t in post.tags) {
+          if (t.toLowerCase().contains(lower)) return true;
+        }
         return false;
       case _SearchFilter.title:
         return post.title.toLowerCase().contains(lower);
@@ -84,6 +132,48 @@ class _CommunitySearchPageState extends State<CommunitySearchPage> {
       if (_anyCommentContains(c.replies, q)) return true;
     }
     return false;
+  }
+
+  /// 리뷰에서 태그 탭: 태그 문자열 + 연결 드라마가 있을 때(포스터만).
+  bool get _reviewTagDramaMode {
+    final q = widget.initialQuery?.trim() ?? '';
+    final id = widget.reviewDramaId?.trim() ?? '';
+    return q.isNotEmpty && id.isNotEmpty;
+  }
+
+  String get _seedTag => (widget.initialQuery ?? '').trim();
+
+  Widget _buildSearchField(ColorScheme cs) {
+    return Container(
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      alignment: Alignment.center,
+      child: TextField(
+        controller: _controller,
+        focusNode: _focusNode,
+        onChanged: _onQueryChanged,
+        style: GoogleFonts.notoSansKr(fontSize: 15, color: cs.onSurface),
+        decoration: InputDecoration(
+          hintText: CountryScope.of(context).strings.get('searchCommunityHint'),
+          hintStyle: GoogleFonts.notoSansKr(fontSize: 14, color: cs.onSurfaceVariant),
+          prefixIcon: Icon(LucideIcons.search, size: 18, color: cs.onSurfaceVariant),
+          suffixIcon: _query.isNotEmpty
+              ? IconButton(
+                  icon: Icon(LucideIcons.x, size: 16, color: cs.onSurfaceVariant),
+                  onPressed: () {
+                    _controller.clear();
+                    _onQueryChanged('');
+                  },
+                )
+              : null,
+          border: InputBorder.none,
+          filled: false,
+          contentPadding: const EdgeInsets.symmetric(vertical: 10),
+        ),
+      ),
+    );
   }
 
   List<Post> get _results {
@@ -127,9 +217,37 @@ class _CommunitySearchPageState extends State<CommunitySearchPage> {
 
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
+    final bodyBg = theme.scaffoldBackgroundColor;
+
+    if (_reviewTagDramaMode) {
+      final headerBarBg = listsStyleSubpageHeaderBackground(theme);
+      final listAppBarOverlay = listsStyleSubpageSystemOverlay(theme, headerBarBg);
+      final tagChipMaxW =
+          (MediaQuery.sizeOf(context).width - 220).clamp(100.0, 280.0);
+
+      return AnnotatedRegion<SystemUiOverlayStyle>(
+        value: listAppBarOverlay,
+        child: Scaffold(
+          backgroundColor: bodyBg,
+          appBar: PreferredSize(
+            preferredSize: ListsStyleSubpageHeaderBar.preferredSizeOf(context),
+            child: ListsStyleSubpageHeaderBar(
+              title: _seedTag,
+              onBack: () => popListsStyleSubpage(context),
+              centerTitle: ReviewArrowTagChip(
+                label: _seedTag,
+                height: 24,
+                maxLabelWidth: tagChipMaxW,
+              ),
+            ),
+          ),
+          body: _buildReviewTagDramaGrid(),
+        ),
+      );
+    }
 
     return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
+      backgroundColor: bodyBg,
       appBar: AppBar(
         backgroundColor: theme.cardTheme.color ?? cs.surface,
         elevation: 0,
@@ -144,35 +262,9 @@ class _CommunitySearchPageState extends State<CommunitySearchPage> {
               onPressed: () => Navigator.pop(context),
             ),
             Expanded(
-              child: Container(
+              child: SizedBox(
                 height: 40,
-                decoration: BoxDecoration(
-                  color: cs.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: TextField(
-                  controller: _controller,
-                  focusNode: _focusNode,
-                  onChanged: _onQueryChanged,
-                  style: GoogleFonts.notoSansKr(fontSize: 15, color: cs.onSurface),
-                  decoration: InputDecoration(
-                    hintText: CountryScope.of(context).strings.get('searchCommunityHint'),
-                    hintStyle: GoogleFonts.notoSansKr(fontSize: 14, color: cs.onSurfaceVariant),
-                    prefixIcon: Icon(LucideIcons.search, size: 18, color: cs.onSurfaceVariant),
-                    suffixIcon: _query.isNotEmpty
-                        ? IconButton(
-                            icon: Icon(LucideIcons.x, size: 16, color: cs.onSurfaceVariant),
-                            onPressed: () {
-                              _controller.clear();
-                              _onQueryChanged('');
-                            },
-                          )
-                        : null,
-                    border: InputBorder.none,
-                    filled: false,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                  ),
-                ),
+                child: _buildSearchField(cs),
               ),
             ),
             const SizedBox(width: 12),
@@ -252,6 +344,175 @@ class _CommunitySearchPageState extends State<CommunitySearchPage> {
           },
         );
       },
+    );
+  }
+
+  bool _isFavoriteDrama(String dramaId) {
+    if (dramaId.trim().isEmpty) return false;
+    return UserProfileService.instance.favoritesNotifier.value
+        .any((e) => e.dramaId == dramaId);
+  }
+
+  Future<void> _openReviewTagDramaDetail(String dramaId, String? country) async {
+    await DramaListService.instance.loadFromAsset();
+    if (!mounted) return;
+    final item = WatchlistService.instance.resolveDramaItem(dramaId);
+    final detail = DramaListService.instance.buildDetailForItem(item, country);
+    if (!mounted) return;
+    await Navigator.push<void>(
+      context,
+      CupertinoPageRoute<void>(builder: (_) => DramaDetailPage(detail: detail)),
+    );
+  }
+
+  /// [WatchlistScreen] 그리드와 동일 비율·간격, 셀은 포스터만.
+  Widget _buildReviewTagDramaGrid() {
+    final theme = Theme.of(context);
+    final bodyBg = theme.scaffoldBackgroundColor;
+    final id = widget.reviewDramaId!.trim();
+    const padH = 15.0;
+    const gap = 7.0;
+    const aspect = 0.74;
+
+    return AnimatedBuilder(
+      animation: Listenable.merge([
+        DramaListService.instance.listNotifier,
+        UserProfileService.instance.favoritesNotifier,
+      ]),
+      builder: (context, _) {
+        final country = CountryScope.maybeOf(context)?.country ??
+            UserProfileService.instance.signupCountryNotifier.value;
+        final fromCatalog =
+            DramaListService.instance.getDisplayImageUrl(id, country);
+        final poster = (fromCatalog != null && fromCatalog.isNotEmpty)
+            ? fromCatalog
+            : (widget.reviewDramaPosterUrl?.trim().isNotEmpty == true
+                ? widget.reviewDramaPosterUrl!.trim()
+                : null);
+
+        return ColoredBox(
+          color: bodyBg,
+          child: GridView.builder(
+            padding: const EdgeInsets.fromLTRB(padH, 10, padH, 28),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 4,
+              childAspectRatio: aspect,
+              crossAxisSpacing: gap,
+              mainAxisSpacing: gap,
+            ),
+            itemCount: 1,
+            itemBuilder: (context, index) {
+              return _ReviewTagPosterCell(
+                key: ValueKey(id),
+                imageUrl: poster,
+                showFavoriteStar: _isFavoriteDrama(id),
+                onOpen: () => _openReviewTagDramaDetail(id, country),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// [WatchlistScreen] `_WatchlistPosterCell`과 동일 포스터만(제거 버튼 없음).
+class _ReviewTagPosterCell extends StatelessWidget {
+  const _ReviewTagPosterCell({
+    super.key,
+    required this.imageUrl,
+    required this.onOpen,
+    this.showFavoriteStar = false,
+  });
+
+  final String? imageUrl;
+  final VoidCallback onOpen;
+  final bool showFavoriteStar;
+
+  static const double _radius = 4.5;
+  static const double _borderWidth = 0.6;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final cs = theme.colorScheme;
+    final url = imageUrl;
+    final borderColor = isDark
+        ? const Color(0xFF4A5568)
+        : cs.outline.withValues(alpha: 0.38);
+
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(_radius),
+        border: Border.all(color: borderColor, width: _borderWidth),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          const ColoredBox(color: Color(0xFF1E252E)),
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: onOpen,
+              borderRadius: BorderRadius.circular(_radius),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (url != null &&
+                      (url.startsWith('http://') || url.startsWith('https://')))
+                    OptimizedNetworkImage(
+                      imageUrl: url,
+                      fit: BoxFit.cover,
+                      width: double.infinity,
+                      height: double.infinity,
+                    )
+                  else if (url != null && url.isNotEmpty)
+                    Image.asset(
+                      url,
+                      fit: BoxFit.cover,
+                      width: double.infinity,
+                      height: double.infinity,
+                      errorBuilder: (context, error, stackTrace) => Center(
+                        child: Icon(
+                          LucideIcons.tv,
+                          size: 20,
+                          color: Colors.white.withValues(alpha: 0.18),
+                        ),
+                      ),
+                    )
+                  else
+                    Center(
+                      child: Icon(
+                        LucideIcons.tv,
+                        size: 20,
+                        color: Colors.white.withValues(alpha: 0.18),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          if (showFavoriteStar)
+            Positioned(
+              top: 3,
+              left: 3,
+              child: Container(
+                padding: const EdgeInsets.all(1),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.45),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+                child: const Icon(
+                  Icons.star_rounded,
+                  size: 13,
+                  color: Color(0xFFFFB020),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

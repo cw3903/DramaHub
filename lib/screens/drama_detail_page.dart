@@ -27,6 +27,7 @@ import '../widgets/optimized_network_image.dart';
 import '../widgets/lists_style_subpage_app_bar.dart';
 import '../widgets/green_rating_stars.dart';
 import '../widgets/episode_review_panel.dart';
+import '../widgets/app_delete_confirm_dialog.dart';
 import '../widgets/user_profile_nav.dart';
 import 'drama_episode_reviews_screen.dart';
 import 'tag_drama_list_screen.dart';
@@ -2132,34 +2133,11 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
                           onDelete: isMine && (r.id != null && r.id!.isNotEmpty)
                               ? () async {
                                   final dlg = CountryScope.of(context).strings;
-                                  final ok = await showDialog<bool>(
-                                    context: context,
-                                    builder: (ctx) => AlertDialog(
-                                      title: Text(
-                                        dlg.get('delete'),
-                                        style: GoogleFonts.notoSansKr(),
-                                      ),
-                                      content: Text(
-                                        dlg.get('deleteReviewConfirm'),
-                                        style: GoogleFonts.notoSansKr(),
-                                      ),
-                                      actions: [
-                                        TextButton(
-                                          onPressed: () => Navigator.pop(ctx, false),
-                                          child: Text(
-                                            dlg.get('cancel'),
-                                            style: GoogleFonts.notoSansKr(),
-                                          ),
-                                        ),
-                                        TextButton(
-                                          onPressed: () => Navigator.pop(ctx, true),
-                                          child: Text(
-                                            dlg.get('ok'),
-                                            style: GoogleFonts.notoSansKr(),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
+                                  final ok = await showAppDeleteConfirmDialog(
+                                    context,
+                                    message: dlg.get('deleteReviewConfirm'),
+                                    cancelText: dlg.get('cancel'),
+                                    confirmText: dlg.get('delete'),
                                   );
                                   if (ok == true) {
                                     await ReviewService.instance.deleteById(r.id!);
@@ -2888,7 +2866,8 @@ class _ReviewCardState extends State<_ReviewCard> {
                             widget.strings.get('delete'),
                             style: GoogleFonts.notoSansKr(
                               fontSize: 12,
-                              color: Colors.red.shade700,
+                              fontWeight: FontWeight.w700,
+                              color: kAppDeleteActionColor,
                             ),
                           ),
                         ),

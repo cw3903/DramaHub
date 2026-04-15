@@ -33,8 +33,9 @@ const List<String> _kMonthNamesEn = [
   'December',
 ];
 
-class _MonthSection {
-  _MonthSection(this.year, this.month, WatchedDramaItem first)
+/// 다이어리 월별 그룹 — [groupDiaryByMonth] 결과.
+class DiaryMonthSection {
+  DiaryMonthSection(this.year, this.month, WatchedDramaItem first)
       : items = [first];
 
   final int year;
@@ -42,7 +43,7 @@ class _MonthSection {
   final List<WatchedDramaItem> items;
 }
 
-List<_MonthSection> _groupByMonth(
+List<DiaryMonthSection> groupDiaryByMonth(
   List<WatchedDramaItem> list,
   bool newestFirst,
 ) {
@@ -52,12 +53,12 @@ List<_MonthSection> _groupByMonth(
           ? b.watchedAt.compareTo(a.watchedAt)
           : a.watchedAt.compareTo(b.watchedAt),
     );
-  final groups = <_MonthSection>[];
+  final groups = <DiaryMonthSection>[];
   for (final item in sorted) {
     final y = item.watchedAt.year;
     final m = item.watchedAt.month;
     if (groups.isEmpty || groups.last.year != y || groups.last.month != m) {
-      groups.add(_MonthSection(y, m, item));
+      groups.add(DiaryMonthSection(y, m, item));
     } else {
       groups.last.items.add(item);
     }
@@ -65,7 +66,7 @@ List<_MonthSection> _groupByMonth(
   return groups;
 }
 
-String _monthHeaderLabel(String appCountry, int year, int month) {
+String diaryMonthHeaderLabel(String appCountry, int year, int month) {
   final mc = month.clamp(1, 12);
   switch (appCountry.toLowerCase()) {
     case 'kr':
@@ -390,7 +391,7 @@ class _DiaryScreenState extends State<DiaryScreen> {
 
     final country = CountryScope.maybeOf(context)?.country ??
         CountryService.instance.countryNotifier.value;
-    final groups = _groupByMonth(list, _newestFirst);
+    final groups = groupDiaryByMonth(list, _newestFirst);
     final scaffoldBg = Theme.of(context).scaffoldBackgroundColor;
     final headerBg = Color.lerp(
           cs.surfaceContainerHighest,
@@ -403,11 +404,11 @@ class _DiaryScreenState extends State<DiaryScreen> {
     final slivers = <Widget>[];
     for (var gi = 0; gi < groups.length; gi++) {
       final g = groups[gi];
-      final label = _monthHeaderLabel(appCountry, g.year, g.month);
+      final label = diaryMonthHeaderLabel(appCountry, g.year, g.month);
       slivers.add(
         SliverPersistentHeader(
           pinned: true,
-          delegate: _DiaryMonthHeaderDelegate(
+          delegate: DiaryMonthHeaderDelegate(
             label: label,
             background: headerBg,
             foreground: headerFg,
@@ -430,13 +431,15 @@ class _DiaryScreenState extends State<DiaryScreen> {
           ),
         );
         if (ii < g.items.length - 1) {
+          final divAlpha =
+              Theme.of(context).brightness == Brightness.dark ? 0.30 : 0.22;
           children.add(
             Divider(
               height: 1,
               thickness: 1,
               indent: 16,
               endIndent: 16,
-              color: cs.outline.withValues(alpha: 0.12),
+              color: cs.outline.withValues(alpha: divAlpha),
             ),
           );
         }
@@ -456,8 +459,8 @@ class _DiaryScreenState extends State<DiaryScreen> {
   }
 }
 
-class _DiaryMonthHeaderDelegate extends SliverPersistentHeaderDelegate {
-  _DiaryMonthHeaderDelegate({
+class DiaryMonthHeaderDelegate extends SliverPersistentHeaderDelegate {
+  DiaryMonthHeaderDelegate({
     required this.label,
     required this.background,
     required this.foreground,
@@ -500,7 +503,7 @@ class _DiaryMonthHeaderDelegate extends SliverPersistentHeaderDelegate {
   }
 
   @override
-  bool shouldRebuild(covariant _DiaryMonthHeaderDelegate oldDelegate) =>
+  bool shouldRebuild(covariant DiaryMonthHeaderDelegate oldDelegate) =>
       label != oldDelegate.label ||
       background != oldDelegate.background ||
       foreground != oldDelegate.foreground;

@@ -1,6 +1,7 @@
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../models/post.dart';
@@ -9,12 +10,86 @@ import '../screens/write_post_page.dart';
 import '../config/app_moderators.dart';
 import '../services/drama_list_service.dart';
 import '../services/post_service.dart';
+import '../services/auth_service.dart';
 import '../services/user_profile_service.dart';
 import 'country_scope.dart';
 import 'feed_review_star_row.dart';
 import 'optimized_network_image.dart';
+import 'app_delete_confirm_dialog.dart';
 import 'review_arrow_tag_chip.dart';
 import 'user_profile_nav.dart';
+
+/// 세로 히트만 넓히고 레이아웃 높이는 유지한다.
+class _ExpandVerticalHitTest extends SingleChildRenderObjectWidget {
+  const _ExpandVerticalHitTest({
+    required this.extraTop,
+    required this.extraBottom,
+    super.child,
+  });
+
+  final double extraTop;
+  final double extraBottom;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) {
+    return _RenderExpandVerticalHit(
+      extraTop: extraTop,
+      extraBottom: extraBottom,
+    );
+  }
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    covariant _RenderExpandVerticalHit renderObject,
+  ) {
+    renderObject
+      ..extraTop = extraTop
+      ..extraBottom = extraBottom;
+  }
+}
+
+class _RenderExpandVerticalHit extends RenderProxyBox {
+  _RenderExpandVerticalHit({
+    required double extraTop,
+    required double extraBottom,
+    RenderBox? child,
+  })  : _extraTop = extraTop,
+        _extraBottom = extraBottom,
+        super(child);
+
+  double _extraTop;
+  double _extraBottom;
+
+  double get extraTop => _extraTop;
+  set extraTop(double value) {
+    if (_extraTop == value) return;
+    _extraTop = value;
+  }
+
+  double get extraBottom => _extraBottom;
+  set extraBottom(double value) {
+    if (_extraBottom == value) return;
+    _extraBottom = value;
+  }
+
+  @override
+  bool hitTest(BoxHitTestResult result, {required Offset position}) {
+    final child = this.child;
+    if (child == null) return false;
+    final expanded = Rect.fromLTRB(
+      0.0,
+      -_extraTop,
+      size.width,
+      size.height + _extraBottom,
+    );
+    if (!expanded.contains(position)) return false;
+    return child.hitTest(result, position: position);
+  }
+}
+
+/// [ReviewArrowTagChip] `compact` 세로 높이와 동일 — 에디트/딜리트 줄 정렬용.
+const double _kLetterboxdCompactTagLineHeight = 19.0;
 
 /// DramaFeed Reviews 탭용 — 카드 없이 구분선 스타일 리스트 아이템
 class FeedReviewLetterboxdTile extends StatelessWidget {
@@ -39,6 +114,8 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
     this.currentUserAuthor,
     this.onPostUpdated,
     this.onPostDeleted,
+    /// 태그 칩 탭 시 (예: 통합 검색으로 이동).
+    this.onTagTap,
 
     /// null이면 22. 글 상세 DramaFeed에서 본문·댓글과 맞출 때 지정.
     this.authorAvatarSize,
@@ -53,10 +130,11 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
   final String? currentUserAuthor;
   final void Function(Post)? onPostUpdated;
   final void Function(Post)? onPostDeleted;
+  final ValueChanged<String>? onTagTap;
 
   final double? authorAvatarSize;
 
-  static const double _thumbW = 62;
+  static const double _thumbW = kFeedReviewRatingThumbWidth;
   static const double _thumbH = 88;
   static const double _thumbRadius = 4;
 
@@ -136,8 +214,18 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
   Widget _buildWithCatalog(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final s = CountryScope.of(context).strings;
+    final myUid = AuthService.instance.currentUser.value?.uid.trim();
+    final isMineByUid =
+        myUid != null &&
+        myUid.isNotEmpty &&
+        post.authorUid?.trim() == myUid;
+    final canonicalAuthor =
+        isMineByUid && currentUserAuthor != null
+            ? currentUserAuthor!
+            : post.author;
     final bool isMyReview =
-        currentUserAuthor != null && post.author == currentUserAuthor;
+        isMineByUid ||
+        (currentUserAuthor != null && post.author == currentUserAuthor);
     final thumb = post.dramaThumbnail?.trim();
     final hasHttpThumb = thumb != null && thumb.startsWith('http');
     final dramaTitle = _displayDramaTitle(context, post);
@@ -263,7 +351,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
         ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 120),
           child: Text(
-            _displayAuthor(post.author),
+            _displayAuthor(canonicalAuthor),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.end,
@@ -277,7 +365,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
         const SizedBox(width: 4),
         _LetterboxdAuthorAvatar(
           photoUrl: post.authorPhotoUrl,
-          author: post.author,
+          author: canonicalAuthor,
           authorUid: post.authorUid,
           colorIndex: post.authorAvatarColorIndex,
           size: authorAvatarSize ?? 22,
@@ -285,7 +373,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
       ],
     );
 
-    final navAuthor = _authorNavKey(post.author);
+    final navAuthor = _authorNavKey(canonicalAuthor);
     final authorRow = navAuthor.isEmpty
         ? authorRowCore
         : _TapBehindExpanded(
@@ -332,7 +420,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
       color: editLinkColor,
     );
 
-    /// 수정·삭제 (인라인 피드에서는 댓글 아이콘 오른쪽에 붙임)
+    /// 수정·삭제 — 인라인: 하트·댓글 행 바로 오른쪽 / 비인라인: 본문 아래 오른쪽
     Widget? ownerEditDeleteRow;
     if (showOwnerActions) {
       ownerEditDeleteRow = Row(
@@ -340,75 +428,71 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           if (showEditInRow)
-            _TapBehindGesture(
-              outsets: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              onTap: () async {
-                final updated = await Navigator.push<Post>(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => WritePostPage(
-                      initialPost: post,
-                      initialBoard: 'review',
+            _ExpandVerticalHitTest(
+              extraTop: 10,
+              extraBottom: 10,
+              child: InkWell(
+                onTap: () async {
+                  final updated = await Navigator.push<Post>(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => WritePostPage(
+                        initialPost: post,
+                        initialBoard: 'review',
+                      ),
                     ),
-                  ),
-                );
-                if (!context.mounted) return;
-                if (updated != null) onPostUpdated!(updated);
-              },
-              child: Text(s.get('edit'), style: linkStyle),
+                  );
+                  if (!context.mounted) return;
+                  if (updated != null) onPostUpdated!(updated);
+                },
+                borderRadius: BorderRadius.circular(6),
+                splashColor: _reviewTapSplash(cs),
+                highlightColor: _reviewTapHighlight(cs),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Text(s.get('edit'), style: linkStyle),
+                ),
+              ),
             ),
           if (showEditInRow && showDeleteInRow)
-            Text(
-              '·',
-              style: linkStyle.copyWith(
-                color: editLinkColor.withValues(alpha: 0.55),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 1),
+              child: Text(
+                '·',
+                style: linkStyle.copyWith(
+                  color: editLinkColor.withValues(alpha: 0.55),
+                ),
               ),
             ),
           if (showDeleteInRow)
-            _TapBehindGesture(
-              outsets: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              onTap: () async {
-                final confirmed = await showDialog<bool>(
-                  context: context,
-                  builder: (ctx) => AlertDialog(
-                    title: Text(
-                      s.get('delete'),
-                      style: GoogleFonts.notoSansKr(),
+            _ExpandVerticalHitTest(
+              extraTop: 10,
+              extraBottom: 10,
+              child: InkWell(
+                onTap: () async {
+                  final confirmed = await showAppDeleteConfirmDialog(
+                    context,
+                    message: s.get('deletePostConfirm'),
+                    cancelText: s.get('cancel'),
+                    confirmText: s.get('delete'),
+                  );
+                  if (confirmed != true || !context.mounted) return;
+                  final ok = await PostService.instance.deletePost(post.id);
+                  if (!context.mounted) return;
+                  if (ok) onPostDeleted!(post);
+                },
+                borderRadius: BorderRadius.circular(6),
+                splashColor: _reviewTapSplash(cs),
+                highlightColor: _reviewTapHighlight(cs),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Text(
+                    s.get('delete'),
+                    style: linkStyle.copyWith(
+                      color: kAppDeleteActionColor,
+                      fontWeight: FontWeight.w700,
                     ),
-                    content: Text(
-                      s.get('deletePostConfirm'),
-                      style: GoogleFonts.notoSansKr(),
-                    ),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(ctx, false),
-                        child: Text(
-                          s.get('cancel'),
-                          style: GoogleFonts.notoSansKr(),
-                        ),
-                      ),
-                      TextButton(
-                        onPressed: () => Navigator.pop(ctx, true),
-                        child: Text(
-                          s.get('delete'),
-                          style: GoogleFonts.notoSansKr(
-                            color: Theme.of(ctx).colorScheme.error,
-                          ),
-                        ),
-                      ),
-                    ],
                   ),
-                );
-                if (confirmed != true || !context.mounted) return;
-                final ok = await PostService.instance.deletePost(post.id);
-                if (!context.mounted) return;
-                if (ok) onPostDeleted!(post);
-              },
-              child: Text(
-                s.get('delete'),
-                style: linkStyle.copyWith(
-                  color: Colors.redAccent,
-                  fontWeight: FontWeight.w700,
                 ),
               ),
             ),
@@ -416,7 +500,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
       );
     }
 
-    // 제목·닉네임·프로필은 한 줄에서 세로 중앙 정렬. 수정·삭제는 그 아래 오른쪽.
+    // 제목(좌) + 닉네임(우). 수정·삭제는 하트·댓글 행 오른쪽(인라인) 또는 본문 아래.
     final Widget headerRow = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
@@ -434,14 +518,6 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
             _NoHighlight(child: authorRow),
           ],
         ),
-        if (ownerEditDeleteRow != null && thumbTrailingActions == null)
-          Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: _NoHighlight(child: ownerEditDeleteRow!),
-            ),
-          ),
       ],
     );
 
@@ -473,41 +549,77 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
                 ),
                 Align(
                   alignment: Alignment.bottomLeft,
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      _NoHighlight(child: thumbTrailingActions!),
-                      if (post.tags.isNotEmpty) ...[
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            child: Row(
-                              children: [
-                                for (var i = 0; i < post.tags.length; i++) ...[
-                                  if (i > 0) const SizedBox(width: 6),
-                                  ReviewArrowTagChip(
-                                    label: post.tags[i],
-                                    compact: true,
-                                    maxLabelWidth: 100,
-                                  ),
-                                ],
-                              ],
+                  child: SizedBox(
+                    height: _kLetterboxdCompactTagLineHeight,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        _NoHighlight(child: thumbTrailingActions!),
+                        if (ownerEditDeleteRow != null) ...[
+                          const SizedBox(width: 6),
+                          _NoHighlight(
+                            child: Material(
+                              type: MaterialType.transparency,
+                              child: ownerEditDeleteRow,
                             ),
                           ),
-                        ),
+                        ],
+                        if (post.tags.isNotEmpty) ...[
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: Row(
+                                children: [
+                                  for (var i = 0;
+                                      i < post.tags.length;
+                                      i++) ...[
+                                    if (i > 0) const SizedBox(width: 6),
+                                    _NoHighlight(
+                                      child: ReviewArrowTagChip(
+                                        label: post.tags[i],
+                                        compact: true,
+                                        maxLabelWidth: 100,
+                                        onTap: onTagTap != null
+                                            ? () =>
+                                                onTagTap!(post.tags[i].trim())
+                                            : null,
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
                       ],
-                      if (ownerEditDeleteRow != null) ...[
-                        const SizedBox(width: 8),
-                        _NoHighlight(child: ownerEditDeleteRow!),
-                      ],
-                    ],
+                    ),
                   ),
                 ),
               ],
             ),
           )
-        : bodyForTap;
+        : (ownerEditDeleteRow != null
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    bodyForTap,
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: _NoHighlight(
+                          child: Material(
+                            type: MaterialType.transparency,
+                            child: ownerEditDeleteRow,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                )
+              : bodyForTap);
 
     Widget content = Padding(
       padding: const EdgeInsets.fromLTRB(
@@ -556,42 +668,6 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: InkWell(onTap: onTap, child: content),
-    );
-  }
-}
-
-/// 스플래시 없이 터치만 확장 (수정·삭제 링크 등).
-class _TapBehindGesture extends StatelessWidget {
-  const _TapBehindGesture({
-    required this.child,
-    required this.onTap,
-    this.outsets = const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-  });
-
-  final Widget child;
-  final VoidCallback onTap;
-  final EdgeInsets outsets;
-
-  @override
-  Widget build(BuildContext context) {
-    return Stack(
-      clipBehavior: Clip.none,
-      fit: StackFit.passthrough,
-      alignment: Alignment.center,
-      children: [
-        Positioned(
-          left: -outsets.left,
-          top: -outsets.top,
-          right: -outsets.right,
-          bottom: -outsets.bottom,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: onTap,
-            child: const SizedBox.expand(),
-          ),
-        ),
-        IgnorePointer(child: child),
-      ],
     );
   }
 }

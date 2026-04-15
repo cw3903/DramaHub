@@ -25,11 +25,18 @@ service cloud.firestore {
     match /users/{uid}/saved/{docId} {
       allow read, write: if request.auth != null && request.auth.uid == uid;
     }
+    // 다이어리·커스텀 리스트·워치리스트: 공개 프로필이므로 누구나 읽기 가능, 본인만 쓰기.
     match /users/{uid}/watch_history/{docId} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
+      allow read: if true;
+      allow write: if request.auth != null && request.auth.uid == uid;
     }
     match /users/{uid}/custom_lists/{listId} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
+      allow read: if true;
+      allow write: if request.auth != null && request.auth.uid == uid;
+    }
+    match /users/{uid}/watchlist/{docId} {
+      allow read: if true;
+      allow write: if request.auth != null && request.auth.uid == uid;
     }
     match /users/{uid}/conversations/{docId} {
       allow read, write: if request.auth != null && request.auth.uid == uid;

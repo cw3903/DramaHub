@@ -10,6 +10,7 @@ import '../services/user_profile_service.dart';
 import '../theme/app_theme.dart';
 import 'optimized_network_image.dart';
 import 'user_profile_nav.dart';
+import 'app_delete_confirm_dialog.dart';
 
 /// 각 화 별점 없을 때 별·숫자 색 (회색으로 통일)
 Color episodeNoRatingColor(BuildContext context) {
@@ -174,6 +175,7 @@ class _EpisodeReviewPanelState extends State<EpisodeReviewPanel> {
                               item: r,
                               dramaId: widget.dramaId,
                               episodeNumber: widget.episodeNumber,
+                              strings: widget.strings,
                               onEdit: (rev) {
                                 setState(() {
                                   _editingReviewId = rev.id;
@@ -264,6 +266,7 @@ class EpisodeReviewCard extends StatelessWidget {
     required this.item,
     required this.dramaId,
     required this.episodeNumber,
+    required this.strings,
     required this.onEdit,
     required this.onDelete,
   });
@@ -271,6 +274,7 @@ class EpisodeReviewCard extends StatelessWidget {
   final EpisodeReviewItem item;
   final String dramaId;
   final int episodeNumber;
+  final dynamic strings;
   final ValueChanged<EpisodeReviewItem> onEdit;
   final ValueChanged<String> onDelete;
 
@@ -371,22 +375,11 @@ class EpisodeReviewCard extends StatelessWidget {
                     ),
                     TextButton(
                       onPressed: () async {
-                        final ok = await showDialog<bool>(
-                          context: context,
-                          builder: (ctx) => AlertDialog(
-                            title: Text('삭제', style: GoogleFonts.notoSansKr()),
-                            content: Text('이 댓글을 삭제할까요?', style: GoogleFonts.notoSansKr()),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(ctx, false),
-                                child: Text('취소', style: GoogleFonts.notoSansKr()),
-                              ),
-                              TextButton(
-                                onPressed: () => Navigator.pop(ctx, true),
-                                child: Text('삭제', style: GoogleFonts.notoSansKr(color: cs.error)),
-                              ),
-                            ],
-                          ),
+                        final ok = await showAppDeleteConfirmDialog(
+                          context,
+                          message: strings.get('deletePostConfirm'),
+                          cancelText: strings.get('cancel'),
+                          confirmText: strings.get('delete'),
                         );
                         if (ok == true) onDelete(item.id);
                       },
@@ -396,8 +389,12 @@ class EpisodeReviewCard extends StatelessWidget {
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
                       child: Text(
-                        '삭제',
-                        style: GoogleFonts.notoSansKr(fontSize: 12, color: cs.error),
+                        strings.get('delete'),
+                        style: GoogleFonts.notoSansKr(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: kAppDeleteActionColor,
+                        ),
                       ),
                     ),
                   ],

@@ -27,6 +27,8 @@ import '../theme/app_theme.dart';
 import 'follow_screen.dart';
 import 'profile_photo_preview_page.dart';
 import 'lists_screen.dart';
+import '../widgets/lists_style_subpage_app_bar.dart';
+import '../widgets/app_delete_confirm_dialog.dart';
 import 'watchlist_screen.dart';
 import 'language_select_screen.dart';
 import 'user_posts_screen.dart';
@@ -34,6 +36,7 @@ import 'user_public_reviews_screen.dart';
 import 'my_reviews_screen.dart';
 import '../models/drama.dart';
 import '../models/post.dart';
+import '../models/profile_stat_row_data.dart';
 import '../models/profile_favorite.dart';
 import '../models/profile_rating_histogram.dart';
 import 'drama_detail_page.dart';
@@ -42,6 +45,10 @@ import 'drama_search_screen.dart';
 import 'diary_screen.dart';
 import 'favorite_title_activity_screen.dart';
 import 'likes_screen.dart';
+import 'user_public_diary_screen.dart';
+import 'user_public_lists_screen.dart';
+import 'user_public_watchlist_screen.dart';
+import 'user_public_likes_screen.dart';
 import '../widgets/optimized_network_image.dart';
 import '../services/country_service.dart';
 import '../services/drama_list_service.dart';
@@ -168,6 +175,8 @@ class _ProfileLinksMenu extends StatefulWidget {
     this.menuListsCount,
     this.menuWatchlistCount,
     this.menuLikesCount,
+    this.viewedUid,
+    this.ownerDisplayName,
   });
 
   final ColorScheme cs;
@@ -181,6 +190,10 @@ class _ProfileLinksMenu extends StatefulWidget {
   final int? menuWatchlistCount;
   final int? menuLikesCount;
 
+  /// 타인 프로필일 때 설정. null이면 본인 화면으로 이동.
+  final String? viewedUid;
+  final String? ownerDisplayName;
+
   @override
   State<_ProfileLinksMenu> createState() => _ProfileLinksMenuState();
 }
@@ -193,8 +206,12 @@ class _ProfileLinksMenuState extends State<_ProfileLinksMenu> {
     super.initState();
     _profileStatsRefreshNotifier.addListener(_onLikesRefreshSignal);
     AuthService.instance.currentUser.addListener(_onLikesRefreshSignal);
-    WatchHistoryService.instance.loadIfNeeded();
-    CustomDramaListService.instance.loadIfNeeded();
+    // 다른 유저 프로필에서는 현재 사용자 서비스 로드 불필요
+    if (widget.viewedUid == null) {
+      WatchHistoryService.instance.loadIfNeeded();
+      CustomDramaListService.instance.loadIfNeeded();
+      WatchlistService.instance.loadIfNeeded();
+    }
     if (widget.menuLikesCount != null) {
       _likesCount = widget.menuLikesCount!;
     } else {
@@ -260,6 +277,11 @@ class _ProfileLinksMenuState extends State<_ProfileLinksMenu> {
             w.menuListsCount ??
             CustomDramaListService.instance.listsNotifier.value.length;
 
+        final viewedUid = w.viewedUid;
+        final ownerName = w.ownerDisplayName;
+        final isOtherUser =
+            viewedUid != null && viewedUid.trim().isNotEmpty;
+
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -269,10 +291,22 @@ class _ProfileLinksMenuState extends State<_ProfileLinksMenu> {
               label: s.get('diary'),
               trailingCount: diaryCount,
               onTap: () {
-                Navigator.push(
-                  context,
-                  CupertinoPageRoute(builder: (_) => const DiaryScreen()),
-                );
+                if (isOtherUser) {
+                  Navigator.push(
+                    context,
+                    CupertinoPageRoute(
+                      builder: (_) => UserPublicDiaryScreen(
+                        uid: viewedUid,
+                        ownerDisplayName: ownerName,
+                      ),
+                    ),
+                  );
+                } else {
+                  Navigator.push(
+                    context,
+                    CupertinoPageRoute(builder: (_) => const DiaryScreen()),
+                  );
+                }
               },
               color: cs,
             ),
@@ -282,10 +316,22 @@ class _ProfileLinksMenuState extends State<_ProfileLinksMenu> {
               label: s.get('tabLists'),
               trailingCount: listsCount,
               onTap: () {
-                Navigator.push(
-                  context,
-                  CupertinoPageRoute(builder: (_) => const ListsScreen()),
-                );
+                if (isOtherUser) {
+                  Navigator.push(
+                    context,
+                    CupertinoPageRoute(
+                      builder: (_) => UserPublicListsScreen(
+                        uid: viewedUid,
+                        ownerDisplayName: ownerName,
+                      ),
+                    ),
+                  );
+                } else {
+                  Navigator.push(
+                    context,
+                    CupertinoPageRoute(builder: (_) => const ListsScreen()),
+                  );
+                }
               },
               color: cs,
             ),
@@ -295,10 +341,23 @@ class _ProfileLinksMenuState extends State<_ProfileLinksMenu> {
               label: s.get('tabWatchlist'),
               trailingCount: watchlistCount,
               onTap: () {
-                Navigator.push(
-                  context,
-                  CupertinoPageRoute(builder: (_) => const WatchlistScreen()),
-                );
+                if (isOtherUser) {
+                  Navigator.push(
+                    context,
+                    CupertinoPageRoute(
+                      builder: (_) => UserPublicWatchlistScreen(
+                        uid: viewedUid,
+                        ownerDisplayName: ownerName,
+                      ),
+                    ),
+                  );
+                } else {
+                  Navigator.push(
+                    context,
+                    CupertinoPageRoute(
+                        builder: (_) => const WatchlistScreen()),
+                  );
+                }
               },
               color: cs,
             ),
@@ -308,10 +367,22 @@ class _ProfileLinksMenuState extends State<_ProfileLinksMenu> {
               label: s.get('likes'),
               trailingCount: w.menuLikesCount ?? _likesCount,
               onTap: () {
-                Navigator.push(
-                  context,
-                  CupertinoPageRoute(builder: (_) => const LikesScreen()),
-                );
+                if (isOtherUser) {
+                  Navigator.push(
+                    context,
+                    CupertinoPageRoute(
+                      builder: (_) => UserPublicLikesScreen(
+                        uid: viewedUid,
+                        ownerDisplayName: ownerName,
+                      ),
+                    ),
+                  );
+                } else {
+                  Navigator.push(
+                    context,
+                    CupertinoPageRoute(builder: (_) => const LikesScreen()),
+                  );
+                }
               },
               color: cs,
             ),
@@ -422,14 +493,6 @@ void _showThemeSheet(BuildContext context, dynamic s) {
 
 // ─── 내가 쓴 글 / 댓글 / 팔로우 카드 ────────────────────────────────────────
 // FutureBuilder 를 StatefulWidget 내부에서 한 번만 생성해 캐시 → 탭 이동 시 재로딩 없음.
-typedef _PostCommentData = ({
-  String postAuthor,
-  String commentAuthor,
-  int postCount,
-  int commentCount,
-  int reviewCount,
-  int? followCountOverride,
-});
 
 class _ProfileStatRow extends StatefulWidget {
   const _ProfileStatRow({
@@ -437,6 +500,7 @@ class _ProfileStatRow extends StatefulWidget {
     required this.strings,
     this.statsForUid,
     this.statsDisplayNickname,
+    this.reviewCountOverride,
   });
 
   final ColorScheme cs;
@@ -446,12 +510,15 @@ class _ProfileStatRow extends StatefulWidget {
   final String? statsForUid;
   final String? statsDisplayNickname;
 
+  /// 번들에서 이미 가져온 리뷰 수 — 지정 시 추가 Firestore 호출 생략.
+  final int? reviewCountOverride;
+
   @override
   State<_ProfileStatRow> createState() => _ProfileStatRowState();
 }
 
 class _ProfileStatRowState extends State<_ProfileStatRow> {
-  late Future<_PostCommentData> _statsFuture;
+  late Future<ProfileStatRowData> _statsFuture;
 
   @override
   void initState() {
@@ -470,42 +537,84 @@ class _ProfileStatRowState extends State<_ProfileStatRow> {
     if (mounted) setState(() => _statsFuture = _load());
   }
 
-  Future<_PostCommentData> _load() async {
+  Future<ProfileStatRowData> _load() async {
     final w = widget;
-    if (w.statsForUid != null &&
-        w.statsForUid!.isNotEmpty &&
-        w.statsDisplayNickname != null &&
-        w.statsDisplayNickname!.trim().isNotEmpty) {
-      final nick = w.statsDisplayNickname!.trim();
-      final postAuthor = 'u/$nick';
-      final posts = await PostService.instance.getPostsByAuthor(postAuthor);
-      final comments = await PostService.instance.getCommentsByAuthor(nick);
-      final reviews = await ReviewService.instance.fetchReviewsForUserUid(
-        w.statsForUid!,
-      );
-      final fc = await FollowService.instance.getFollowingCountOnce(
-        w.statsForUid!,
-      );
-      return (
+    final statsUid = w.statsForUid?.trim();
+    if (statsUid != null && statsUid.isNotEmpty) {
+      final nick = w.statsDisplayNickname?.trim() ?? '';
+
+      // posts + followCount + (review if not overridden) 병렬 실행
+      // posts + followCount + (review if not overridden) 병렬 실행
+      final postsF = PostService.instance.getPostsByAuthorUid(statsUid);
+      final commentsF = PostService.instance.getCommentsByAuthorUid(statsUid);
+      final fcF = FollowService.instance.getFollowingCountOnce(statsUid);
+      final reviewsF = w.reviewCountOverride == null
+          ? ReviewService.instance.fetchReviewsForUserUid(statsUid)
+          : Future.value(<MyReviewItem>[]);
+
+      final parallel = await Future.wait([postsF, commentsF, fcF, reviewsF]);
+
+      final posts = parallel[0] as List<Post>;
+      var comments = parallel[1] as List<({Post post, PostComment comment})>;
+      final fc = parallel[2] as int;
+      final reviews = parallel[3] as List<MyReviewItem>;
+
+      // 댓글이 없고 닉네임 기반 fallback 필요 시 추가 조회
+      if (comments.isEmpty && nick.isNotEmpty && nick != 'Member') {
+        comments = await PostService.instance.getCommentsByAuthor(nick);
+      }
+
+      String postAuthor;
+      String commentAuthor;
+      if (posts.isNotEmpty) {
+        postAuthor = posts.first.author.trim();
+        commentAuthor = postAuthor.startsWith('u/')
+            ? postAuthor.substring(2)
+            : postAuthor;
+      } else if (nick.isNotEmpty && nick != 'Member') {
+        postAuthor = 'u/$nick';
+        commentAuthor = nick;
+      } else {
+        postAuthor = 'u/user';
+        commentAuthor = nick.isNotEmpty ? nick : 'user';
+      }
+
+      return ProfileStatRowData(
         postAuthor: postAuthor,
-        commentAuthor: nick,
+        commentAuthor: commentAuthor,
         postCount: posts.length,
         commentCount: comments.length,
-        reviewCount: reviews.length,
+        reviewCount: w.reviewCountOverride ?? reviews.length,
         followCountOverride: fc,
+        viewAuthorUid: statsUid,
+        posts: posts,
+        commentItems: comments,
       );
     }
     final base = await UserProfileService.instance.getAuthorBaseName();
     final postAuthor = await UserProfileService.instance.getAuthorForPost();
-    final posts = await PostService.instance.getPostsByAuthor(postAuthor);
-    final comments = await PostService.instance.getCommentsByAuthor(base);
-    return (
+    final meUid = AuthService.instance.currentUser.value?.uid?.trim();
+
+    final postsF = (meUid != null && meUid.isNotEmpty)
+        ? PostService.instance.getPostsByAuthorUid(meUid)
+        : PostService.instance.getPostsByAuthor(postAuthor);
+    final commentsF = (meUid != null && meUid.isNotEmpty)
+        ? PostService.instance.getCommentsByAuthorUid(meUid)
+        : PostService.instance.getCommentsByAuthor(base);
+
+    final results = await Future.wait([postsF, commentsF]);
+    final posts = results[0] as List<Post>;
+    final comments = results[1] as List<({Post post, PostComment comment})>;
+    return ProfileStatRowData(
       postAuthor: postAuthor,
       commentAuthor: base,
       postCount: posts.length,
       commentCount: comments.length,
       reviewCount: ReviewService.instance.listNotifier.value.length,
       followCountOverride: null,
+      viewAuthorUid: meUid,
+      posts: posts,
+      commentItems: comments,
     );
   }
 
@@ -519,7 +628,7 @@ class _ProfileStatRowState extends State<_ProfileStatRow> {
         // ── Reviews ──
         Expanded(
           child: w.statsForUid != null
-              ? FutureBuilder<_PostCommentData>(
+              ? FutureBuilder<ProfileStatRowData>(
                   future: _statsFuture,
                   builder: (context, snap) {
                     final reviewCount = snap.data?.reviewCount ?? 0;
@@ -571,22 +680,35 @@ class _ProfileStatRowState extends State<_ProfileStatRow> {
         Container(width: 1, height: 28, color: cs.outline.withOpacity(0.4)),
         // ── Posts (글 + 댓글 탭) ──
         Expanded(
-          child: FutureBuilder<_PostCommentData>(
+          child: FutureBuilder<ProfileStatRowData>(
             future: _statsFuture,
             builder: (context, snap) {
               final postCount = snap.data?.postCount ?? 0;
               final postAuthor = snap.data?.postAuthor ?? 'u/익명';
+              final viewUid = snap.data?.viewAuthorUid;
               return _StatCard(
                 icon: LucideIcons.file_text,
                 label: s.get('userPostsTabPosts'),
                 count: postCount,
                 loading: snap.connectionState == ConnectionState.waiting,
-                onTap: () => Navigator.push(
-                  context,
-                  CupertinoPageRoute(
-                    builder: (_) => UserPostsScreen(authorName: postAuthor),
-                  ),
-                ),
+                onTap: () {
+                  final nick = snap.data?.commentAuthor ?? '';
+                  final nameForScreen =
+                      nick.trim().isNotEmpty ? nick.trim() : postAuthor;
+                  final effectiveUid =
+                      viewUid ?? AuthService.instance.currentUser.value?.uid;
+                  Navigator.push(
+                    context,
+                    CupertinoPageRoute(
+                      builder: (_) => UserPostsScreen(
+                        authorName: nameForScreen,
+                        authorUid: effectiveUid,
+                        initialPosts: snap.data?.posts,
+                        initialCommentItems: snap.data?.commentItems,
+                      ),
+                    ),
+                  );
+                },
                 isLight: true,
               );
             },
@@ -595,7 +717,7 @@ class _ProfileStatRowState extends State<_ProfileStatRow> {
         Container(width: 1, height: 28, color: cs.outline.withOpacity(0.4)),
         // ── Follow (실시간 notifier) ──
         Expanded(
-          child: FutureBuilder<_PostCommentData>(
+          child: FutureBuilder<ProfileStatRowData>(
             future: _statsFuture,
             builder: (context, snap) {
               final w = widget;
@@ -702,9 +824,9 @@ class ProfileScreen extends StatelessWidget {
   }
 }
 
-class _OtherProfileBundle {
-  _OtherProfileBundle({
-    required this.profile,
+/// 2단계 로딩용 보조 데이터 (프로필 헤더 표시 후 비동기 로드).
+class _OtherProfileExtras {
+  const _OtherProfileExtras({
     required this.reviews,
     required this.likesCount,
     required this.listsCount,
@@ -712,7 +834,6 @@ class _OtherProfileBundle {
     required this.diaryCount,
   });
 
-  final PublicUserProfile profile;
   final List<MyReviewItem> reviews;
   final int likesCount;
   final int listsCount;
@@ -721,6 +842,8 @@ class _OtherProfileBundle {
 }
 
 /// 푸시된 타 유저 공개 프로필 (Theme·Language·로그아웃 없음).
+/// 프로필 헤더(아바타·닉네임·즐겨찾기)는 즉시 표시하고,
+/// 통계·리뷰·카운트는 비동기로 로드 → 점진적 렌더링.
 class _OtherUserProfileScreen extends StatefulWidget {
   const _OtherUserProfileScreen({super.key, required this.uid});
 
@@ -732,37 +855,68 @@ class _OtherUserProfileScreen extends StatefulWidget {
 }
 
 class _OtherUserProfileScreenState extends State<_OtherUserProfileScreen> {
-  late Future<_OtherProfileBundle?> _future;
+  // 1단계: 프로필 문서만 (캐시 있으면 즉시)
+  Future<PublicUserProfile?>? _profileFuture;
+  // 2단계: 리뷰·좋아요·카운트 (프로필과 동시에 시작)
+  Future<_OtherProfileExtras>? _extrasFuture;
+
+  PreferredSizeWidget _listsStyleAppBar(BuildContext context) {
+    return PreferredSize(
+      preferredSize: ListsStyleSubpageHeaderBar.preferredSizeOf(context),
+      child: ListsStyleSubpageHeaderBar(
+        title: '',
+        onBack: () => popListsStyleSubpage(context),
+      ),
+    );
+  }
+
+  Widget _listsStyleScaffold({
+    required BuildContext context,
+    required ThemeData theme,
+    required PreferredSizeWidget appBar,
+    required Widget body,
+  }) {
+    final headerBg = listsStyleSubpageHeaderBackground(theme);
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: listsStyleSubpageSystemOverlay(theme, headerBg),
+      child: Scaffold(
+        backgroundColor: theme.scaffoldBackgroundColor,
+        appBar: appBar,
+        body: body,
+      ),
+    );
+  }
 
   @override
   void initState() {
     super.initState();
-    _future = _load();
+    _startLoad();
   }
 
-  Future<_OtherProfileBundle?> _load() async {
+  void _startLoad({bool forceRefresh = false}) {
     final uid = widget.uid;
-    final profile = await UserProfileService.instance.fetchPublicUserProfile(
+    // 프로필과 extras 동시에 시작 — 둘 다 독립적
+    _profileFuture = UserProfileService.instance.fetchPublicUserProfile(
       uid,
+      forceRefresh: forceRefresh,
     );
-    if (profile == null) return null;
-    final reviews = await ReviewService.instance.fetchReviewsForUserUid(uid);
-    final likes = await PostService.instance.getPostsLikedByUid(uid);
-    final listsCount = await CustomDramaListService.instance.countListsForUid(
-      uid,
-    );
-    final watchlistCount = await WatchlistService.instance.countWatchlistForUid(
-      uid,
-    );
-    final diaryCount = await WatchHistoryService.instance
-        .countWatchHistoryForUid(uid);
-    return _OtherProfileBundle(
-      profile: profile,
-      reviews: reviews,
-      likesCount: likes.length,
-      listsCount: listsCount,
-      watchlistCount: watchlistCount,
-      diaryCount: diaryCount,
+    _extrasFuture = _loadExtras(uid);
+  }
+
+  Future<_OtherProfileExtras> _loadExtras(String uid) async {
+    final results = await Future.wait([
+      ReviewService.instance.fetchReviewsForUserUid(uid),
+      PostService.instance.getPostsLikedByUid(uid),
+      CustomDramaListService.instance.countListsForUid(uid),
+      WatchlistService.instance.countWatchlistForUid(uid),
+      WatchHistoryService.instance.countWatchHistoryForUid(uid),
+    ]);
+    return _OtherProfileExtras(
+      reviews: results[0] as List<MyReviewItem>,
+      likesCount: (results[1] as List<Post>).length,
+      listsCount: results[2] as int,
+      watchlistCount: results[3] as int,
+      diaryCount: results[4] as int,
     );
   }
 
@@ -771,29 +925,28 @@ class _OtherUserProfileScreenState extends State<_OtherUserProfileScreen> {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final s = CountryScope.of(context).strings;
-    return FutureBuilder<_OtherProfileBundle?>(
-      future: _future,
-      builder: (context, snap) {
-        if (snap.connectionState == ConnectionState.waiting) {
-          return Scaffold(
-            appBar: AppBar(
-              leading: IconButton(
-                icon: const Icon(Icons.arrow_back),
-                onPressed: () => Navigator.maybePop(context),
-              ),
-            ),
+    if (_profileFuture == null || _extrasFuture == null) {
+      _startLoad();
+    }
+
+    // 1단계: 프로필만 기다림 (캐시 있으면 즉시 완료)
+    return FutureBuilder<PublicUserProfile?>(
+      future: _profileFuture,
+      builder: (context, profileSnap) {
+        if (profileSnap.connectionState == ConnectionState.waiting) {
+          return _listsStyleScaffold(
+            context: context,
+            theme: theme,
+            appBar: _listsStyleAppBar(context),
             body: const Center(child: CircularProgressIndicator()),
           );
         }
-        final b = snap.data;
-        if (b == null) {
-          return Scaffold(
-            appBar: AppBar(
-              leading: IconButton(
-                icon: const Icon(Icons.arrow_back),
-                onPressed: () => Navigator.maybePop(context),
-              ),
-            ),
+        final p = profileSnap.data;
+        if (p == null) {
+          return _listsStyleScaffold(
+            context: context,
+            theme: theme,
+            appBar: _listsStyleAppBar(context),
             body: Center(
               child: Padding(
                 padding: const EdgeInsets.all(24),
@@ -806,164 +959,165 @@ class _OtherUserProfileScreenState extends State<_OtherUserProfileScreen> {
             ),
           );
         }
-        final p = b.profile;
         final hasPhoto =
             p.profileImageUrl != null && p.profileImageUrl!.isNotEmpty;
-        return Scaffold(
-          backgroundColor: theme.scaffoldBackgroundColor,
-          appBar: AppBar(
-            leading: IconButton(
-              icon: const Icon(Icons.arrow_back),
-              onPressed: () => Navigator.maybePop(context),
-            ),
-            title: Text(
-              p.displayNickname,
-              overflow: TextOverflow.ellipsis,
-              style: _profileText(cs, size: 17, weight: FontWeight.w600),
-            ),
-          ),
+
+        // 2단계: extras 비동기 — 아직 로딩 중이어도 헤더는 보여줌
+        return _listsStyleScaffold(
+          context: context,
+          theme: theme,
+          appBar: _listsStyleAppBar(context),
           body: SafeArea(
             child: RefreshIndicator(
               onRefresh: () async {
-                setState(() => _future = _load());
-                await _future;
+                setState(() => _startLoad(forceRefresh: true));
+                await Future.wait([_profileFuture!, _extrasFuture!]);
               },
-              child: CustomScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                slivers: [
-                  SliverToBoxAdapter(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(
-                        20,
-                        20,
-                        20,
-                        _kProfileSectionBleedPadV,
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Align(
-                            alignment: Alignment.center,
-                            child: Container(
-                              width: 80,
-                              height: 80,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: hasPhoto
-                                    ? cs.surfaceContainerHighest
-                                    : (p.avatarColorIndex != null
-                                          ? UserProfileService.bgColorFromIndex(
-                                              p.avatarColorIndex!,
-                                            )
-                                          : cs.surfaceContainerHighest),
-                                border: Border.all(
-                                  color: cs.outline.withOpacity(0.4),
-                                  width: 2,
-                                ),
-                                image: hasPhoto
-                                    ? DecorationImage(
-                                        image: CachedNetworkImageProvider(
-                                          p.profileImageUrl!,
-                                        ),
-                                        fit: BoxFit.cover,
-                                      )
-                                    : null,
-                              ),
-                              child: hasPhoto
-                                  ? null
-                                  : Icon(
-                                      Icons.person,
-                                      size: 44,
-                                      color: p.avatarColorIndex != null
-                                          ? UserProfileService.iconColorFromIndex(
-                                              p.avatarColorIndex!,
-                                            )
-                                          : cs.onSurfaceVariant.withOpacity(
-                                              0.6,
-                                            ),
+              child: FutureBuilder<_OtherProfileExtras>(
+                future: _extrasFuture,
+                builder: (context, extrasSnap) {
+                  final extras = extrasSnap.data;
+                  return CustomScrollView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    slivers: [
+                      SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(
+                            20,
+                            20,
+                            20,
+                            _kProfileSectionBleedPadV,
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Align(
+                                alignment: Alignment.center,
+                                child: Container(
+                                  width: 80,
+                                  height: 80,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: hasPhoto
+                                        ? cs.surfaceContainerHighest
+                                        : (p.avatarColorIndex != null
+                                              ? UserProfileService.bgColorFromIndex(
+                                                  p.avatarColorIndex!,
+                                                )
+                                              : cs.surfaceContainerHighest),
+                                    border: Border.all(
+                                      color: cs.outline.withValues(alpha: 0.4),
+                                      width: 2,
                                     ),
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            p.displayNickname,
-                            textAlign: TextAlign.center,
-                            style: _profileText(
-                              cs,
-                              size: 20,
-                              weight: FontWeight.w700,
-                              color: cs.onSurface,
-                              letterSpacing: 0.22,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                            maxLines: 1,
-                          ),
-                          const SizedBox(height: 12),
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.symmetric(
-                              vertical: 4,
-                              horizontal: 12,
-                            ),
-                            decoration: BoxDecoration(
-                              color: theme.cardTheme.color ?? cs.surface,
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(
-                                color: cs.outline.withOpacity(0.4),
-                              ),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: cs.shadow.withOpacity(0.05),
-                                  blurRadius: 8,
-                                  offset: const Offset(0, 2),
+                                    image: hasPhoto
+                                        ? DecorationImage(
+                                            image: CachedNetworkImageProvider(
+                                              p.profileImageUrl!,
+                                            ),
+                                            fit: BoxFit.cover,
+                                          )
+                                        : null,
+                                  ),
+                                  child: hasPhoto
+                                      ? null
+                                      : Icon(
+                                          Icons.person,
+                                          size: 44,
+                                          color: p.avatarColorIndex != null
+                                              ? UserProfileService.iconColorFromIndex(
+                                                  p.avatarColorIndex!,
+                                                )
+                                              : cs.onSurfaceVariant.withValues(
+                                                  alpha: 0.6,
+                                                ),
+                                        ),
                                 ),
-                              ],
-                            ),
-                            child: _ProfileStatRow(
-                              cs: cs,
-                              strings: s,
-                              statsForUid: p.uid,
-                              statsDisplayNickname: p.displayNickname,
-                            ),
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                p.displayNickname,
+                                textAlign: TextAlign.center,
+                                style: _profileText(
+                                  cs,
+                                  size: 20,
+                                  weight: FontWeight.w700,
+                                  color: cs.onSurface,
+                                  letterSpacing: 0.22,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                                maxLines: 1,
+                              ),
+                              const SizedBox(height: 12),
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 4,
+                                  horizontal: 12,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: theme.cardTheme.color ?? cs.surface,
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(
+                                    color: cs.outline.withValues(alpha: 0.4),
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: cs.shadow.withValues(alpha: 0.05),
+                                      blurRadius: 8,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                                child: _ProfileStatRow(
+                                  cs: cs,
+                                  strings: s,
+                                  statsForUid: p.uid,
+                                  statsDisplayNickname: p.displayNickname,
+                                  reviewCountOverride: extras?.reviews.length,
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
+                        ),
                       ),
-                    ),
-                  ),
-                  SliverToBoxAdapter(child: _profileFullBleedDivider(cs)),
-                  SliverToBoxAdapter(
-                    child: _ProfileFavoritesSection(
-                      readOnly: true,
-                      favoritesOverride: p.favorites,
-                    ),
-                  ),
-                  SliverToBoxAdapter(
-                    child: _ProfileRecentActivitySection(
-                      reviewsOverride: b.reviews,
-                    ),
-                  ),
-                  SliverToBoxAdapter(child: _profileFullBleedDivider(cs)),
-                  SliverToBoxAdapter(
-                    child: _ProfileRatingsSection(ratingsUid: p.uid),
-                  ),
-                  SliverToBoxAdapter(
-                    child: Padding(
-                      padding: const EdgeInsets.only(
-                        top: _kProfileSectionBleedPadV,
+                      SliverToBoxAdapter(child: _profileFullBleedDivider(cs)),
+                      SliverToBoxAdapter(
+                        child: _ProfileFavoritesSection(
+                          readOnly: true,
+                          favoritesOverride: p.favorites,
+                        ),
                       ),
-                      child: _ProfileLinksMenu(
-                        cs: cs,
-                        strings: s,
-                        showAppSettings: false,
-                        menuDiaryCount: b.diaryCount,
-                        menuListsCount: b.listsCount,
-                        menuWatchlistCount: b.watchlistCount,
-                        menuLikesCount: b.likesCount,
+                      SliverToBoxAdapter(
+                        child: _ProfileRecentActivitySection(
+                          reviewsOverride: extras?.reviews,
+                        ),
                       ),
-                    ),
-                  ),
-                  const SliverToBoxAdapter(child: SizedBox(height: 32)),
-                ],
+                      SliverToBoxAdapter(child: _profileFullBleedDivider(cs)),
+                      SliverToBoxAdapter(
+                        child: _ProfileRatingsSection(ratingsUid: p.uid),
+                      ),
+                      SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.only(
+                            top: _kProfileSectionBleedPadV,
+                          ),
+                          child: _ProfileLinksMenu(
+                            cs: cs,
+                            strings: s,
+                            showAppSettings: false,
+                            menuDiaryCount: extras?.diaryCount,
+                            menuListsCount: extras?.listsCount,
+                            menuWatchlistCount: extras?.watchlistCount,
+                            menuLikesCount: extras?.likesCount,
+                            viewedUid: p.uid,
+                            ownerDisplayName: p.displayNickname,
+                          ),
+                        ),
+                      ),
+                      const SliverToBoxAdapter(child: SizedBox(height: 32)),
+                    ],
+                  );
+                },
               ),
             ),
           ),
@@ -996,12 +1150,13 @@ class _MyProfileScreen extends StatelessWidget {
         child: RefreshIndicator(
           onRefresh: () async {
             _profileStatsRefreshNotifier.value++;
-            await UserProfileService.instance.loadIfNeeded();
-            await SavedService.instance.loadIfNeeded();
-            await WatchlistService.instance.loadIfNeeded(force: true);
-            await WatchHistoryService.instance.loadIfNeeded();
-            await ReviewService.instance.loadIfNeeded();
-            await Future.delayed(const Duration(milliseconds: 300));
+            await Future.wait([
+              UserProfileService.instance.loadIfNeeded(),
+              SavedService.instance.loadIfNeeded(),
+              WatchlistService.instance.loadIfNeeded(force: true),
+              WatchHistoryService.instance.loadIfNeeded(),
+              ReviewService.instance.loadIfNeeded(),
+            ]);
           },
           child: CustomScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
@@ -1128,16 +1283,30 @@ class _MyProfileScreen extends StatelessWidget {
                         valueListenable:
                             UserProfileService.instance.nicknameNotifier,
                         builder: (context, nick, _) {
-                          final nickname =
-                              nick?.trim() ??
-                              AuthService
+                          final nickname = nick?.trim() ?? '';
+                          final displayName = AuthService
                                   .instance
                                   .currentUser
                                   .value
                                   ?.displayName
                                   ?.trim() ??
                               '';
-                          final name = nickname.isEmpty ? 'DramaHub' : nickname;
+                          final emailPrefix = AuthService
+                                  .instance
+                                  .currentUser
+                                  .value
+                                  ?.email
+                                  ?.split('@')
+                                  .first
+                                  .trim() ??
+                              '';
+                          final name = nickname.isNotEmpty
+                              ? nickname
+                              : (displayName.isNotEmpty
+                                    ? displayName
+                                    : (emailPrefix.isNotEmpty
+                                          ? emailPrefix
+                                          : 'Member'));
                           return Text(
                             name,
                             textAlign: TextAlign.center,
@@ -1339,10 +1508,13 @@ class _ProfileFavoritesSection extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: Icon(Icons.delete_outline, color: cs.error),
+              leading: Icon(Icons.delete_outline, color: kAppDeleteActionColor),
               title: Text(
                 s.get('profileFavoritesRemove'),
-                style: _profileText(cs, size: 15, letterSpacing: 0.2),
+                style: _profileText(cs, size: 15, letterSpacing: 0.2).copyWith(
+                  color: kAppDeleteActionColor,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
               onTap: () async {
                 Navigator.pop(ctx);
@@ -1603,20 +1775,71 @@ class _DashedRRectPainter extends CustomPainter {
 }
 
 /// Letterboxd 스타일 별점 분포 막대 그래프 (탭·드래그로 구간별 별 / 점수 표시).
-class _ProfileRatingsSection extends StatelessWidget {
+class _ProfileRatingsSection extends StatefulWidget {
   const _ProfileRatingsSection({this.ratingsUid});
 
   /// null이면 로그인한 사용자 UID.
   final String? ratingsUid;
 
   @override
+  State<_ProfileRatingsSection> createState() => _ProfileRatingsSectionState();
+}
+
+class _ProfileRatingsSectionState extends State<_ProfileRatingsSection> {
+  Future<ProfileRatingHistogram>? _histFuture;
+  String? _loadedUid;
+
+  String? _resolveUid() {
+    final r = widget.ratingsUid?.trim();
+    if (r != null && r.isNotEmpty) return r;
+    return AuthService.instance.currentUser.value?.uid;
+  }
+
+  void _loadHistogram() {
+    final uid = _resolveUid();
+    if (uid == null || uid.isEmpty) return;
+    _loadedUid = uid;
+    _histFuture = PostService.instance.aggregateReviewRatingsForUid(uid);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadHistogram();
+    _profileStatsRefreshNotifier.addListener(_onRefresh);
+    // 자신의 프로필일 때만 리뷰 목록 변화 감지
+    if (widget.ratingsUid == null) {
+      ReviewService.instance.listNotifier.addListener(_onRefresh);
+    }
+  }
+
+  @override
+  void dispose() {
+    _profileStatsRefreshNotifier.removeListener(_onRefresh);
+    if (widget.ratingsUid == null) {
+      ReviewService.instance.listNotifier.removeListener(_onRefresh);
+    }
+    super.dispose();
+  }
+
+  void _onRefresh() {
+    if (!mounted) return;
+    setState(_loadHistogram);
+  }
+
+  @override
   Widget build(BuildContext context) {
     final s = CountryScope.of(context).strings;
     final cs = Theme.of(context).colorScheme;
-    final uid = (ratingsUid != null && ratingsUid!.trim().isNotEmpty)
-        ? ratingsUid!.trim()
-        : AuthService.instance.currentUser.value?.uid;
+    final uid = _resolveUid();
     if (uid == null || uid.isEmpty) return const SizedBox.shrink();
+
+    // uid가 바뀐 경우(위젯 재사용) 재로드
+    if (_loadedUid != uid) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(_loadHistogram);
+      });
+    }
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(
@@ -1625,38 +1848,30 @@ class _ProfileRatingsSection extends StatelessWidget {
         _kProfileSectionBleedPadH,
         _kProfileSectionBleedPadV,
       ),
-      child: ListenableBuilder(
-        listenable: Listenable.merge([
-          _profileStatsRefreshNotifier,
-          ReviewService.instance.listNotifier,
-        ]),
-        builder: (context, _) {
-          return FutureBuilder<ProfileRatingHistogram>(
-            future: PostService.instance.aggregateReviewRatingsForUid(uid),
-            builder: (context, snap) {
-              if (!snap.hasData) {
-                return SizedBox(
-                  height: 128,
-                  child: Center(
-                    child: SizedBox(
-                      width: 24,
-                      height: 24,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: cs.primary.withValues(alpha: 0.6),
-                      ),
-                    ),
+      child: FutureBuilder<ProfileRatingHistogram>(
+        future: _histFuture,
+        builder: (context, snap) {
+          if (!snap.hasData) {
+            return SizedBox(
+              height: 128,
+              child: Center(
+                child: SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: cs.primary.withValues(alpha: 0.6),
                   ),
-                );
-              }
-              final hist = snap.requireData;
-              return _ProfileRatingsInteractiveBody(
-                key: ValueKey(hist.countsPerHalfStar.join(',')),
-                hist: hist,
-                cs: cs,
-                strings: s,
-              );
-            },
+                ),
+              ),
+            );
+          }
+          final hist = snap.requireData;
+          return _ProfileRatingsInteractiveBody(
+            key: ValueKey(hist.countsPerHalfStar.join(',')),
+            hist: hist,
+            cs: cs,
+            strings: s,
           );
         },
       ),
@@ -1989,15 +2204,17 @@ class _RatingHistogramPainter extends CustomPainter {
     final bw = _barWidth(size.width, n);
     final maxH = barMaxHeight.clamp(0.0, size.height);
     final mc = maxCount > 0 ? maxCount : 1;
-    const ghostH = 4.0;
+    const ghostH = 2.0;
     final sel = selectedIndex;
 
+    // 각 슬롯별로: 값이 0인 칸만 ghost 선 표시 (값이 있으면 막대만 표시).
     for (var i = 0; i < n; i++) {
+      if (counts[i] > 0) continue;
       final left = i * (bw + kBarGap);
       final ghostRect = Rect.fromLTWH(left, maxH - ghostH, bw, ghostH);
-      var gh = ghostTintIdle;
-      if (sel != null && sel == i && counts[i] <= 0) {
-        gh = Color.lerp(ghostTint, selectedLift, 0.4) ?? ghostTint;
+      var gh = barMutedIdle;
+      if (sel != null && sel == i) {
+        gh = barStrong;
       }
       canvas.drawRect(ghostRect, Paint()..color = gh);
     }
@@ -2763,10 +2980,13 @@ void _showProfilePhotoOptions(BuildContext context, dynamic s, ColorScheme cs) {
             ),
             if (hasPhoto)
               ListTile(
-                leading: Icon(LucideIcons.trash_2, color: cs.error),
+                leading: Icon(LucideIcons.trash_2, color: kAppDeleteActionColor),
                 title: Text(
                   s.get('removePhoto'),
-                  style: _profileText(cs, size: 15, letterSpacing: 0.2),
+                  style: _profileText(cs, size: 15, letterSpacing: 0.2).copyWith(
+                    color: kAppDeleteActionColor,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
                 onTap: () {
                   Navigator.pop(ctx);

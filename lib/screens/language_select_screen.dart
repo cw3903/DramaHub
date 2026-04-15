@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../theme/app_theme.dart';
 import '../services/locale_service.dart';
 import '../widgets/lists_style_subpage_app_bar.dart';
 
@@ -29,6 +30,12 @@ class LanguageSelectScreen extends StatelessWidget {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
+    final loginFieldFill = isDark
+        ? AppColors.darkSurfaceVariant
+        : const Color(0xFFFAFAFA);
+    final loginFieldBorder = isDark
+        ? cs.outline.withValues(alpha: 0.85)
+        : const Color(0xFFDBDBDB);
     final headerBg = listsStyleSubpageHeaderBackground(theme);
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
@@ -52,35 +59,63 @@ class LanguageSelectScreen extends StatelessWidget {
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 for (final code in LocaleService.supportedLocales) ...[
-                  Material(
-                    color: isDark
-                        ? cs.surfaceContainerHighest
-                        : (cs.surfaceContainerHighest.withOpacity(0.5)),
-                    borderRadius: BorderRadius.circular(16),
-                    child: InkWell(
-                      onTap: () {
-                        // Navigator 잠금 방지: 먼저 pop한 뒤 다음 프레임에서 언어 변경
-                        WidgetsBinding.instance.addPostFrameCallback((_) async {
-                          if (!context.mounted) return;
-                          Navigator.pop(context, true);
-                          await LocaleService.instance.setLocale(code);
-                        });
-                      },
-                      borderRadius: BorderRadius.circular(16),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          vertical: 18,
-                          horizontal: 20,
+                  Align(
+                    alignment: Alignment.center,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 360),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(18),
+                          color: loginFieldFill,
+                          border: Border.all(
+                            color: loginFieldBorder,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(
+                                alpha: isDark ? 0.24 : 0.06,
+                              ),
+                              blurRadius: 14,
+                              offset: const Offset(0, 6),
+                            ),
+                          ],
                         ),
-                        child: Text(
-                          _localeLabels[code]!,
-                          style: GoogleFonts.notoSansKr(
-                            fontSize: 17,
-                            fontWeight: FontWeight.w600,
-                            color: cs.onSurface,
+                        child: Material(
+                          color: Colors.transparent,
+                          borderRadius: BorderRadius.circular(18),
+                          child: InkWell(
+                            onTap: () {
+                              // Navigator 잠금 방지: 먼저 pop한 뒤 다음 프레임에서 언어 변경
+                              WidgetsBinding.instance.addPostFrameCallback((
+                                _,
+                              ) async {
+                                if (!context.mounted) return;
+                                Navigator.pop(context, true);
+                                await LocaleService.instance.setLocale(code);
+                              });
+                            },
+                            borderRadius: BorderRadius.circular(18),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 12,
+                                horizontal: 20,
+                              ),
+                              child: Center(
+                                child: Text(
+                                  _localeLabels[code]!,
+                                  textAlign: TextAlign.center,
+                                  style: GoogleFonts.notoSansKr(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: -0.1,
+                                    color: cs.onSurface,
+                                  ),
+                                ),
+                              ),
+                            ),
                           ),
                         ),
                       ),

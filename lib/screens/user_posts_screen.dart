@@ -7,12 +7,11 @@ import '../services/auth_service.dart';
 import '../services/follow_service.dart';
 import '../services/post_service.dart';
 import '../services/user_profile_service.dart';
-import '../theme/app_theme.dart';
 import '../widgets/country_scope.dart';
 import '../widgets/lists_style_subpage_app_bar.dart';
+import '../widgets/optimized_network_image.dart';
 import '../widgets/two_tab_segment_bar.dart';
 import '../widgets/user_follow_button.dart';
-import '../utils/format_utils.dart';
 import 'post_detail_page.dart';
 
 /// 특정 회원의 작성 글 + 댓글 (탭: Posts / Comments).
@@ -20,14 +19,26 @@ class UserPostsScreen extends StatefulWidget {
   const UserPostsScreen({
     super.key,
     required this.authorName,
+    this.authorUid,
     this.initialSegment = 0,
+    this.initialPosts,
+    this.initialCommentItems,
   });
 
   /// 표시 대상 닉네임 (`u/` 있거나 없음). 글은 `u/닉네임`, 댓글 매칭은 베이스 닉네임.
   final String authorName;
 
+  /// 설정 시 글·댓글을 `authorUid` 기준으로 로드 (닉네임과 `posts.author` 불일치 대비).
+  final String? authorUid;
+
   /// 0: Posts, 1: Comments
   final int initialSegment;
+
+  /// 프로필 통계 로드 시 이미 가져온 포스트 목록 — 있으면 로딩 없이 즉시 표시.
+  final List<Post>? initialPosts;
+
+  /// 프로필 통계 로드 시 이미 가져온 댓글 목록 — 있으면 로딩 없이 즉시 표시.
+  final List<({Post post, PostComment comment})>? initialCommentItems;
 
   @override
   State<UserPostsScreen> createState() => _UserPostsScreenState();
@@ -47,7 +58,16 @@ class _UserPostsScreenState extends State<UserPostsScreen> {
   void initState() {
     super.initState();
     _segment = widget.initialSegment.clamp(0, 1);
-    _load();
+    // 프로필에서 이미 로드된 데이터가 있으면 즉시 표시 (로딩 스피너 없음).
+    if (widget.initialPosts != null) {
+      _posts = widget.initialPosts!;
+      _loading = false;
+    }
+    if (widget.initialCommentItems != null) {
+      _commentItems = widget.initialCommentItems!;
+      _loading = false;
+    }
+    _load(); // 최신 데이터로 백그라운드 갱신
     _resolveProfile();
   }
 
@@ -58,7 +78,42 @@ class _UserPostsScreenState extends State<UserPostsScreen> {
 
   String get _postAuthor => 'u/$_baseNickname';
 
+  String _headerTitle(dynamic s) {
+    final me = AuthService.instance.currentUser.value?.uid;
+    final filterUid = widget.authorUid?.trim();
+    if (filterUid != null &&
+        filterUid.isNotEmpty &&
+        me != null &&
+        me == filterUid) {
+      return s.get('userPostsListTitleSelf');
+    }
+    if (!_profileResolving && _isSelfProfile) {
+      return s.get('userPostsListTitleSelf');
+    }
+    final name = _baseNickname.trim();
+    if (name.isNotEmpty) {
+      return s.get('userPostsListTitleOtherNamed').replaceAll('{name}', name);
+    }
+    return s.get('userPostsListTitleOther');
+  }
+
   Future<void> _resolveProfile() async {
+    final filterUid = widget.authorUid?.trim();
+    if (filterUid != null && filterUid.isNotEmpty) {
+      final me = AuthService.instance.currentUser.value?.uid;
+      if (me == null) {
+        if (mounted) setState(() => _profileResolving = false);
+        return;
+      }
+      if (mounted) {
+        setState(() {
+          _isSelfProfile = me == filterUid;
+          _targetUid = _isSelfProfile ? null : filterUid;
+          _profileResolving = false;
+        });
+      }
+      return;
+    }
     final me = AuthService.instance.currentUser.value?.uid;
     if (me == null) {
       if (mounted) setState(() => _profileResolving = false);
@@ -88,20 +143,50 @@ class _UserPostsScreenState extends State<UserPostsScreen> {
   }
 
   Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    // 초기 데이터가 없을 때만 로딩 스피너 표시. 있으면 백그라운드 갱신.
+    final hasData = _posts.isNotEmpty || _commentItems.isNotEmpty;
+    if (!hasData) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     try {
-      final posts = await PostService.instance.getPostsByAuthor(_postAuthor);
-      final comments =
-          await PostService.instance.getCommentsByAuthor(_baseNickname);
-      if (mounted) {
-        setState(() {
-          _posts = posts;
-          _commentItems = comments;
-          _loading = false;
-        });
+      final uidFilter = widget.authorUid?.trim();
+      if (uidFilter != null && uidFilter.isNotEmpty) {
+        // posts + comments 병렬 로드
+        final results = await Future.wait([
+          PostService.instance.getPostsByAuthorUid(uidFilter),
+          PostService.instance.getCommentsByAuthorUid(uidFilter),
+        ]);
+        var posts = results[0] as List<Post>;
+        var comments =
+            results[1] as List<({Post post, PostComment comment})>;
+        if (comments.isEmpty && _baseNickname.isNotEmpty) {
+          comments =
+              await PostService.instance.getCommentsByAuthor(_baseNickname);
+        }
+        if (mounted) {
+          setState(() {
+            _posts = posts;
+            _commentItems = comments;
+            _loading = false;
+          });
+        }
+      } else {
+        // posts + comments 병렬 로드
+        final results = await Future.wait([
+          PostService.instance.getPostsByAuthor(_postAuthor),
+          PostService.instance.getCommentsByAuthor(_baseNickname),
+        ]);
+        if (mounted) {
+          setState(() {
+            _posts = results[0] as List<Post>;
+            _commentItems =
+                results[1] as List<({Post post, PostComment comment})>;
+            _loading = false;
+          });
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -125,9 +210,7 @@ class _UserPostsScreenState extends State<UserPostsScreen> {
         ? UserFollowButton(targetUid: _targetUid!, dense: true)
         : null;
 
-    final title = !_profileResolving && _isSelfProfile
-        ? s.get('userPostsListTitleSelf')
-        : s.get('userPostsListTitleOther');
+    final title = _headerTitle(s);
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: listsStyleSubpageSystemOverlay(theme, headerBg),
@@ -217,13 +300,45 @@ class _UserPostsScreenState extends State<UserPostsScreen> {
     }
     return RefreshIndicator(
       onRefresh: _load,
-      child: ListView.builder(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+      child: ListView.separated(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.only(top: 4, bottom: 32),
         itemCount: _posts.length,
+        separatorBuilder: (context, _) {
+          final isDark = Theme.of(context).brightness == Brightness.dark;
+          return Divider(
+            height: 1,
+            thickness: 1,
+            indent: 16,
+            endIndent: 16,
+            color: cs.outline.withValues(alpha: isDark ? 0.30 : 0.22),
+          );
+        },
         itemBuilder: (context, index) {
           final post = _posts[index];
+          final body = (post.body ?? '').replaceAll(RegExp(r'\s+'), ' ').trim();
+          final titleStyle = GoogleFonts.notoSansKr(
+            fontSize: 13.5,
+            fontWeight: FontWeight.w600,
+            color: cs.onSurface.withValues(alpha: 0.8),
+            height: 1.12,
+          );
+          final bodyStyle = GoogleFonts.notoSansKr(
+            fontSize: 12.5,
+            height: 1.45,
+            color: cs.onSurfaceVariant.withValues(alpha: 0.88),
+            fontWeight: FontWeight.w400,
+          );
+          final timeRowStyle = GoogleFonts.notoSansKr(
+            fontSize: 11.5,
+            height: 1.15,
+            color: cs.onSurfaceVariant.withValues(alpha: 0.5),
+          );
+          final thumbUrl = _userPostsPreviewImageUrl(post);
+
           return Material(
             color: Colors.transparent,
+            clipBehavior: Clip.none,
             child: InkWell(
               onTap: () async {
                 final result = await Navigator.push<PostDetailResult>(
@@ -238,61 +353,43 @@ class _UserPostsScreenState extends State<UserPostsScreen> {
                   });
                 }
               },
-              borderRadius: BorderRadius.circular(16),
-              child: Container(
-                margin: const EdgeInsets.only(bottom: 10),
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: cs.surface,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: cs.outline.withValues(alpha: 0.12),
-                  ),
-                ),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 7, 16, 10),
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Text(
-                      post.title,
-                      style: GoogleFonts.notoSansKr(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: cs.onSurface,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 8),
                     Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(LucideIcons.message_circle,
-                            size: 14, color: AppColors.mediumGrey),
-                        const SizedBox(width: 4),
-                        Text(
-                          formatCompactCount(post.comments),
-                          style: GoogleFonts.notoSansKr(
-                            fontSize: 12,
-                            color: AppColors.mediumGrey,
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _UserPostsEllipsisText(
+                                text: post.title,
+                                style: titleStyle,
+                                maxLines: 1,
+                              ),
+                              const SizedBox(height: 2),
+                              _UserPostsEllipsisText(
+                                text: post.timeAgo,
+                                style: timeRowStyle,
+                                maxLines: 1,
+                              ),
+                              if (body.isNotEmpty) ...[
+                                const SizedBox(height: 3),
+                                _UserPostsEllipsisText(
+                                  text: body,
+                                  style: bodyStyle,
+                                  maxLines: 2,
+                                ),
+                              ],
+                            ],
                           ),
                         ),
-                        const SizedBox(width: 12),
-                        Icon(LucideIcons.eye, size: 14, color: AppColors.mediumGrey),
-                        const SizedBox(width: 4),
-                        Text(
-                          formatCompactCount(post.views),
-                          style: GoogleFonts.notoSansKr(
-                            fontSize: 12,
-                            color: AppColors.mediumGrey,
-                          ),
-                        ),
-                        const Spacer(),
-                        Text(
-                          post.timeAgo,
-                          style: GoogleFonts.notoSansKr(
-                            fontSize: 12,
-                            color: AppColors.mediumGrey,
-                          ),
-                        ),
+                        const SizedBox(width: 10),
+                        _UserPostsListThumb(imageUrl: thumbUrl, cs: cs),
                       ],
                     ),
                   ],
@@ -336,17 +433,47 @@ class _UserPostsScreenState extends State<UserPostsScreen> {
     }
     return RefreshIndicator(
       onRefresh: _load,
-      child: ListView.builder(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+      child: ListView.separated(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.only(top: 4, bottom: 32),
         itemCount: _commentItems.length,
+        separatorBuilder: (context, _) {
+          final isDark = Theme.of(context).brightness == Brightness.dark;
+          return Divider(
+            height: 1,
+            thickness: 1,
+            indent: 16,
+            endIndent: 16,
+            color: cs.outline.withValues(alpha: isDark ? 0.30 : 0.22),
+          );
+        },
         itemBuilder: (context, index) {
           final item = _commentItems[index];
-          final commentText = item.comment.text;
-          final snippet = commentText.length > 80
-              ? '${commentText.substring(0, 80)}...'
-              : commentText;
+          final country = CountryScope.of(context).country;
+          final commentBody = item.comment.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+          final hasBody = commentBody.isNotEmpty;
+          final titleStyle = GoogleFonts.notoSansKr(
+            fontSize: 13.5,
+            fontWeight: FontWeight.w600,
+            color: cs.onSurface.withValues(alpha: 0.8),
+            height: 1.12,
+          );
+          final bodyStyle = GoogleFonts.notoSansKr(
+            fontSize: 12.5,
+            height: 1.45,
+            color: cs.onSurfaceVariant.withValues(alpha: 0.88),
+            fontWeight: FontWeight.w400,
+          );
+          final timeRowStyle = GoogleFonts.notoSansKr(
+            fontSize: 11.5,
+            height: 1.15,
+            color: cs.onSurfaceVariant.withValues(alpha: 0.5),
+          );
+          final thumbUrl = _userPostsPreviewImageUrl(item.post);
+
           return Material(
             color: Colors.transparent,
+            clipBehavior: Clip.none,
             child: InkWell(
               onTap: () async {
                 await Navigator.push<PostDetailResult>(
@@ -354,55 +481,157 @@ class _UserPostsScreenState extends State<UserPostsScreen> {
                   MaterialPageRoute(builder: (_) => PostDetailPage(post: item.post)),
                 );
               },
-              borderRadius: BorderRadius.circular(16),
-              child: Container(
-                margin: const EdgeInsets.only(bottom: 10),
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: cs.surface,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: cs.outline.withValues(alpha: 0.12),
-                  ),
-                ),
-                child: Column(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 7, 16, 10),
+                child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      item.post.title,
-                      style: GoogleFonts.notoSansKr(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: cs.onSurface,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      snippet,
-                      style: GoogleFonts.notoSansKr(
-                        fontSize: 14,
-                        color: cs.onSurfaceVariant,
-                        height: 1.4,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      item.comment.timeAgo,
-                      style: GoogleFonts.notoSansKr(
-                        fontSize: 12,
-                        color: AppColors.mediumGrey,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _UserPostsEllipsisText(
+                            text: item.post.title,
+                            style: titleStyle,
+                            maxLines: 1,
+                          ),
+                          const SizedBox(height: 2),
+                          _UserPostsEllipsisText(
+                            text: item.comment.timeAgoLocalized(country),
+                            style: timeRowStyle,
+                            maxLines: 1,
+                          ),
+                          if (hasBody) ...[
+                            const SizedBox(height: 3),
+                            _UserPostsEllipsisText(
+                              text: commentBody,
+                              style: bodyStyle,
+                              maxLines: 2,
+                            ),
+                          ],
+                        ],
                       ),
                     ),
+                    const SizedBox(width: 10),
+                    _UserPostsListThumb(imageUrl: thumbUrl, cs: cs),
                   ],
                 ),
               ),
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+String? _userPostsPreviewImageUrl(Post post) {
+  for (final raw in post.imageUrls) {
+    final u = raw.trim();
+    if (u.startsWith('http://') || u.startsWith('https://')) return u;
+  }
+  final v = post.videoThumbnailUrl?.trim();
+  if (v != null &&
+      v.isNotEmpty &&
+      (v.startsWith('http://') || v.startsWith('https://'))) {
+    return v;
+  }
+  final d = post.dramaThumbnail?.trim();
+  if (d != null &&
+      d.isNotEmpty &&
+      (d.startsWith('http://') || d.startsWith('https://'))) {
+    return d;
+  }
+  return null;
+}
+
+class _UserPostsEllipsisText extends StatelessWidget {
+  const _UserPostsEllipsisText({
+    required this.text,
+    required this.style,
+    required this.maxLines,
+  });
+
+  final String text;
+  final TextStyle style;
+  final int maxLines;
+
+  static const TextHeightBehavior _heightBehavior = TextHeightBehavior(
+    applyHeightToFirstAscent: false,
+    applyHeightToLastDescent: false,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: Text(
+        text,
+        maxLines: maxLines,
+        overflow: TextOverflow.ellipsis,
+        softWrap: true,
+        style: style,
+        textAlign: TextAlign.start,
+        textWidthBasis: TextWidthBasis.parent,
+        textHeightBehavior: _heightBehavior,
+      ),
+    );
+  }
+}
+
+class _UserPostsListThumb extends StatelessWidget {
+  const _UserPostsListThumb({required this.imageUrl, required this.cs});
+
+  final String? imageUrl;
+  final ColorScheme cs;
+
+  static const double _w = 48;
+  static const double _h = 72;
+
+  @override
+  Widget build(BuildContext context) {
+    final u = imageUrl?.trim();
+    if (u != null &&
+        u.isNotEmpty &&
+        (u.startsWith('http://') || u.startsWith('https://'))) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(6),
+        child: SizedBox(
+          width: _w,
+          height: _h,
+          child: OptimizedNetworkImage(
+            imageUrl: u,
+            width: _w,
+            height: _h,
+            fit: BoxFit.cover,
+            memCacheWidth: 160,
+            memCacheHeight: 240,
+            errorWidget: ColoredBox(
+              color: cs.surfaceContainerHighest,
+              child: Icon(
+                LucideIcons.image,
+                size: 22,
+                color: cs.onSurfaceVariant.withValues(alpha: 0.35),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(6),
+      child: ColoredBox(
+        color: cs.surfaceContainerHighest,
+        child: SizedBox(
+          width: _w,
+          height: _h,
+          child: Icon(
+            LucideIcons.file_text,
+            size: 22,
+            color: cs.onSurfaceVariant.withValues(alpha: 0.35),
+          ),
+        ),
       ),
     );
   }

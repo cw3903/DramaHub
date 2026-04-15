@@ -16,6 +16,7 @@ import '../services/post_service.dart';
 import '../services/user_profile_service.dart';
 import '../services/locale_service.dart';
 import '../services/level_service.dart';
+import '../services/watch_history_service.dart';
 import '../utils/post_board_utils.dart';
 import '../models/drama.dart';
 import '../services/drama_list_service.dart';
@@ -434,6 +435,50 @@ class _WritePostPageState extends State<WritePostPage> {
     }
   }
 
+  /// 리뷰 게시글 저장 시 다이어리(시청기록)도 함께 동기화.
+  Future<void> _syncReviewWatchHistory() async {
+    if (_boardKind != 'review') return;
+    final dramaId = (_pickDramaId ?? '').trim();
+    if (dramaId.isEmpty) return;
+
+    final country = CountryScope.maybeOf(context)?.country ??
+        UserProfileService.instance.signupCountryNotifier.value;
+
+    var title = (_pickDramaTitle ?? '').trim();
+    if (title.isEmpty && !dramaId.startsWith('short-')) {
+      title = DramaListService.instance.getDisplayTitle(dramaId, country).trim();
+    }
+    if (title.isEmpty) return;
+
+    String? imageUrl;
+    var subtitle = '';
+    var views = '0';
+
+    if (!dramaId.startsWith('short-')) {
+      imageUrl = DramaListService.instance.getDisplayImageUrl(dramaId, country);
+      subtitle = DramaListService.instance.getDisplaySubtitle(dramaId, country);
+      for (final e in DramaListService.instance.listNotifier.value) {
+        if (e.id == dramaId) {
+          views = e.views;
+          break;
+        }
+      }
+    } else {
+      final pickedThumb = (_pickDramaThumb ?? '').trim();
+      imageUrl = pickedThumb.isNotEmpty
+          ? pickedThumb
+          : DramaListService.instance.getDisplayImageUrlByTitle(title, country);
+    }
+
+    await WatchHistoryService.instance.add(
+      id: dramaId,
+      title: title,
+      subtitle: subtitle,
+      views: views,
+      imageUrl: imageUrl,
+    );
+  }
+
   Future<void> _submit() async {
     if (_isSubmitting) return;
     _titleFocus.unfocus();
@@ -618,20 +663,13 @@ class _WritePostPageState extends State<WritePostPage> {
       if (contentUriTempPath != null) { try { await File(contentUriTempPath).delete(); } catch (_) {} }
       if (!mounted) { setState(() => _isSubmitting = false); return; }
 
-      await UserProfileService.instance.loadIfNeeded();
-      final nickname = UserProfileService.instance.nicknameNotifier.value;
-      final displayName = AuthService.instance.currentUser.value?.displayName;
-      final email = AuthService.instance.currentUser.value?.email;
-      String authorName = nickname?.trim().isNotEmpty == true
-          ? nickname!.trim()
-          : (displayName?.trim().isNotEmpty == true ? displayName!.trim() : (email != null ? email.split('@').first : ''));
-      if (authorName.isEmpty) authorName = '익명';
+      final postAuthor = await UserProfileService.instance.getAuthorForPost();
       final linkTrimmed = _linkController.text.trim();
       final post = Post(
         id: DateTime.now().millisecondsSinceEpoch.toString(),
         title: _titleController.text.trim(),
         subreddit: s.get('freeBoardPlaceholder'),
-        author: 'u/$authorName',
+        author: postAuthor,
         timeAgo: s.get('soon'),
         votes: 0,
         comments: 0,
@@ -686,14 +724,7 @@ class _WritePostPageState extends State<WritePostPage> {
       }
     }
 
-    await UserProfileService.instance.loadIfNeeded();
-    final nickname = UserProfileService.instance.nicknameNotifier.value;
-    final displayName = AuthService.instance.currentUser.value?.displayName;
-    final email = AuthService.instance.currentUser.value?.email;
-    String authorName = nickname?.trim().isNotEmpty == true
-        ? nickname!.trim()
-        : (displayName?.trim().isNotEmpty == true ? displayName!.trim() : (email != null ? email.split('@').first : ''));
-    if (authorName.isEmpty) authorName = '익명';
+    final postAuthor = await UserProfileService.instance.getAuthorForPost();
 
     final linkTrimmed = _linkController.text.trim();
     if (_isEditMode && widget.initialPost != null) {
@@ -722,6 +753,9 @@ class _WritePostPageState extends State<WritePostPage> {
       final result = await PostService.instance.updatePost(updated);
       if (!mounted) return;
       if (result != null) {
+        try {
+          await _syncReviewWatchHistory();
+        } catch (_) {}
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(s.get('postEditSuccess'), style: GoogleFonts.notoSansKr()), behavior: SnackBarBehavior.floating),
         );
@@ -739,7 +773,7 @@ class _WritePostPageState extends State<WritePostPage> {
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       title: _isReviewLayout ? reviewTitle : _titleController.text.trim(),
       subreddit: _boardKind == 'review' ? s.get('tabReviews') : s.get('freeBoardPlaceholder'),
-      author: 'u/$authorName',
+      author: postAuthor,
       timeAgo: s.get('soon'),
       votes: 0,
       comments: 0,
@@ -764,6 +798,10 @@ class _WritePostPageState extends State<WritePostPage> {
       authorAvatarColorIndex: UserProfileService.instance.avatarColorNotifier.value,
       country: UserProfileService.instance.signupCountryNotifier.value ?? LocaleService.instance.locale,
     );
+
+    try {
+      await _syncReviewWatchHistory();
+    } catch (_) {}
 
     if (!mounted) return;
     Navigator.pop(context, post);

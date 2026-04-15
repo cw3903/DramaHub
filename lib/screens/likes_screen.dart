@@ -163,15 +163,21 @@ class _LikesTabBodyState extends State<_LikesTabBody> {
         likedComments: <({Post post, PostComment comment})>[],
       );
     }
-    final likedPosts = await PostService.instance.getPostsLikedByUid(
-      uid,
-      countryForTimeAgo: countryForTimeAgo,
+    // 포스트 + 코멘트 병렬 로드
+    final results = await Future.wait([
+      PostService.instance.getPostsLikedByUid(
+        uid,
+        countryForTimeAgo: countryForTimeAgo,
+      ),
+      PostService.instance.getCommentsLikedByUid(
+        uid,
+        countryForTimeAgo: countryForTimeAgo,
+      ),
+    ]);
+    return (
+      likedPosts: results[0] as List<Post>,
+      likedComments: results[1] as List<({Post post, PostComment comment})>,
     );
-    final likedComments = await PostService.instance.getCommentsLikedByUid(
-      uid,
-      countryForTimeAgo: countryForTimeAgo,
-    );
-    return (likedPosts: likedPosts, likedComments: likedComments);
   }
 
   Future<void> _onRefresh() async {
@@ -444,13 +450,16 @@ class _LikedPostsList extends StatelessWidget {
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.only(top: 4, bottom: 32),
       itemCount: posts.length,
-      separatorBuilder: (_, __) => Divider(
-        height: 1,
-        thickness: 1,
-        indent: 16,
-        endIndent: 16,
-        color: cs.outline.withValues(alpha: 0.12),
-      ),
+      separatorBuilder: (context, _) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return Divider(
+          height: 1,
+          thickness: 1,
+          indent: 16,
+          endIndent: 16,
+          color: cs.outline.withValues(alpha: isDark ? 0.30 : 0.22),
+        );
+      },
       itemBuilder: (context, i) {
         final post = posts[i];
         final body = (post.body ?? '').replaceAll(RegExp(r'\s+'), ' ').trim();
@@ -574,13 +583,16 @@ class _LikedReviewsList extends StatelessWidget {
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.only(top: 4, bottom: 32),
       itemCount: posts.length,
-      separatorBuilder: (_, __) => Divider(
-        height: 1,
-        thickness: 1,
-        indent: 16,
-        endIndent: 16,
-        color: cs.outline.withValues(alpha: 0.12),
-      ),
+      separatorBuilder: (context, _) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return Divider(
+          height: 1,
+          thickness: 1,
+          indent: 16,
+          endIndent: 16,
+          color: cs.outline.withValues(alpha: isDark ? 0.30 : 0.22),
+        );
+      },
       itemBuilder: (context, i) {
         final post = posts[i];
         final thumb = post.dramaThumbnail?.trim();
@@ -752,13 +764,16 @@ class _LikedCommentsList extends StatelessWidget {
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.only(top: 4, bottom: 32),
       itemCount: items.length,
-      separatorBuilder: (_, __) => Divider(
-        height: 1,
-        thickness: 1,
-        indent: 16,
-        endIndent: 16,
-        color: cs.outline.withValues(alpha: 0.12),
-      ),
+      separatorBuilder: (context, _) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return Divider(
+          height: 1,
+          thickness: 1,
+          indent: 16,
+          endIndent: 16,
+          color: cs.outline.withValues(alpha: isDark ? 0.30 : 0.22),
+        );
+      },
       itemBuilder: (context, index) {
         final item = items[index];
         final country = CountryScope.of(context).country;

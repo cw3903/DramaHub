@@ -103,6 +103,19 @@ ThemeData get redditTheme {
       margin: EdgeInsets.zero,
       clipBehavior: Clip.antiAlias,
     ),
+    dialogTheme: DialogThemeData(
+      backgroundColor: AppColors.surface,
+      surfaceTintColor: Colors.transparent,
+      titleTextStyle: GoogleFonts.notoSansKr(
+        fontSize: 18,
+        fontWeight: FontWeight.w600,
+        color: AppColors.darkGrey,
+      ),
+      contentTextStyle: GoogleFonts.notoSansKr(
+        fontSize: 14,
+        color: AppColors.mediumGrey,
+      ),
+    ),
   );
 }
 
@@ -198,19 +211,20 @@ ThemeData get redditDarkTheme {
       ),
     ),
     dialogTheme: DialogThemeData(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.darkSurfaceVariant,
+      surfaceTintColor: Colors.transparent,
       titleTextStyle: GoogleFonts.notoSansKr(
         fontSize: 18,
         fontWeight: FontWeight.w600,
-        color: AppColors.darkGrey,
+        color: AppColors.darkOnSurface,
       ),
       contentTextStyle: GoogleFonts.notoSansKr(
         fontSize: 14,
-        color: AppColors.darkGrey,
+        color: AppColors.darkOnSurfaceVariant,
       ),
     ),
     bottomSheetTheme: const BottomSheetThemeData(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.darkSurfaceVariant,
       surfaceTintColor: Colors.transparent,
     ),
   );

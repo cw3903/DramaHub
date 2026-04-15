@@ -1,31 +1,19 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_theme.dart';
 import '../widgets/country_scope.dart';
 import '../services/auth_service.dart';
 import '../services/user_profile_service.dart';
-import '../services/locale_service.dart';
+import '../widgets/lists_style_subpage_app_bar.dart';
 
 /// 이메일 형식 검증 (xxx@yyy.zz 이상)
 bool _isValidEmail(String value) {
   final trimmed = value.trim();
   if (trimmed.isEmpty) return false;
   return RegExp(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$').hasMatch(trimmed);
-}
-
-/// 회원가입 시 선택하는 표시 언어 (앱 UI + 게시판 노출 기준)
-enum SignupLanguage {
-  us('us', 'EN', '🇺🇸'),
-  kr('kr', '한국어', '🇰🇷'),
-  cn('cn', '中文', '🇨🇳'),
-  jp('jp', '日本語', '🇯🇵');
-
-  const SignupLanguage(this.code, this.label, this.flag);
-  final String code;
-  final String label;
-  final String flag;
 }
 
 /// 회원가입 페이지
@@ -45,7 +33,6 @@ class _SignupPageState extends State<SignupPage> {
   bool _obscurePassword = true;
   bool _obscurePasswordConfirm = true;
   bool _isLoading = false;
-  SignupLanguage _selectedLanguage = SignupLanguage.us;
 
   @override
   void dispose() {
@@ -110,9 +97,10 @@ class _SignupPageState extends State<SignupPage> {
       await AuthService.instance.signUpWithEmailAndPassword(email, password);
       if (!mounted) return;
 
-      final err = await UserProfileService.instance.createUserProfileAfterSignup(nickname, email, country: _selectedLanguage.code);
-      if (!mounted) return;
-      await LocaleService.instance.setLocale(_selectedLanguage.code);
+      final err = await UserProfileService.instance.createUserProfileAfterSignup(
+        nickname,
+        email,
+      );
       if (!mounted) return;
       setState(() => _isLoading = false);
       if (err != null) {
@@ -175,18 +163,18 @@ class _SignupPageState extends State<SignupPage> {
       labelText: labelText,
       hintText: hintText,
       filled: true,
-      fillColor: cs.surfaceContainerHighest,
+      fillColor: cs.surfaceContainerHighest.withValues(alpha: 0.78),
       border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
         borderSide: BorderSide.none,
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(16),
-        borderSide: BorderSide(color: cs.outline),
+        borderRadius: BorderRadius.circular(18),
+        borderSide: BorderSide(color: cs.outline.withValues(alpha: 0.55)),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(16),
-        borderSide: BorderSide(color: cs.primary, width: 2),
+        borderRadius: BorderRadius.circular(18),
+        borderSide: BorderSide(color: cs.primary, width: 1.6),
       ),
       contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
       suffixIcon: suffixIcon,
@@ -197,28 +185,19 @@ class _SignupPageState extends State<SignupPage> {
   Widget build(BuildContext context) {
     final s = CountryScope.of(context).strings;
     final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-    return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
-      appBar: AppBar(
-        backgroundColor: cs.surface,
-        elevation: 0,
-        surfaceTintColor: Colors.transparent,
-        leading: IconButton(
-          icon: Icon(LucideIcons.arrow_left, size: 24, color: cs.onSurface),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        title: Text(
-          s.get('signUp'),
-          style: GoogleFonts.notoSansKr(
-            fontSize: 18,
-            fontWeight: FontWeight.w600,
-            color: cs.onSurface,
+    final headerBg = listsStyleSubpageHeaderBackground(theme);
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: listsStyleSubpageSystemOverlay(theme, headerBg),
+      child: Scaffold(
+        backgroundColor: theme.scaffoldBackgroundColor,
+        appBar: PreferredSize(
+          preferredSize: ListsStyleSubpageHeaderBar.preferredSizeOf(context),
+          child: ListsStyleSubpageHeaderBar(
+            title: s.get('signUp'),
+            onBack: () => popListsStyleSubpage(context),
           ),
         ),
-        centerTitle: true,
-      ),
-      body: SafeArea(
+        body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           child: Form(
@@ -226,75 +205,6 @@ class _SignupPageState extends State<SignupPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const SizedBox(height: 16),
-                Text(
-                  s.get('welcomeSignup'),
-                  style: GoogleFonts.notoSansKr(
-                    fontSize: 26,
-                    fontWeight: FontWeight.w700,
-                    color: cs.onSurface,
-                    height: 1.3,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  s.get('signupSubtitle'),
-                  style: GoogleFonts.notoSansKr(
-                    fontSize: 15,
-                    color: cs.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 32),
-                // 언어 선택 (앱 표시 언어 + 게시판 노출 기준)
-                Text(
-                  s.get('language'),
-                  style: GoogleFonts.notoSansKr(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: cs.onSurface,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: SignupLanguage.values.map((lang) {
-                    final isSelected = _selectedLanguage == lang;
-                    return Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        child: GestureDetector(
-                          onTap: () => setState(() => _selectedLanguage = lang),
-                          child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 200),
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            decoration: BoxDecoration(
-                              color: isSelected ? cs.primary : cs.surface,
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(
-                                color: isSelected ? cs.primary : cs.outline,
-                                width: isSelected ? 2 : 1,
-                              ),
-                            ),
-                            child: Column(
-                              children: [
-                                Text(lang.flag, style: const TextStyle(fontSize: 24)),
-                                const SizedBox(height: 4),
-                                Text(
-                                  lang.label,
-                                  style: GoogleFonts.notoSansKr(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                    color: isSelected ? cs.onPrimary : cs.onSurface,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    );
-                  }).toList(),
-                ),
-                const SizedBox(height: 24),
                 TextFormField(
                   controller: _displayNameController,
                   decoration: _inputDecoration(
@@ -338,7 +248,7 @@ class _SignupPageState extends State<SignupPage> {
                     suffixIcon: IconButton(
                       icon: Icon(
                         _obscurePassword ? LucideIcons.eye_off : LucideIcons.eye,
-                        color: AppColors.mediumGrey,
+                        color: AppColors.mediumGrey.withValues(alpha: 0.9),
                       ),
                       onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
                     ),
@@ -363,7 +273,7 @@ class _SignupPageState extends State<SignupPage> {
                     suffixIcon: IconButton(
                       icon: Icon(
                         _obscurePasswordConfirm ? LucideIcons.eye_off : LucideIcons.eye,
-                        color: AppColors.mediumGrey,
+                        color: AppColors.mediumGrey.withValues(alpha: 0.9),
                       ),
                       onPressed: () => setState(() => _obscurePasswordConfirm = !_obscurePasswordConfirm),
                     ),
@@ -379,12 +289,10 @@ class _SignupPageState extends State<SignupPage> {
                 FilledButton(
                   onPressed: _isLoading ? null : _onSignup,
                   style: FilledButton.styleFrom(
-                    backgroundColor: AppColors.accent,
+                    backgroundColor: const Color(0xFFFF5A00),
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 18),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 17),
+                    shape: const StadiumBorder(),
                     elevation: 0,
                   ),
                   child: _isLoading
@@ -399,44 +307,17 @@ class _SignupPageState extends State<SignupPage> {
                       : Text(
                           s.get('signUpButton'),
                           style: GoogleFonts.notoSansKr(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
+                            fontSize: 17,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.1,
                           ),
                         ),
-                ),
-                const SizedBox(height: 24),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      s.get('hasAccount'),
-                      style: GoogleFonts.notoSansKr(
-                        fontSize: 14,
-                        color: AppColors.mediumGrey,
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      style: TextButton.styleFrom(
-                        padding: EdgeInsets.zero,
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      child: Text(
-                        s.get('login'),
-                        style: GoogleFonts.notoSansKr(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.linkBlue,
-                        ),
-                      ),
-                    ),
-                  ],
                 ),
               ],
             ),
           ),
         ),
+      ),
       ),
     );
   }

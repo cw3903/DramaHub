@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+/// [FeedReviewLetterboxdTile] 포스터 가로와 동일. 홈 리뷰 별·다른 화면에서 [FeedReviewRatingStars]와 맞출 때 사용.
+const double kFeedReviewRatingThumbWidth = 62;
+
 /// DramaFeed Reviews(Letterboxd)와 동일 — 채워진 별만, 0.5점은 유니코드 `½` ([FeedReviewLetterboxdTile] 구현과 동일).
 class FeedReviewRatingStars extends StatelessWidget {
   const FeedReviewRatingStars({
     super.key,
     required this.rating,
-    /// [FeedReviewLetterboxdTile._thumbW]와 같게 두면 홈 탭과 별·½ 크기가 일치합니다.
-    this.layoutThumbWidth = 62,
+    /// [kFeedReviewRatingThumbWidth]와 같게 두면 홈 탭과 별·½ 크기가 일치합니다.
+    this.layoutThumbWidth = kFeedReviewRatingThumbWidth,
   });
 
   final double rating;

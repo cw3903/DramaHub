@@ -79,16 +79,18 @@ class FollowService {
   }
 
   /// 프로필 통계용 일회성 조회 (다른 유저 프로필 — [followingCountNotifier]와 무관).
+  /// Firestore `count()` 집계로 문서를 다운로드하지 않아 빠르고 저렴.
   Future<int> getFollowingCountOnce(String uid) async {
     final u = uid.trim();
     if (u.isEmpty) return 0;
     try {
-      final snap = await _firestore
+      final agg = await _firestore
           .collection('users')
           .doc(u)
           .collection('following')
+          .count()
           .get();
-      return snap.docs.length;
+      return agg.count ?? 0;
     } catch (e, st) {
       debugPrint('getFollowingCountOnce: $e\n$st');
       return 0;
@@ -128,8 +130,9 @@ class FollowService {
   Future<void> followUser(String targetUid) async {
     final me = AuthService.instance.currentUser.value?.uid;
     if (me == null || me == targetUid) return;
-    final myPub = await getUserPublic(me);
-    final tpPub = await getUserPublic(targetUid);
+    final results = await Future.wait([getUserPublic(me), getUserPublic(targetUid)]);
+    final myPub = results[0];
+    final tpPub = results[1];
     if (tpPub == null) return;
 
     final myRef = _firestore.collection('users').doc(me);

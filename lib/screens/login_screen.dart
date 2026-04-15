@@ -292,7 +292,7 @@ class _LoginFormContentState extends State<LoginFormContent> {
                       backgroundColor: AppColors.accent,
                       foregroundColor: Colors.white,
                       disabledBackgroundColor: AppColors.accent.withValues(alpha: 0.45),
-                      padding: const EdgeInsets.symmetric(vertical: 15),
+                      padding: const EdgeInsets.symmetric(vertical: 11),
                       shape: const StadiumBorder(),
                       elevation: 0,
                     ),
@@ -312,6 +312,16 @@ class _LoginFormContentState extends State<LoginFormContent> {
                               fontWeight: FontWeight.w700,
                             ),
                           ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Forgot password?',
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.notoSansKr(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: p.muted,
+                    ),
                   ),
                   const SizedBox(height: 22),
                   Row(

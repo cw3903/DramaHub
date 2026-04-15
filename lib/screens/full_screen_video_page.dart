@@ -8,17 +8,23 @@ class FullScreenVideoPage extends StatefulWidget {
     required this.videoUrl,
     this.thumbnailUrl,
     this.isGif = false,
+    this.existingController,
   });
 
   final String videoUrl;
   final String? thumbnailUrl;
   final bool isGif;
 
+  /// 인라인 플레이어에서 이미 초기화된 컨트롤러를 전달하면 중복 네트워크 요청 없이
+  /// 전체화면을 즉시 시작한다. dispose는 caller 책임이므로 이 페이지에서 하지 않음.
+  final VideoPlayerController? existingController;
+
   static Future<void> show(
     BuildContext context, {
     required String videoUrl,
     String? thumbnailUrl,
     bool isGif = false,
+    VideoPlayerController? existingController,
   }) {
     return Navigator.of(context).push(
       PageRouteBuilder(
@@ -28,6 +34,7 @@ class FullScreenVideoPage extends StatefulWidget {
           videoUrl: videoUrl,
           thumbnailUrl: thumbnailUrl,
           isGif: isGif,
+          existingController: existingController,
         ),
         transitionsBuilder: (_, animation, __, child) {
           return FadeTransition(opacity: animation, child: child);
@@ -45,29 +52,46 @@ class FullScreenVideoPage extends StatefulWidget {
 class _FullScreenVideoPageState extends State<FullScreenVideoPage> {
   VideoPlayerController? _controller;
   bool _muted = false;
+  // 기존 컨트롤러를 받았으면 이 페이지에서 dispose하지 않음
+  bool _ownsController = false;
 
   @override
   void initState() {
     super.initState();
-    _controller = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl))
-      ..initialize().then((_) {
-        if (!mounted) return;
-        _controller!.setLooping(widget.isGif);
-        if (widget.isGif) {
-          _controller!.setVolume(0);
-          _muted = true;
-        }
-        setState(() {});
-        _controller!.play();
-      })
-      ..addListener(() {
+    if (widget.existingController != null &&
+        widget.existingController!.value.isInitialized) {
+      // 이미 초기화된 컨트롤러 재사용 — 즉시 전체화면에서 재생
+      _controller = widget.existingController;
+      _ownsController = false;
+      _muted = _controller!.value.volume == 0;
+      _controller!.addListener(() {
         if (mounted) setState(() {});
       });
+      // 이미 재생 중이면 그대로, 아니면 시작
+      if (!_controller!.value.isPlaying) _controller!.play();
+    } else {
+      // 기존 컨트롤러 없음 또는 미초기화 → 새로 생성
+      _ownsController = true;
+      _controller = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl))
+        ..initialize().then((_) {
+          if (!mounted) return;
+          _controller!.setLooping(widget.isGif);
+          if (widget.isGif) {
+            _controller!.setVolume(0);
+            _muted = true;
+          }
+          setState(() {});
+          _controller!.play();
+        })
+        ..addListener(() {
+          if (mounted) setState(() {});
+        });
+    }
   }
 
   @override
   void dispose() {
-    _controller?.dispose();
+    if (_ownsController) _controller?.dispose();
     super.dispose();
   }
 

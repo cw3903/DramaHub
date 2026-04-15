@@ -40,6 +40,7 @@ import 'write_post_page.dart';
 import 'community_search_page.dart';
 import 'notification_screen.dart';
 import '../widgets/optimized_network_image.dart';
+import '../widgets/app_delete_confirm_dialog.dart';
 import '../widgets/blind_refresh_indicator.dart';
 import '../widgets/community_board_tabs.dart';
 import '../widgets/user_profile_nav.dart';
@@ -211,8 +212,13 @@ class _PostDetailPageState extends State<PostDetailPage>
   late final List<(Post, int)> _forwardStack;
 
   Post get _post => _currentPost ?? widget.post;
-  bool get _isMine =>
-      _currentUserAuthor != null && _post.author == _currentUserAuthor;
+  bool get _isMine {
+    final myUid = AuthService.instance.currentUser.value?.uid.trim();
+    if (myUid != null && myUid.isNotEmpty && _post.authorUid?.trim() == myUid) {
+      return true;
+    }
+    return _currentUserAuthor != null && _post.author == _currentUserAuthor;
+  }
 
   /// 운영자는 타인 글도 삭제 가능(UID는 [kAppModeratorAuthUids]).
   bool get _canDeletePost => _isMine || isAppModerator();
@@ -336,6 +342,13 @@ class _PostDetailPageState extends State<PostDetailPage>
     final uid = AuthService.instance.currentUser.value?.uid;
     _isLiked = uid != null && widget.post.likedBy.contains(uid);
     _isDisliked = uid != null && widget.post.dislikedBy.contains(uid);
+    // 영상 게시글: 전환 애니메이션 중에 preload 시작 — deferred frame 이전이므로
+    // _PostVideoPlayer.initState 가 실행될 때 이미 초기화 중(또는 완료)인 컨트롤러를 재사용.
+    if (widget.post.hasVideo &&
+        widget.post.videoUrl != null &&
+        widget.post.videoUrl!.isNotEmpty) {
+      VideoPreloadCache.instance.preload(widget.post.videoUrl!);
+    }
     // 첫 프레임이 화면에 그려진 뒤 비동기 작업 시작 — 전환 애니메이션 jank 방지
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -457,16 +470,7 @@ class _PostDetailPageState extends State<PostDetailPage>
         return;
       }
     }
-    await UserProfileService.instance.loadIfNeeded();
-    final nickname = UserProfileService.instance.nicknameNotifier.value;
-    final displayName = AuthService.instance.currentUser.value?.displayName;
-    final email = AuthService.instance.currentUser.value?.email;
-    String author = nickname?.trim().isNotEmpty == true
-        ? nickname!.trim()
-        : (displayName?.trim().isNotEmpty == true
-              ? displayName!.trim()
-              : (email != null ? email.split('@').first : ''));
-    if (author.isEmpty) author = '익명';
+    final author = await UserProfileService.instance.getAuthorBaseName();
     final s = CountryScope.of(context).strings;
     final newComment = PostComment(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
@@ -1699,11 +1703,18 @@ class _PostDetailPageState extends State<PostDetailPage>
                   value: 'delete',
                   child: Row(
                     children: [
-                      Icon(Icons.delete_outline, size: 18, color: cs.error),
+                      Icon(
+                        Icons.delete_outline,
+                        size: 18,
+                        color: kAppDeleteActionColor,
+                      ),
                       const SizedBox(width: 8),
                       Text(
                         s.get('delete'),
-                        style: GoogleFonts.notoSansKr(color: cs.error),
+                        style: GoogleFonts.notoSansKr(
+                          color: kAppDeleteActionColor,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ],
                   ),
@@ -1715,11 +1726,18 @@ class _PostDetailPageState extends State<PostDetailPage>
                   value: 'delete',
                   child: Row(
                     children: [
-                      Icon(Icons.delete_outline, size: 18, color: cs.error),
+                      Icon(
+                        Icons.delete_outline,
+                        size: 18,
+                        color: kAppDeleteActionColor,
+                      ),
                       const SizedBox(width: 8),
                       Text(
                         s.get('delete'),
-                        style: GoogleFonts.notoSansKr(color: cs.error),
+                        style: GoogleFonts.notoSansKr(
+                          color: kAppDeleteActionColor,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ],
                   ),
@@ -1883,28 +1901,11 @@ class _PostDetailPageState extends State<PostDetailPage>
       );
       if (updated != null && mounted) setState(() => _currentPost = updated);
     } else if (value == 'delete') {
-      final confirm = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text(s.get('delete'), style: GoogleFonts.notoSansKr()),
-          content: Text(
-            s.get('deletePostConfirm'),
-            style: GoogleFonts.notoSansKr(),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr()),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: Text(
-                s.get('delete'),
-                style: GoogleFonts.notoSansKr(color: cs.error),
-              ),
-            ),
-          ],
-        ),
+      final confirm = await showAppDeleteConfirmDialog(
+        context,
+        message: s.get('deletePostConfirm'),
+        cancelText: s.get('cancel'),
+        confirmText: s.get('delete'),
       );
       if (confirm == true && mounted) {
         await PostService.instance.deletePost(post.id);
@@ -2234,17 +2235,19 @@ class _PostDetailPageState extends State<PostDetailPage>
                                               minimumSize: Size.zero,
                                               tapTargetSize: MaterialTapTargetSize
                                                   .shrinkWrap,
-                                              foregroundColor: cs.primary,
+                                              foregroundColor: cs
+                                                  .onSurfaceVariant
+                                                  .withValues(alpha: 0.72),
                                             ),
                                             child: Text(
                                               s.get('edit'),
                                               style: GoogleFonts.notoSansKr(
-                                                fontSize: 12,
-                                                fontWeight: FontWeight.w700,
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.w600,
                                               ),
                                             ),
                                           ),
-                                        if (_canDeletePost &&
+                                        if (_isMine &&
                                             !widget.offlineSyntheticReview)
                                           TextButton(
                                             onPressed: () =>
@@ -2263,13 +2266,15 @@ class _PostDetailPageState extends State<PostDetailPage>
                                               minimumSize: Size.zero,
                                               tapTargetSize: MaterialTapTargetSize
                                                   .shrinkWrap,
-                                              foregroundColor: cs.error,
+                                              foregroundColor: cs
+                                                  .onSurfaceVariant
+                                                  .withValues(alpha: 0.72),
                                             ),
                                             child: Text(
                                               s.get('delete'),
                                               style: GoogleFonts.notoSansKr(
-                                                fontSize: 12,
-                                                fontWeight: FontWeight.w700,
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.w600,
                                               ),
                                             ),
                                           ),
@@ -2841,9 +2846,7 @@ class _PostDetailPageState extends State<PostDetailPage>
         isTypedReview && !widget.hideBottomDramaFeed;
     final hideViewsInTalkAskDetail = boardKind == 'talk' || boardKind == 'ask';
     final listsHeaderBg = listsStyleSubpageHeaderBackground(theme);
-    final deleteLabelColor = (boardKind == 'talk' || boardKind == 'ask')
-        ? Colors.redAccent
-        : cs.error;
+    final deleteLabelColor = kAppDeleteActionColor;
     _letterboxdEnsureSpoilerStateForPost(post.id);
     return PopScope(
       canPop: _backStack.isEmpty,
@@ -3144,7 +3147,7 @@ class _PostDetailPageState extends State<PostDetailPage>
                                                                       .delete_outline,
                                                                   size: 18,
                                                                   color:
-                                                                      cs.error,
+                                                                      kAppDeleteActionColor,
                                                                 ),
                                                                 const SizedBox(
                                                                   width: 10,
@@ -3154,8 +3157,11 @@ class _PostDetailPageState extends State<PostDetailPage>
                                                                     'delete',
                                                                   ),
                                                                   style: GoogleFonts.notoSansKr(
-                                                                    color: cs
-                                                                        .error,
+                                                                    color:
+                                                                        kAppDeleteActionColor,
+                                                                    fontWeight:
+                                                                        FontWeight
+                                                                            .w700,
                                                                   ),
                                                                 ),
                                                               ],
@@ -3171,7 +3177,7 @@ class _PostDetailPageState extends State<PostDetailPage>
                                                                       .delete_outline,
                                                                   size: 18,
                                                                   color:
-                                                                      cs.error,
+                                                                      kAppDeleteActionColor,
                                                                 ),
                                                                 const SizedBox(
                                                                   width: 10,
@@ -3181,8 +3187,11 @@ class _PostDetailPageState extends State<PostDetailPage>
                                                                     'delete',
                                                                   ),
                                                                   style: GoogleFonts.notoSansKr(
-                                                                    color: cs
-                                                                        .error,
+                                                                    color:
+                                                                        kAppDeleteActionColor,
+                                                                    fontWeight:
+                                                                        FontWeight
+                                                                            .w700,
                                                                   ),
                                                                 ),
                                                               ],
@@ -3267,51 +3276,16 @@ class _PostDetailPageState extends State<PostDetailPage>
                                                         );
                                                     } else if (value ==
                                                         'delete') {
-                                                      final confirm = await showDialog<bool>(
-                                                        context: context,
-                                                        builder: (ctx) => AlertDialog(
-                                                          title: Text(
-                                                            s.get('delete'),
-                                                            style:
-                                                                GoogleFonts.notoSansKr(),
-                                                          ),
-                                                          content: Text(
-                                                            s.get(
-                                                              'deletePostConfirm',
-                                                            ),
-                                                            style:
-                                                                GoogleFonts.notoSansKr(),
-                                                          ),
-                                                          actions: [
-                                                            TextButton(
-                                                              onPressed: () =>
-                                                                  Navigator.pop(
-                                                                    ctx,
-                                                                    false,
-                                                                  ),
-                                                              child: Text(
-                                                                s.get('cancel'),
-                                                                style:
-                                                                    GoogleFonts.notoSansKr(),
-                                                              ),
-                                                            ),
-                                                            TextButton(
-                                                              onPressed: () =>
-                                                                  Navigator.pop(
-                                                                    ctx,
-                                                                    true,
-                                                                  ),
-                                                              child: Text(
-                                                                s.get('delete'),
-                                                                style:
-                                                                    GoogleFonts.notoSansKr(
-                                                                      color: cs
-                                                                          .error,
-                                                                    ),
-                                                              ),
-                                                            ),
-                                                          ],
+                                                      final confirm =
+                                                          await showAppDeleteConfirmDialog(
+                                                        context,
+                                                        message: s.get(
+                                                          'deletePostConfirm',
                                                         ),
+                                                        cancelText:
+                                                            s.get('cancel'),
+                                                        confirmText:
+                                                            s.get('delete'),
                                                       );
                                                       if (confirm == true &&
                                                           mounted) {
@@ -3755,51 +3729,16 @@ class _PostDetailPageState extends State<PostDetailPage>
                                               if (_canDeletePost)
                                                 GestureDetector(
                                                   onTap: () async {
-                                                    final confirm = await showDialog<bool>(
-                                                      context: context,
-                                                      builder: (ctx) => AlertDialog(
-                                                        title: Text(
-                                                          s.get('delete'),
-                                                          style:
-                                                              GoogleFonts.notoSansKr(),
-                                                        ),
-                                                        content: Text(
-                                                          s.get(
-                                                            'deletePostConfirm',
-                                                          ),
-                                                          style:
-                                                              GoogleFonts.notoSansKr(),
-                                                        ),
-                                                        actions: [
-                                                          TextButton(
-                                                            onPressed: () =>
-                                                                Navigator.pop(
-                                                                  ctx,
-                                                                  false,
-                                                                ),
-                                                            child: Text(
-                                                              s.get('cancel'),
-                                                              style:
-                                                                  GoogleFonts.notoSansKr(),
-                                                            ),
-                                                          ),
-                                                          TextButton(
-                                                            onPressed: () =>
-                                                                Navigator.pop(
-                                                                  ctx,
-                                                                  true,
-                                                                ),
-                                                            child: Text(
-                                                              s.get('delete'),
-                                                              style:
-                                                                  GoogleFonts.notoSansKr(
-                                                                    color: cs
-                                                                        .error,
-                                                                  ),
-                                                            ),
-                                                          ),
-                                                        ],
+                                                    final confirm =
+                                                        await showAppDeleteConfirmDialog(
+                                                      context,
+                                                      message: s.get(
+                                                        'deletePostConfirm',
                                                       ),
+                                                      cancelText:
+                                                          s.get('cancel'),
+                                                      confirmText:
+                                                          s.get('delete'),
                                                     );
                                                     if (confirm == true &&
                                                         mounted) {
@@ -3824,7 +3763,7 @@ class _PostDetailPageState extends State<PostDetailPage>
                                                           GoogleFonts.notoSansKr(
                                                             fontSize: 13,
                                                             fontWeight:
-                                                                FontWeight.w600,
+                                                                FontWeight.w700,
                                                             color:
                                                                 deleteLabelColor,
                                                           ),
@@ -5937,38 +5876,48 @@ class _PostVideoPlayerState extends State<_PostVideoPlayer> {
   late VideoPlayerController _controller;
   bool _muted = false;
 
+  void _applySettings() {
+    _controller.setLooping(widget.isGif);
+    if (widget.isGif) {
+      _controller.setVolume(0);
+      _muted = true;
+    } else {
+      _controller.setVolume(1);
+      _muted = false;
+    }
+  }
+
   @override
   void initState() {
     super.initState();
-    // 피드에서 사전 로딩된 컨트롤러 재사용 시도
+    // preload로 생성된 컨트롤러 재사용 (초기화 중이어도 재사용)
     final cached = VideoPreloadCache.instance.consume(widget.videoUrl);
-    if (cached != null && cached.value.isInitialized) {
+    if (cached != null) {
       _controller = cached;
-      _controller.setLooping(widget.isGif);
-      if (widget.isGif) {
-        _controller.setVolume(0);
-        _muted = true;
+      if (cached.value.isInitialized) {
+        // 이미 완료 → 즉시 재생
+        _applySettings();
+        _controller.addListener(() {
+          if (mounted) setState(() {});
+        });
+        _controller.play();
       } else {
-        _controller.setVolume(1);
-        _muted = false;
+        // 아직 초기화 중 → 완료 후 재생 (중복 네트워크 요청 없음)
+        _controller.addListener(() {
+          if (!mounted) return;
+          if (_controller.value.isInitialized && !_controller.value.isPlaying) {
+            _applySettings();
+            _controller.play();
+          }
+          setState(() {});
+        });
       }
-      _controller.addListener(() {
-        if (mounted) setState(() {});
-      });
-      _controller.play();
     } else {
-      cached?.dispose();
+      // 캐시 없음 — 콜드 스타트
       _controller = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl))
         ..initialize().then((_) {
           if (!mounted) return;
-          _controller.setLooping(widget.isGif);
-          if (widget.isGif) {
-            _controller.setVolume(0);
-            _muted = true;
-          } else {
-            _controller.setVolume(1);
-            _muted = false;
-          }
+          _applySettings();
           setState(() {});
           _controller.play();
         });
@@ -6184,11 +6133,16 @@ class _PostVideoPlayerState extends State<_PostVideoPlayer> {
                         size: 22,
                       ),
                       onPressed: () {
+                        // 초기화된 컨트롤러를 전달하면 fullscreen에서 즉시 재생
+                        final ctrl = _controller.value.isInitialized
+                            ? _controller
+                            : null;
                         FullScreenVideoPage.show(
                           context,
                           videoUrl: widget.videoUrl,
                           thumbnailUrl: widget.thumbnailUrl,
                           isGif: widget.isGif,
+                          existingController: ctrl,
                         );
                       },
                       padding: EdgeInsets.zero,

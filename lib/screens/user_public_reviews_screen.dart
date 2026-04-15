@@ -36,6 +36,15 @@ class _UserPublicReviewsScreenState extends State<UserPublicReviewsScreen> {
     });
   }
 
+  String _headerTitle(dynamic s) {
+    final name = widget.ownerDisplayName?.trim() ?? '';
+    if (name.isNotEmpty) {
+      return (s.get('userPublicReviewsTitleNamed') as String)
+          .replaceAll('{name}', name);
+    }
+    return s.get('tabReviews') as String;
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = CountryScope.of(context).strings;
@@ -50,7 +59,7 @@ class _UserPublicReviewsScreenState extends State<UserPublicReviewsScreen> {
         appBar: PreferredSize(
           preferredSize: ListsStyleSubpageHeaderBar.preferredSizeOf(context),
           child: ListsStyleSubpageHeaderBar(
-            title: s.get('tabReviews'),
+            title: _headerTitle(s),
             onBack: () => popListsStyleSubpage(context),
           ),
         ),
@@ -103,7 +112,10 @@ class _UserPublicReviewsScreenState extends State<UserPublicReviewsScreen> {
             final list = List<MyReviewItem>.from(raw)
               ..sort((a, b) => b.writtenAt.compareTo(a.writtenAt));
             return ListView.separated(
-              padding: const EdgeInsets.only(top: 4, bottom: 32),
+              padding: EdgeInsets.only(
+                top: 4,
+                bottom: listsStyleSubpageMainTabBottomInset(context),
+              ),
               itemCount: list.length,
               separatorBuilder: (context, index) => Divider(
                 height: 1,

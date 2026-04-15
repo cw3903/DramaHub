@@ -159,17 +159,51 @@ class WatchHistoryService {
     await _load();
   }
 
-  /// 타 유저 프로필 메뉴 카운트용.
+  /// 타 유저 다이어리 목록 조회.
+  Future<List<WatchedDramaItem>> fetchForUid(String uid) async {
+    final u = uid.trim();
+    if (u.isEmpty) return [];
+    try {
+      QuerySnapshot<Map<String, dynamic>> snap;
+      try {
+        snap = await _firestore
+            .collection('users')
+            .doc(u)
+            .collection('watch_history')
+            .orderBy('watchedAt', descending: true)
+            .get();
+      } catch (_) {
+        snap = await _firestore
+            .collection('users')
+            .doc(u)
+            .collection('watch_history')
+            .get();
+      }
+      final items = snap.docs
+          .map((d) => _itemFromFirestore(d.id, d.data()))
+          .whereType<WatchedDramaItem>()
+          .where((e) => e.id.isNotEmpty)
+          .toList();
+      items.sort((a, b) => b.watchedAt.compareTo(a.watchedAt));
+      return items;
+    } catch (e, st) {
+      debugPrint('WatchHistoryService.fetchForUid: $e\n$st');
+      return [];
+    }
+  }
+
+  /// 타 유저 프로필 메뉴 카운트용. Firestore `count()` 집계 사용.
   Future<int> countWatchHistoryForUid(String uid) async {
     final u = uid.trim();
     if (u.isEmpty) return 0;
     try {
-      final snap = await _firestore
+      final agg = await _firestore
           .collection('users')
           .doc(u)
           .collection('watch_history')
+          .count()
           .get();
-      return snap.docs.length;
+      return agg.count ?? 0;
     } catch (e, st) {
       debugPrint('WatchHistoryService.countWatchHistoryForUid: $e\n$st');
       return 0;

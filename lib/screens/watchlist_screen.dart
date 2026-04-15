@@ -350,17 +350,20 @@ class _WatchlistPosterCell extends StatelessWidget {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  if (url != null && url.startsWith('http'))
+                  if (url != null &&
+                      (url.startsWith('http://') || url.startsWith('https://')))
                     OptimizedNetworkImage(
                       imageUrl: url,
                       fit: BoxFit.cover,
-                      memCacheWidth: 184,
-                      memCacheHeight: 276,
+                      width: double.infinity,
+                      height: double.infinity,
                     )
                   else if (url != null && url.isNotEmpty)
                     Image.asset(
                       url,
                       fit: BoxFit.cover,
+                      width: double.infinity,
+                      height: double.infinity,
                       errorBuilder: (context, error, stackTrace) => Center(
                         child: Icon(
                           LucideIcons.tv,

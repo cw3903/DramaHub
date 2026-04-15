@@ -1,3 +1,4 @@
+import 'dart:async' show unawaited;
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -43,6 +44,16 @@ class UserProfileService {
   final FirebaseStorage _storage = FirebaseStorage.instance;
   bool _loaded = false;
   String? _lastLoadedUid;
+  String? _lastAuthorLabelNormalizedUid;
+  String? _lastAuthorLabelNormalizedValue;
+
+  // 타 유저 프로필 캐시 (uid → profile). 앱 세션 동안 유효. 최대 100개 유지.
+  static const int _publicProfileCacheMax = 100;
+  final Map<String, PublicUserProfile> _publicProfileCache = {};
+
+  void invalidatePublicProfileCache(String uid) {
+    _publicProfileCache.remove(uid);
+  }
 
   /// 아바타 배경색 팔레트 (ARGB int 값)
   static const List<int> avatarPalette = [
@@ -164,33 +175,105 @@ class UserProfileService {
       favoritesNotifier.value = [];
     }
     FollowService.instance.startFollowingCountListener(uid);
+    final nick = nicknameNotifier.value?.trim();
+    if (nick != null && nick.isNotEmpty) {
+      final normalized = 'u/$nick';
+      if (_lastAuthorLabelNormalizedUid != uid ||
+          _lastAuthorLabelNormalizedValue != normalized) {
+        _lastAuthorLabelNormalizedUid = uid;
+        _lastAuthorLabelNormalizedValue = normalized;
+        unawaited(PostService.instance.normalizeAuthorLabelForUid(uid, normalized));
+      }
+    }
     _loaded = true;
   }
 
   /// 커뮤니티 피드 등에서 가입 국가·프로필을 먼저 채운 뒤 호출할 때 사용. [loadIfNeeded]와 동일.
   Future<void> loadUserProfile() => loadIfNeeded();
 
-  /// 커뮤니티 등에서 타 유저 프로필 화면용. [users/{uid}] 읽기 전용.
-  Future<PublicUserProfile?> fetchPublicUserProfile(String uid) async {
+  static String _stripLeadingAuthorPrefix(String raw) {
+    final s = raw.trim();
+    if (s.isEmpty) return s;
+    return s.startsWith('u/') ? s.substring(2) : s;
+  }
+
+  /// `users/{uid}`에 닉네임이 없을 때(구 계정 등) 글·리뷰에 디노멀된 작성자명으로 보완.
+  Future<String?> _displayNameFromAuthorActivity(String uid) async {
     final u = uid.trim();
     if (u.isEmpty) return null;
+    try {
+      final postsSnap = await _firestore
+          .collection('posts')
+          .where('authorUid', isEqualTo: u)
+          .limit(1)
+          .get();
+      if (postsSnap.docs.isNotEmpty) {
+        final author = (postsSnap.docs.first.data()['author'] as String?)?.trim();
+        if (author != null && author.isNotEmpty) {
+          return _stripLeadingAuthorPrefix(author);
+        }
+      }
+    } catch (e, st) {
+      debugPrint('_displayNameFromAuthorActivity posts: $e\n$st');
+    }
+    try {
+      final revSnap = await _firestore
+          .collection('drama_reviews')
+          .where('uid', isEqualTo: u)
+          .limit(1)
+          .get();
+      if (revSnap.docs.isNotEmpty) {
+        final name = (revSnap.docs.first.data()['authorName'] as String?)?.trim();
+        if (name != null && name.isNotEmpty) {
+          return _stripLeadingAuthorPrefix(name);
+        }
+      }
+    } catch (e, st) {
+      debugPrint('_displayNameFromAuthorActivity drama_reviews: $e\n$st');
+    }
+    return null;
+  }
+
+  /// 커뮤니티 등에서 타 유저 프로필 화면용. [users/{uid}] 읽기 전용.
+  /// 결과는 세션 캐시에 보관 — 같은 UID 재방문 시 Firestore 호출 없음.
+  Future<PublicUserProfile?> fetchPublicUserProfile(
+    String uid, {
+    bool forceRefresh = false,
+  }) async {
+    final u = uid.trim();
+    if (u.isEmpty) return null;
+    if (!forceRefresh && _publicProfileCache.containsKey(u)) {
+      return _publicProfileCache[u];
+    }
     try {
       final doc = await _firestore.collection('users').doc(u).get();
       if (!doc.exists || doc.data() == null) return null;
       final data = doc.data()!;
       final nick = (data['nickname'] as String?)?.trim();
-      final display =
-          nick != null && nick.isNotEmpty ? nick : (data['email'] as String?)?.split('@').first ?? 'Member';
+      String? display = nick != null && nick.isNotEmpty ? nick : null;
+      display ??= (data['email'] as String?)?.split('@').first.trim();
+      if (display == null || display.isEmpty) {
+        display = await _displayNameFromAuthorActivity(u);
+      }
+      if (display == null || display.isEmpty) {
+        display = 'Member';
+      }
       final photo = data['profileImageUrl'] as String?;
       final colorIdx = data['avatarColorIndex'];
       final favorites = _parseFavoritesList(data['favorites']);
-      return PublicUserProfile(
+      final profile = PublicUserProfile(
         uid: u,
         displayNickname: display,
         profileImageUrl: photo,
         avatarColorIndex: colorIdx is num ? colorIdx.toInt() : null,
         favorites: favorites,
       );
+      // LRU-lite: 100개 초과 시 가장 먼저 들어온 것부터 제거
+      if (_publicProfileCache.length >= _publicProfileCacheMax) {
+        _publicProfileCache.remove(_publicProfileCache.keys.first);
+      }
+      _publicProfileCache[u] = profile;
+      return profile;
     } catch (e, st) {
       debugPrint('fetchPublicUserProfile: $e\n$st');
       return null;
@@ -214,6 +297,8 @@ class UserProfileService {
     FollowService.instance.stopFollowingCountListener();
     _loaded = false;
     _lastLoadedUid = null;
+    _lastAuthorLabelNormalizedUid = null;
+    _lastAuthorLabelNormalizedValue = null;
   }
 
   static List<ProfileFavorite> _parseFavoritesList(dynamic raw) {
@@ -256,15 +341,30 @@ class UserProfileService {
     await saveFavorites(cur);
   }
 
-  /// 글/댓글 작성 및 조회 시 사용하는 작성자 이름 (닉네임 > displayName > 이메일앞 > 익명)
+  /// 글/댓글 작성 및 조회 시 사용하는 작성자 이름.
+  /// 원칙: Firestore 닉네임 우선. 닉네임 미확인 시 users/{uid}를 한 번 더 직접 조회.
+  /// 그래도 없으면 `익명`으로 처리(이메일/displayName fallback 저장 방지).
   Future<String> getAuthorBaseName() async {
     await loadIfNeeded();
     final nickname = nicknameNotifier.value?.trim();
     if (nickname != null && nickname.isNotEmpty) return nickname;
-    final displayName = AuthService.instance.currentUser.value?.displayName?.trim();
-    if (displayName != null && displayName.isNotEmpty) return displayName;
-    final email = AuthService.instance.currentUser.value?.email;
-    if (email != null && email.isNotEmpty) return email.split('@').first;
+
+    // loadIfNeeded 실패/지연 대비: users 문서를 직접 재조회
+    try {
+      final uid = AuthService.instance.currentUser.value?.uid;
+      if (uid != null && uid.isNotEmpty) {
+        final doc = await _firestore.collection('users').doc(uid).get();
+        final data = doc.data();
+        final nickFromDoc = (data?['nickname'] as String?)?.trim();
+        if (nickFromDoc != null && nickFromDoc.isNotEmpty) {
+          nicknameNotifier.value = nickFromDoc;
+          return nickFromDoc;
+        }
+      }
+    } catch (e, st) {
+      debugPrint('getAuthorBaseName direct user fetch: $e\n$st');
+    }
+
     return '익명';
   }
 

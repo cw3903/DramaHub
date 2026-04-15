@@ -18,6 +18,7 @@ import '../widgets/feed_review_post_card.dart';
 import '../widgets/feed_review_letterboxd_tile.dart';
 import '../widgets/blind_refresh_indicator.dart';
 import '../widgets/optimized_network_image.dart';
+import '../screens/community_search_page.dart';
 import '../screens/drama_detail_page.dart';
 import '../screens/login_page.dart';
 
@@ -327,39 +328,6 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
     }
   }
 
-  Future<void> _openReviewCommentOverlay(Post post) async {
-    if (!AuthService.instance.isLoggedIn.value) {
-      await Navigator.push<void>(
-        context,
-        MaterialPageRoute(builder: (_) => const LoginPage()),
-      );
-      if (!mounted) return;
-      if (!AuthService.instance.isLoggedIn.value) return;
-    }
-    await UserProfileService.instance.loadIfNeeded();
-    if (!mounted) return;
-    final id = post.id;
-    _inlineCommentControllers.putIfAbsent(id, TextEditingController.new);
-    _refreshPostForComments(id);
-    if (!mounted) return;
-    await Navigator.of(context).push<void>(
-      PageRouteBuilder<void>(
-        opaque: false,
-        barrierColor: Colors.transparent,
-        pageBuilder: (routeContext, animation, secondaryAnimation) {
-          return FadeTransition(
-            opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
-            child: _ReviewCommentComposerOverlay(
-              controller: _inlineCommentControllers[id]!,
-              onSend: (overlayCtx) =>
-                  _submitInlineComment(post, successPopContext: overlayCtx),
-            ),
-          );
-        },
-      ),
-    );
-  }
-
   Future<void> _submitInlineComment(
     Post post, {
     BuildContext? successPopContext,
@@ -380,17 +348,8 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
     if (_inlineCommentSubmitting.contains(id)) return;
     setState(() => _inlineCommentSubmitting.add(id));
     final s = CountryScope.of(context).strings;
-    await UserProfileService.instance.loadIfNeeded();
+    final author = await UserProfileService.instance.getAuthorBaseName();
     if (!mounted) return;
-    final nickname = UserProfileService.instance.nicknameNotifier.value;
-    final displayName = AuthService.instance.currentUser.value?.displayName;
-    final email = AuthService.instance.currentUser.value?.email;
-    var author = nickname?.trim().isNotEmpty == true
-        ? nickname!.trim()
-        : (displayName?.trim().isNotEmpty == true
-              ? displayName!.trim()
-              : (email != null ? email.split('@').first : ''));
-    if (author.isEmpty) author = '익명';
     final p = _latestPost(post);
     final newComment = PostComment(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
@@ -529,6 +488,38 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
       CupertinoPageRoute<void>(
         builder: (_) =>
             DramaDetailPage(detail: detail, scrollToRatings: scrollToReviews),
+      ),
+    );
+  }
+
+  void _openCommunitySearchForTag(
+    BuildContext context,
+    Post post,
+    String raw,
+  ) {
+    final q = raw.trim();
+    if (q.isEmpty) return;
+    final dramaId = post.dramaId?.trim();
+    if (dramaId == null || dramaId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '연결된 드라마가 없어 태그 페이지를 열 수 없어요',
+            style: GoogleFonts.notoSansKr(),
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => CommunitySearchPage(
+          initialQuery: q,
+          reviewDramaId: dramaId,
+          reviewDramaPosterUrl: post.dramaThumbnail?.trim(),
+        ),
       ),
     );
   }
@@ -771,7 +762,7 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
         ),
         const SizedBox(width: 4),
         reviewInlineActionHitTarget(
-          onTap: () => _openReviewCommentOverlay(post),
+          onTap: () => _toggleReviewBodyComments(post),
           visual: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
             child: Row(
@@ -813,7 +804,11 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
             .toLowerCase();
     switch (_searchScope) {
       case PostSearchScope.titleAndBody:
-        return title.contains(q) || body.contains(q);
+        if (title.contains(q) || body.contains(q)) return true;
+        for (final t in p.tags) {
+          if (t.toLowerCase().contains(q)) return true;
+        }
+        return false;
       case PostSearchScope.title:
         return title.contains(q);
       case PostSearchScope.body:
@@ -1321,6 +1316,8 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
                     onPostUpdated: onPostUpdated,
                     onPostDeleted: onPostDeleted,
                     authorAvatarSize: widget.feedAuthorAvatarSize,
+                    onTagTap: (tag) =>
+                        _openCommunitySearchForTag(context, post, tag),
                   ),
                   if (inline && _expandedReviewComments.contains(post.id))
                     KeyedSubtree(
@@ -1581,6 +1578,8 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
                     onPostUpdated: onPostUpdated,
                     onPostDeleted: onPostDeleted,
                     authorAvatarSize: widget.feedAuthorAvatarSize,
+                    onTagTap: (tag) =>
+                        _openCommunitySearchForTag(context, post, tag),
                   ),
                   if (inline && _expandedReviewComments.contains(post.id))
                     KeyedSubtree(
@@ -2155,7 +2154,11 @@ class _FreeBoardTabState extends State<FreeBoardTab> {
             .toLowerCase();
     switch (_searchScope) {
       case PostSearchScope.titleAndBody:
-        return title.contains(q) || body.contains(q);
+        if (title.contains(q) || body.contains(q)) return true;
+        for (final t in p.tags) {
+          if (t.toLowerCase().contains(q)) return true;
+        }
+        return false;
       case PostSearchScope.title:
         return title.contains(q);
       case PostSearchScope.body:

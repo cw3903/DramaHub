@@ -132,7 +132,7 @@ class CustomDramaListService {
       data['coverDramaId'] = validCover;
     }
 
-    await ref.set(data);
+    // Optimistic local update first so UI responds instantly.
     final nowLocal = DateTime.now();
     final inserted = CustomDramaList(
       id: ref.id,
@@ -151,10 +151,12 @@ class CustomDramaListService {
       inserted,
       ...cur.where((e) => e.id != inserted.id),
     ];
-    // 전체 재조회는 UI를 막지 않게 백그라운드에서(타임스탬프·다른 기기 반영 동기화).
+    // Firestore write + re-fetch run fully in background.
     unawaited(
-      loadIfNeeded(force: true).catchError((Object e, StackTrace st) {
-        debugPrint('CustomDramaListService.createList refresh: $e\n$st');
+      ref.set(data).then((_) {
+        return loadIfNeeded(force: true);
+      }).catchError((Object e, StackTrace st) {
+        debugPrint('CustomDramaListService.createList: $e\n$st');
       }),
     );
   }
@@ -232,33 +234,86 @@ class CustomDramaListService {
       update['coverImageUrl'] = FieldValue.delete();
     }
 
-    try {
-      await _listCol.doc(listId).update(update);
-      unawaited(
-        loadIfNeeded(force: true).catchError((Object e, StackTrace st) {
-          debugPrint('CustomDramaListService.updateList refresh: $e\n$st');
-        }),
+    // Optimistic local update so UI responds instantly.
+    final nowLocal = DateTime.now();
+    final prev = listsNotifier.value;
+    final updated = prev.map((e) {
+      if (e.id != listId) return e;
+      return CustomDramaList(
+        id: e.id,
+        title: cleanTitle,
+        description: cleanDesc,
+        dramaIds: List<String>.from(cleanIds),
+        createdAt: e.createdAt,
+        updatedAt: nowLocal,
+        coverDramaId: clearAllCovers
+            ? null
+            : (validImg != null ? null : (validCover ?? e.coverDramaId)),
+        coverImageUrl: clearAllCovers
+            ? null
+            : (validImg ?? e.coverImageUrl),
+        likeCount: e.likeCount,
+        likedBy: e.likedBy,
       );
-      return true;
+    }).toList();
+    listsNotifier.value = updated;
+
+    // Firestore write + re-fetch in background.
+    unawaited(
+      _listCol.doc(listId).update(update).then((_) {
+        return loadIfNeeded(force: true);
+      }).catchError((Object e, StackTrace st) {
+        debugPrint('CustomDramaListService.updateList: $e\n$st');
+        // Rollback on failure.
+        listsNotifier.value = prev;
+      }),
+    );
+    return true;
+  }
+
+  /// 타 유저 커스텀 리스트 목록 조회.
+  Future<List<CustomDramaList>> fetchListsForUid(String uid) async {
+    final u = uid.trim();
+    if (u.isEmpty) return [];
+    try {
+      QuerySnapshot<Map<String, dynamic>> snap;
+      try {
+        snap = await _firestore
+            .collection('users')
+            .doc(u)
+            .collection('custom_lists')
+            .orderBy('updatedAt', descending: true)
+            .get();
+      } catch (_) {
+        snap = await _firestore
+            .collection('users')
+            .doc(u)
+            .collection('custom_lists')
+            .get();
+      }
+      return snap.docs
+          .map((d) => CustomDramaList.fromDoc(d.id, d.data()))
+          .toList();
     } catch (e, st) {
-      debugPrint('CustomDramaListService.updateList: $e\n$st');
-      return false;
+      debugPrint('CustomDramaListService.fetchListsForUid: $e\n$st');
+      return [];
     }
   }
 
   /// 커스텀 리스트 문서의 좋아요 토글(본인 `users/{uid}/custom_lists`만).
   /// 성공 시 true=좋아요 적용, false=취소, 문서 없음·오류 시 null.
-  /// 타 유저 프로필 메뉴 카운트용.
+  /// 타 유저 프로필 메뉴 카운트용. Firestore `count()` 집계 사용.
   Future<int> countListsForUid(String uid) async {
     final u = uid.trim();
     if (u.isEmpty) return 0;
     try {
-      final snap = await _firestore
+      final agg = await _firestore
           .collection('users')
           .doc(u)
           .collection('custom_lists')
+          .count()
           .get();
-      return snap.docs.length;
+      return agg.count ?? 0;
     } catch (e, st) {
       debugPrint('CustomDramaListService.countListsForUid: $e\n$st');
       return 0;
@@ -270,6 +325,35 @@ class CustomDramaListService {
     if (uid == null || listId.isEmpty) return null;
     final ref = _listCol.doc(listId);
     bool? nowLiked;
+    // 낙관적 업데이트: 탭 즉시 UI 반영
+    final before = List<CustomDramaList>.from(listsNotifier.value);
+    final idx = before.indexWhere((e) => e.id == listId);
+    if (idx >= 0) {
+      final cur = before[idx];
+      final already = cur.likedBy.contains(uid);
+      final nextLikedBy = already
+          ? cur.likedBy.where((e) => e != uid).toList()
+          : [...cur.likedBy, uid];
+      final nextCount = already
+          ? (cur.likeCount - 1).clamp(0, 1 << 30)
+          : cur.likeCount + 1;
+      final updated = CustomDramaList(
+        id: cur.id,
+        title: cur.title,
+        description: cur.description,
+        dramaIds: cur.dramaIds,
+        createdAt: cur.createdAt,
+        updatedAt: cur.updatedAt,
+        coverDramaId: cur.coverDramaId,
+        coverImageUrl: cur.coverImageUrl,
+        likedBy: nextLikedBy,
+        likeCount: nextCount,
+      );
+      final optimistic = List<CustomDramaList>.from(before);
+      optimistic[idx] = updated;
+      listsNotifier.value = optimistic;
+      nowLiked = !already;
+    }
     try {
       await _firestore.runTransaction((transaction) async {
         final snap = await transaction.get(ref);
@@ -297,9 +381,16 @@ class CustomDramaListService {
       });
     } catch (e, st) {
       debugPrint('CustomDramaListService.toggleListLike: $e\n$st');
+      // 롤백
+      listsNotifier.value = before;
       return null;
     }
-    await loadIfNeeded(force: true);
+    // 서버 값 동기화는 백그라운드로
+    unawaited(
+      loadIfNeeded(force: true).catchError((Object e, StackTrace st) {
+        debugPrint('CustomDramaListService.toggleListLike refresh: $e\n$st');
+      }),
+    );
     return nowLiked;
   }
 }

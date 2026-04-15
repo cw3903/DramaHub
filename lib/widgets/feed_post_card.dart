@@ -13,6 +13,7 @@ import '../theme/app_theme.dart';
 import '../utils/format_utils.dart';
 import '../utils/post_board_utils.dart';
 import '../config/app_moderators.dart';
+import '../widgets/app_delete_confirm_dialog.dart';
 import '../widgets/country_scope.dart';
 import '../widgets/optimized_network_image.dart';
 import '../widgets/share_sheet.dart';
@@ -34,52 +35,47 @@ const _feedMetaGray = Color(0xFFADADAD);
 /// 톡·에스크: 하트–숫자, 댓글아이콘–숫자 간격 동일
 const double talkAskIconCountGap = 4;
 
-/// 피드 영상 캐시: 탭 시 consume으로 재사용. preload는 피드에서 호출하지 않음(동영상 글 많을 때 무거워짐 방지).
+/// 피드/상세 영상 프리로드 캐시.
+/// 컨트롤러를 생성 즉시 캐시에 저장 — consume 시 초기화 중이더라도 재사용.
+/// 이렇게 하면 카드 탭 → 상세 전환(~300 ms) 동안 initialize()가 병행 실행되어
+/// 상세 페이지가 열렸을 때 영상을 바로 혹은 훨씬 빨리 재생할 수 있다.
 class VideoPreloadCache {
   VideoPreloadCache._();
   static final VideoPreloadCache instance = VideoPreloadCache._();
 
-  static const int _maxSize = 1;
-  // url → controller (초기화 완료된 것만 저장)
+  // 카드 1개 탭을 노리므로 3개면 충분 (feed 스크롤 시 선행 로드 여유 포함)
+  static const int _maxSize = 3;
+
+  // url → controller (초기화 중 또는 완료 모두 저장)
   final LinkedHashMap<String, VideoPlayerController> _cache = LinkedHashMap();
-  // 현재 초기화 진행 중인 url
-  final Set<String> _loading = {};
 
+  /// [url]에 대한 VideoPlayerController를 즉시 생성·캐시에 등록하고
+  /// 백그라운드에서 initialize()를 실행한다. 이미 캐시에 있으면 no-op.
   Future<void> preload(String url) async {
-    if (_cache.containsKey(url) || _loading.contains(url)) return;
-    _loading.add(url);
+    if (_cache.containsKey(url)) return;
 
-    // 한도 초과 시 가장 오래된 항목 제거
+    // 한도 초과 시 가장 오래된 항목 해제
     while (_cache.length >= _maxSize) {
       final oldest = _cache.keys.first;
-      _cache[oldest]?.dispose();
-      _cache.remove(oldest);
+      _cache.remove(oldest)?.dispose();
     }
 
+    final ctrl = VideoPlayerController.networkUrl(Uri.parse(url));
+    _cache[url] = ctrl; // ← 초기화 전에 즉시 등록
     try {
-      final ctrl = VideoPlayerController.networkUrl(Uri.parse(url));
       await ctrl.initialize();
-      if (_loading.contains(url)) {
-        _cache[url] = ctrl;
-      } else {
-        // cancel() 이 호출되어 더 이상 필요 없음
-        ctrl.dispose();
-      }
     } catch (_) {
-      // 무시
-    } finally {
-      _loading.remove(url);
+      // initialize 실패 → 캐시에서 제거하고 해제
+      if (_cache[url] == ctrl) _cache.remove(url);
+      ctrl.dispose();
     }
   }
 
-  /// 캐시에서 컨트롤러를 꺼냄 (사용 후 캐시에서 제거)
+  /// 캐시에서 컨트롤러를 꺼냄 (초기화 중이어도 반환 — caller가 완료 감지 책임).
   VideoPlayerController? consume(String url) => _cache.remove(url);
 
-  /// 더 이상 필요 없을 때 취소/해제
-  void cancel(String url) {
-    _loading.remove(url);
-    _cache.remove(url)?.dispose();
-  }
+  /// 더 이상 필요 없을 때 취소·해제
+  void cancel(String url) => _cache.remove(url)?.dispose();
 }
 
 /// 모던 카드형 게시글 카드
@@ -383,9 +379,15 @@ class _FeedPostCardState extends State<FeedPostCard> {
     final post = widget.post;
     final cs = Theme.of(context).colorScheme;
     final s = CountryScope.of(context).strings;
+    final myUid = AuthService.instance.currentUser.value?.uid.trim();
+    final isMineByUid =
+        myUid != null &&
+        myUid.isNotEmpty &&
+        post.authorUid?.trim() == myUid;
     final isMyPost =
-        widget.currentUserAuthor != null &&
-        post.author == widget.currentUserAuthor;
+        isMineByUid ||
+        (widget.currentUserAuthor != null &&
+            post.author == widget.currentUserAuthor);
     final canModerateDelete = isAppModerator() && !isMyPost;
 
     final selected = await showModalBottomSheet<String>(
@@ -420,19 +422,27 @@ class _FeedPostCardState extends State<FeedPostCard> {
                 onTap: () => Navigator.pop(context, 'edit'),
               ),
               ListTile(
-                leading: Icon(LucideIcons.trash_2, color: cs.error),
+                leading: Icon(LucideIcons.trash_2, color: kAppDeleteActionColor),
                 title: Text(
                   s.get('delete'),
-                  style: GoogleFonts.notoSansKr(fontSize: 15, color: cs.error),
+                  style: GoogleFonts.notoSansKr(
+                    fontSize: 15,
+                    color: kAppDeleteActionColor,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
                 onTap: () => Navigator.pop(context, 'delete'),
               ),
             ] else if (canModerateDelete) ...[
               ListTile(
-                leading: Icon(LucideIcons.trash_2, color: cs.error),
+                leading: Icon(LucideIcons.trash_2, color: kAppDeleteActionColor),
                 title: Text(
                   s.get('delete'),
-                  style: GoogleFonts.notoSansKr(fontSize: 15, color: cs.error),
+                  style: GoogleFonts.notoSansKr(
+                    fontSize: 15,
+                    color: kAppDeleteActionColor,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
                 onTap: () => Navigator.pop(context, 'delete'),
               ),
@@ -476,30 +486,11 @@ class _FeedPostCardState extends State<FeedPostCard> {
       );
       if (updated != null && mounted) widget.onPostUpdated?.call(updated);
     } else if (selected == 'delete') {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: Text(s.get('delete'), style: GoogleFonts.notoSansKr()),
-          content: Text(
-            s.get('deletePostConfirm'),
-            style: GoogleFonts.notoSansKr(),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr()),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: Text(
-                s.get('delete'),
-                style: GoogleFonts.notoSansKr(
-                  color: Theme.of(context).colorScheme.error,
-                ),
-              ),
-            ),
-          ],
-        ),
+      final confirmed = await showAppDeleteConfirmDialog(
+        context,
+        message: s.get('deletePostConfirm'),
+        cancelText: s.get('cancel'),
+        confirmText: s.get('delete'),
       );
       if (confirmed == true && mounted) {
         await PostService.instance.deletePost(post.id);
@@ -622,6 +613,24 @@ class _FeedPostCardState extends State<FeedPostCard> {
     final headerAvatarSize = widget.authorAvatarSize ??
         (compactTalkAskBar ? talkAskAvatarSize : defaultOtherAvatar);
     final authorUid = post.authorUid?.trim();
+    final myUid = AuthService.instance.currentUser.value?.uid.trim();
+    final isMineByUid =
+        myUid != null &&
+        myUid.isNotEmpty &&
+        authorUid != null &&
+        authorUid.isNotEmpty &&
+        authorUid == myUid;
+    final canonicalAuthor =
+        isMineByUid && widget.currentUserAuthor != null
+            ? widget.currentUserAuthor!
+            : post.author;
+    final displayAuthor = canonicalAuthor.startsWith('u/')
+        ? canonicalAuthor.substring(2)
+        : canonicalAuthor;
+    final isMyPost =
+        isMineByUid ||
+        (widget.currentUserAuthor != null &&
+            post.author == widget.currentUserAuthor);
     final authorNicknameRow = authorUid != null && authorUid.isNotEmpty
         ? GestureDetector(
             onTap: () => openUserProfileFromAuthorUid(context, authorUid),
@@ -631,9 +640,7 @@ class _FeedPostCardState extends State<FeedPostCard> {
               children: [
                 Flexible(
                   child: Text(
-                    post.author.startsWith('u/')
-                        ? post.author.substring(2)
-                        : post.author,
+                    displayAuthor,
                     style: compactTalkAskBar
                         ? talkAskAuthorNameStyle
                         : GoogleFonts.notoSansKr(
@@ -644,8 +651,7 @@ class _FeedPostCardState extends State<FeedPostCard> {
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                if (widget.currentUserAuthor != null &&
-                    post.author == widget.currentUserAuthor) ...[
+                if (isMyPost) ...[
                   const SizedBox(width: 6),
                   Container(
                     padding: const EdgeInsets.symmetric(
@@ -671,16 +677,14 @@ class _FeedPostCardState extends State<FeedPostCard> {
           )
         : GestureDetector(
             onTapDown: (details) =>
-                _showAuthorMenu(context, post.author, details),
+                _showAuthorMenu(context, canonicalAuthor, details),
             behavior: HitTestBehavior.opaque,
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Flexible(
                   child: Text(
-                    post.author.startsWith('u/')
-                        ? post.author.substring(2)
-                        : post.author,
+                    displayAuthor,
                     style: compactTalkAskBar
                         ? talkAskAuthorNameStyle
                         : GoogleFonts.notoSansKr(
@@ -691,8 +695,7 @@ class _FeedPostCardState extends State<FeedPostCard> {
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                if (widget.currentUserAuthor != null &&
-                    post.author == widget.currentUserAuthor) ...[
+                if (isMyPost) ...[
                   const SizedBox(width: 6),
                   Container(
                     padding: const EdgeInsets.symmetric(
@@ -732,7 +735,10 @@ class _FeedPostCardState extends State<FeedPostCard> {
         onTap:
             widget.onTap ??
             () {
-              // async/await 제거: 탭 직후 isolate가 push 완료까지 블로킹되지 않음
+              // 영상이 있으면 전환 애니메이션(~300 ms) 동안 preload 병행 실행
+              if (post.hasVideo && post.videoUrl != null && post.videoUrl!.isNotEmpty) {
+                VideoPreloadCache.instance.preload(post.videoUrl!);
+              }
               Navigator.push<PostDetailResult>(
                 context,
                 MaterialPageRoute(
@@ -782,7 +788,7 @@ class _FeedPostCardState extends State<FeedPostCard> {
                               alignment: Alignment.topLeft,
                               child: _AuthorAvatar(
                                 photoUrl: post.authorPhotoUrl,
-                                author: post.author,
+                                author: canonicalAuthor,
                                 authorUid: post.authorUid,
                                 colorIndex: post.authorAvatarColorIndex,
                                 size: headerAvatarSize,
@@ -808,7 +814,7 @@ class _FeedPostCardState extends State<FeedPostCard> {
                         children: [
                           _AuthorAvatar(
                             photoUrl: post.authorPhotoUrl,
-                            author: post.author,
+                            author: canonicalAuthor,
                             authorUid: post.authorUid,
                             colorIndex: post.authorAvatarColorIndex,
                             size: headerAvatarSize,

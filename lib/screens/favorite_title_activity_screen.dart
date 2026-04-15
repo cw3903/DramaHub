@@ -17,6 +17,7 @@ import '../widgets/lists_style_subpage_app_bar.dart';
 import '../widgets/optimized_network_image.dart';
 import '../widgets/two_tab_segment_bar.dart';
 import '../widgets/write_review_sheet.dart';
+import '../widgets/app_delete_confirm_dialog.dart';
 import 'diary_screen.dart';
 import 'drama_detail_page.dart';
 import 'login_page.dart';
@@ -382,25 +383,11 @@ class _FavoriteTitleActivityScreenState
     dynamic s,
     MyReviewItem review,
   ) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(s.get('delete'), style: GoogleFonts.notoSansKr()),
-        content: Text(
-          s.get('deleteReviewConfirm'),
-          style: GoogleFonts.notoSansKr(),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr()),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(s.get('ok'), style: GoogleFonts.notoSansKr()),
-          ),
-        ],
-      ),
+    final ok = await showAppDeleteConfirmDialog(
+      context,
+      message: s.get('deleteReviewConfirm'),
+      cancelText: s.get('cancel'),
+      confirmText: s.get('delete'),
     );
     if (ok == true && mounted) {
       await ReviewService.instance.deleteById(review.id);
@@ -646,9 +633,6 @@ class _FavoriteTitleActivityScreenState
                                 showDramaTitle: false,
                                 letterboxdActivityAuthorRow: true,
                                 activityAuthorNameFontSize: 12,
-                                starSize: 16,
-                                starInterGap: 0,
-                                starFilledColor: const Color(0xFFFFB020),
                                 onEdit: widget.readOnly
                                     ? null
                                     : () => _openWriteReviewForFavorite(

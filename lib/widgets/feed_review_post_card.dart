@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../models/post.dart';
+import '../services/auth_service.dart';
 import 'country_scope.dart';
 import 'optimized_network_image.dart';
 import 'user_profile_nav.dart';
@@ -94,7 +95,18 @@ class FeedReviewPostCard extends StatelessWidget {
     final dramaTitle = post.dramaTitle?.trim().isNotEmpty == true ? post.dramaTitle! : post.title;
     final body = (post.body ?? '').replaceAll(RegExp(r'\s+'), ' ').trim();
     final r = (post.rating ?? 0).clamp(0.0, 5.0);
-    final isMyReview = currentUserAuthor != null && post.author == currentUserAuthor;
+    final myUid = AuthService.instance.currentUser.value?.uid.trim();
+    final isMineByUid =
+        myUid != null &&
+        myUid.isNotEmpty &&
+        post.authorUid?.trim() == myUid;
+    final isMyReview =
+        isMineByUid ||
+        (currentUserAuthor != null && post.author == currentUserAuthor);
+    final canonicalAuthor =
+        isMineByUid && currentUserAuthor != null
+            ? currentUserAuthor!
+            : post.author;
 
     Widget previewCore = Text(
       body.isEmpty ? ' ' : body,
@@ -244,7 +256,7 @@ class FeedReviewPostCard extends StatelessWidget {
                           }
                         },
                         child: Text(
-                          post.author,
+                          canonicalAuthor,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: GoogleFonts.notoSansKr(

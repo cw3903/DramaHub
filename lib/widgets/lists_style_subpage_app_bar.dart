@@ -23,12 +23,17 @@ Future<void> _popListsStyleSubpageAsync(
   await nav.maybePop(result);
 }
 
-/// [ListsScreen] 상단과 동일 — 툴바 높이·좌우 슬롯 폭·`<`·가운데 제목
+/// [ListsScreen] 상단과 동일 — 툴바 높이·좌우 슬롯 폭·뒤로 화살표·가운데 제목
 const double kListsStyleSubpageToolbarHeight = 46;
 const double kListsStyleSubpageSideSlotWidth = 108;
 
 /// Lists 본문 카드·제목과 동일한 왼쪽 여백 (`lists_screen` horizontal 16).
 const double kListsStyleSubpageLeadingEdgeInset = 16;
+
+/// [MainScreen]처럼 [Scaffold.extendBody] + 하단 탭일 때, 목록 마지막 줄이 탭에 가리지 않도록 쓰는 하단 여백.
+double listsStyleSubpageMainTabBottomInset(BuildContext context) {
+  return MediaQuery.paddingOf(context).bottom + kBottomNavigationBarHeight + 24;
+}
 
 Color listsStyleSubpageHeaderBackground(ThemeData theme) {
   final isDark = theme.brightness == Brightness.dark;
@@ -129,18 +134,26 @@ class ListsStyleSubpageHeaderBar extends StatelessWidget {
     this.backgroundColor,
     this.titleColor,
     this.leadingMutedColor,
+    this.centerTitle,
   });
 
   final String title;
   final VoidCallback onBack;
-  /// `<` 오른쪽에 붙는 짧은 라벨(닉네임 등). 없으면 화살표만.
+
+  /// 지정 시 가운데는 [title] 텍스트 대신 이 위젯(예: 피드와 동일한 태그 칩).
+  final Widget? centerTitle;
+
+  /// iOS 스타일 뒤로 화살표 오른쪽에 붙는 짧은 라벨(닉네임 등). 없으면 화살표만.
   final String? leadingLabel;
+
   /// 오른쪽 [kListsStyleSubpageSideSlotWidth] 안에 배치. 화면 끝 여백은 leading과 동일([kListsStyleSubpageLeadingEdgeInset]).
   final Widget? trailing;
   final PreferredSizeWidget? bottom;
   final Color? backgroundColor;
+
   /// null이면 [listsStyleSubpageBarForeground] 기준
   final Color? titleColor;
+
   /// null이면 [listsStyleSubpageLeadingMuted] 기준
   final Color? leadingMutedColor;
 
@@ -157,7 +170,8 @@ class ListsStyleSubpageHeaderBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    final headerBg = backgroundColor ?? listsStyleSubpageHeaderBackground(theme);
+    final headerBg =
+        backgroundColor ?? listsStyleSubpageHeaderBackground(theme);
     final barFg = titleColor ?? listsStyleSubpageBarForeground(theme, cs);
     final leadingMuted =
         leadingMutedColor ?? listsStyleSubpageLeadingMuted(theme, cs);
@@ -226,17 +240,19 @@ class ListsStyleSubpageHeaderBar extends StatelessWidget {
                   ),
                   Expanded(
                     child: Center(
-                      child: Text(
-                        title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: GoogleFonts.notoSansKr(
-                          fontSize: 15,
-                          height: 1.05,
-                          fontWeight: FontWeight.w700,
-                          color: barFg,
-                        ),
-                      ),
+                      child: centerTitle != null
+                          ? centerTitle!
+                          : Text(
+                              title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: GoogleFonts.notoSansKr(
+                                fontSize: 15,
+                                height: 1.05,
+                                fontWeight: FontWeight.w700,
+                                color: barFg,
+                              ),
+                            ),
                     ),
                   ),
                   SizedBox(

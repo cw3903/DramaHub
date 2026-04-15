@@ -37,6 +37,18 @@ class _FollowScreenState extends State<FollowScreen> {
 
   String _effectiveOwnerUid() => widget.networkOwnerUid ?? AuthService.instance.currentUser.value?.uid ?? '';
 
+  String _appBarTitle(dynamic s, String ownerUid) {
+    final viewerUid = AuthService.instance.currentUser.value?.uid?.trim() ?? '';
+    if (viewerUid.isNotEmpty && viewerUid == ownerUid.trim()) {
+      return s.get('followScreenTitle');
+    }
+    final name = widget.ownerDisplayName?.trim() ?? '';
+    if (name.isNotEmpty) {
+      return s.get('userFollowTitleWithName').replaceAll('{name}', name);
+    }
+    return s.get('followScreenTitle');
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = CountryScope.of(context).strings;
@@ -53,7 +65,7 @@ class _FollowScreenState extends State<FollowScreen> {
           appBar: PreferredSize(
             preferredSize: ListsStyleSubpageHeaderBar.preferredSizeOf(context),
             child: ListsStyleSubpageHeaderBar(
-              title: 'Follow',
+              title: _appBarTitle(s, ownerUid),
               onBack: () => popListsStyleSubpage(context),
             ),
           ),
@@ -78,7 +90,7 @@ class _FollowScreenState extends State<FollowScreen> {
         appBar: PreferredSize(
           preferredSize: ListsStyleSubpageHeaderBar.preferredSizeOf(context),
           child: ListsStyleSubpageHeaderBar(
-            title: 'Follow',
+            title: _appBarTitle(s, ownerUid),
             onBack: () => popListsStyleSubpage(context),
           ),
         ),
@@ -277,7 +289,7 @@ class _NetworkMemberRow extends StatelessWidget {
                     value: 'profile',
                     child: Text(s.get('followViewProfile'), style: GoogleFonts.notoSansKr()),
                   ),
-                  if (isFollowingTab && isOwnNetwork && viewer != null)
+                  if (isFollowingTab && isOwnNetwork)
                     PopupMenuItem(
                       value: 'unfollow',
                       child: Text(

@@ -156,7 +156,7 @@ class _ListsScreenState extends State<ListsScreen> {
         Divider(
           height: 1,
           thickness: 1,
-          color: colorScheme.outline.withValues(alpha: isDark ? 0.18 : 0.12),
+          color: colorScheme.outline.withValues(alpha: isDark ? 0.30 : 0.22),
         ),
       );
     }
@@ -479,6 +479,15 @@ class _CustomDramaListCard extends StatelessWidget {
     required this.country,
   });
 
+  /// 마지막 콘텐츠(설명 또는 포스터+보정)와 구분선 사이.
+  static const double _gapLastContentToDivider = 10;
+
+  /// 설명 없음: 포스터만 있을 때 시각 간격이 설명 있을 때(글 줄상자 하단~구분선)에 가깝도록.
+  static const double _gapBelowPosterWhenNoDescription = 7;
+
+  static const TextHeightBehavior _listDescriptionTextHeightBehavior =
+      TextHeightBehavior(applyHeightToLastDescent: false);
+
   final CustomDramaList data;
   final dynamic strings;
   final bool isDark;
@@ -487,6 +496,8 @@ class _CustomDramaListCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final trimmedDesc = data.description.trim();
+    final hasDesc = trimmedDesc.isNotEmpty;
     final cs = colorScheme;
     final titleColor = isDark
         ? Colors.white.withValues(alpha: 0.7)
@@ -550,32 +561,39 @@ class _CustomDramaListCard extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: _FlushPosterStrip(
-                items: items,
-                country: country,
-                isDark: isDark,
-                colorScheme: cs,
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _FlushPosterStrip(
+                    items: items,
+                    country: country,
+                    isDark: isDark,
+                    colorScheme: cs,
+                  ),
+                  if (!hasDesc)
+                    const SizedBox(height: _gapBelowPosterWhenNoDescription),
+                  if (hasDesc) ...[
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.topLeft,
+                      child: Text(
+                        trimmedDesc,
+                        textAlign: TextAlign.start,
+                        textHeightBehavior: _listDescriptionTextHeightBehavior,
+                        style: GoogleFonts.notoSansKr(
+                          fontSize: 13,
+                          height: 1.45,
+                          color: muted,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
-            if (data.description.trim().isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
-                child: Align(
-                  alignment: Alignment.topLeft,
-                  child: Text(
-                    data.description.trim(),
-                    textAlign: TextAlign.start,
-                    style: GoogleFonts.notoSansKr(
-                      fontSize: 13,
-                      height: 1.45,
-                      color: muted,
-                    ),
-                  ),
-                ),
-              )
-            else
-              const SizedBox(height: 8),
+            const SizedBox(height: _gapLastContentToDivider),
           ],
         ),
       ),
@@ -830,6 +848,8 @@ class _DramaListEditorScreenState extends State<DramaListEditorScreen> {
         }
       }
 
+      // updateList / createList now do optimistic local update first and fire
+      // Firestore in background — so we can pop immediately without waiting.
       if (widget.isEditMode) {
         final clearAll = _publishWithoutCover;
         String? coverImageUrlArg;
@@ -846,7 +866,8 @@ class _DramaListEditorScreenState extends State<DramaListEditorScreen> {
             coverDramaIdArg = _coverDramaId;
           }
         }
-        final ok = await CustomDramaListService.instance.updateList(
+        // Returns true optimistically; Firestore runs in background.
+        CustomDramaListService.instance.updateList(
           listId: widget.existingList!.id,
           title: title,
           description: description,
@@ -854,19 +875,14 @@ class _DramaListEditorScreenState extends State<DramaListEditorScreen> {
           coverImageUrl: coverImageUrlArg,
           coverDramaId: coverDramaIdArg,
           clearAllCovers: clearAll,
-        );
+        ).ignore();
         if (!mounted) return;
-        if (!ok) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(str.get('listCreateErrorSaveFailed'))),
-          );
-          return;
-        }
         Navigator.pop(context, true);
         return;
       }
 
-      await CustomDramaListService.instance.createList(
+      // createList also applies optimistic update immediately.
+      CustomDramaListService.instance.createList(
         title: title,
         description: description,
         dramaIds: _selected.map((e) => e.id).toList(),
@@ -874,7 +890,7 @@ class _DramaListEditorScreenState extends State<DramaListEditorScreen> {
             ? null
             : _coverDramaId,
         coverImageUrl: uploadedCoverUrl,
-      );
+      ).ignore();
       if (!mounted) return;
       Navigator.pop(context, true);
     } catch (e, st) {
@@ -1061,13 +1077,21 @@ class _DramaListEditorScreenState extends State<DramaListEditorScreen> {
               const SizedBox(height: 24),
               FilledButton(
                 onPressed: _saving ? null : _save,
-                child: Text(
-                  _saving
-                      ? s.get('listCreateSubmitting')
-                      : (widget.isEditMode
-                          ? s.get('listEditSave')
-                          : s.get('listCreateSubmit')),
-                ),
+                child: _saving
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor:
+                              AlwaysStoppedAnimation<Color>(Colors.white),
+                        ),
+                      )
+                    : Text(
+                        widget.isEditMode
+                            ? s.get('listEditSave')
+                            : s.get('listCreateSubmit'),
+                      ),
               ),
             ],
           ),

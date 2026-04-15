@@ -1028,6 +1028,64 @@ class PostService {
     return all.where((p) => p.author == author).toList();
   }
 
+  /// `authorUid`가 일치하는 게시글 (타인 프로필 통계·글 목록용).
+  Future<List<Post>> getPostsByAuthorUid(String uid) async {
+    final u = uid.trim();
+    if (u.isEmpty) return [];
+    try {
+      final snap = await _col.where('authorUid', isEqualTo: u).get();
+      final out = <({Post post, DateTime sortAt})>[];
+      for (final doc in snap.docs) {
+        try {
+          final data = Map<String, dynamic>.from(doc.data());
+          data['id'] = doc.id;
+          final createdAt = data['createdAt'];
+          final sortAt = createdAt is Timestamp
+              ? createdAt.toDate()
+              : DateTime.fromMillisecondsSinceEpoch(0);
+          final normalized = _normalizePostMap(data);
+          normalized['timeAgo'] = formatTimeAgo(sortAt);
+          final post = Post.fromMap(normalized);
+          out.add((post: post, sortAt: sortAt));
+        } catch (e, st) {
+          debugPrint('getPostsByAuthorUid parse fail ${doc.id}: $e\n$st');
+        }
+      }
+      out.sort((a, b) => b.sortAt.compareTo(a.sortAt));
+      final posts = out.map((e) => e.post).toList();
+      return await hydratePostsViewerVotes(posts);
+    } catch (e, st) {
+      debugPrint('getPostsByAuthorUid: $e\n$st');
+      return [];
+    }
+  }
+
+  /// 댓글/답글 작성자의 `authorUid`가 [uid]와 일치하는 항목 (구 데이터는 `authorUid` 없을 수 있음).
+  Future<List<({Post post, PostComment comment})>> getCommentsByAuthorUid(String uid) async {
+    final u = uid.trim();
+    if (u.isEmpty) return [];
+    try {
+      final posts = await getPostsAllPages();
+      final result = <({Post post, PostComment comment})>[];
+      for (final post in posts) {
+        void collect(List<PostComment> list) {
+          for (final c in list) {
+            final cu = c.authorUid?.trim();
+            if (cu != null && cu == u) {
+              result.add((post: post, comment: c));
+            }
+            collect(c.replies);
+          }
+        }
+        collect(post.commentsList);
+      }
+      return result;
+    } catch (e, st) {
+      debugPrint('getCommentsByAuthorUid: $e\n$st');
+      return [];
+    }
+  }
+
   /// 프로필 Posts 탭: 톡·에스크 게시글만.
   Future<List<Post>> getCommunityBoardPostsByAuthor(String author) async {
     final all = await getPostsByAuthor(author);
@@ -1068,6 +1126,35 @@ class PostService {
       debugPrint('updateAuthorPhotoUrl: ${snapshot.docs.length}개 게시글 업데이트 완료');
     } catch (e) {
       debugPrint('updateAuthorPhotoUrl 실패: $e');
+    }
+  }
+
+  /// 특정 UID의 게시글 `author` 표시명을 현재 닉네임(`u/<name>`)으로 일괄 정규화.
+  /// 과거 fallback 값(`u/cw3903` 등)로 저장된 내 글 표시를 통일할 때 사용.
+  Future<void> normalizeAuthorLabelForUid(
+    String uid,
+    String normalizedAuthor,
+  ) async {
+    final u = uid.trim();
+    final a = normalizedAuthor.trim();
+    if (u.isEmpty || a.isEmpty) return;
+    try {
+      final snapshot = await _col.where('authorUid', isEqualTo: u).get();
+      if (snapshot.docs.isEmpty) return;
+      final batch = _firestore.batch();
+      var changed = 0;
+      for (final doc in snapshot.docs) {
+        final current = (doc.data()['author'] as String?)?.trim() ?? '';
+        if (current == a) continue;
+        batch.update(doc.reference, {'author': a});
+        changed++;
+      }
+      if (changed > 0) {
+        await batch.commit();
+        debugPrint('normalizeAuthorLabelForUid: $changed개 게시글 author 정규화 완료');
+      }
+    } catch (e, st) {
+      debugPrint('normalizeAuthorLabelForUid 실패: $e\n$st');
     }
   }
 

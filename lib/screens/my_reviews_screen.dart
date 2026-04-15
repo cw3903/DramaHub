@@ -4,20 +4,19 @@ import 'package:flutter/services.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../models/drama.dart';
+import '../models/post.dart';
 import '../services/review_service.dart';
 import '../services/auth_service.dart';
 import '../services/drama_list_service.dart';
+import '../services/post_service.dart';
 import '../services/user_profile_service.dart';
 import '../utils/format_utils.dart';
 import '../widgets/country_scope.dart';
+import '../widgets/feed_review_star_row.dart';
 import '../widgets/lists_style_subpage_app_bar.dart';
 import '../widgets/optimized_network_image.dart';
+import 'post_detail_page.dart';
 import 'drama_detail_page.dart';
-
-/// 프로필 내 리뷰 목록 기본 — Letterboxd 스타일 녹색 별(레거시).
-/// 즐겨찾기 작품 상세 등에서는 [filledColor]·[interStarGap]·[size]로 앱 공통 노랑 별로 바꿀 수 있음.
-const Color _kMyReviewsListStarGreen = Color(0xFFFFB020);
-const Color _kMyReviewsListStarYellow = Color(0xFFFFB020);
 
 String? _posterUrlForMyReview(MyReviewItem item, String? country) {
   final id = item.dramaId.trim();
@@ -31,63 +30,6 @@ String? _posterUrlForMyReview(MyReviewItem item, String? country) {
   );
   if (byTitle != null && byTitle.isNotEmpty) return byTitle;
   return null;
-}
-
-class _MyReviewsListStarRow extends StatelessWidget {
-  const _MyReviewsListStarRow({
-    required this.rating,
-    this.size = 18,
-    this.interStarGap = 1.0,
-    this.filledColor,
-    /// [star_rounded] 좌우 여백 보정. 값이 있으면 두 번째 별부터 왼쪽으로 당겨 간격 축소.
-    this.glyphOverlap,
-  });
-
-  final double rating;
-  final double size;
-  /// 별 아이콘 사이 오른쪽 여백(픽셀). 0에 가까울수록 더 촘촘함.
-  final double interStarGap;
-  final Color? filledColor;
-  final double? glyphOverlap;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final empty = cs.onSurfaceVariant.withValues(alpha: 0.28);
-    final fill = filledColor ?? _kMyReviewsListStarGreen;
-    final r = rating.clamp(0.0, 5.0);
-    final overlap = glyphOverlap;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: List.generate(5, (i) {
-        final starValue = i + 1.0;
-        final isFull = r >= starValue;
-        final isHalf = r >= starValue - 0.5 && r < starValue;
-        late IconData icon;
-        late Color color;
-        if (isFull) {
-          icon = Icons.star_rounded;
-          color = fill;
-        } else if (isHalf) {
-          icon = Icons.star_half_rounded;
-          color = fill;
-        } else {
-          icon = Icons.star_border_rounded;
-          color = empty;
-        }
-        if (overlap != null && overlap > 0 && i > 0) {
-          return Transform.translate(
-            offset: Offset(-overlap * i, 0),
-            child: Icon(icon, size: size, color: color),
-          );
-        }
-        return Padding(
-          padding: EdgeInsets.only(right: i < 4 ? interStarGap : 0),
-          child: Icon(icon, size: size, color: color),
-        );
-      }),
-    );
-  }
 }
 
 /// 프로필 → Reviews: 제목, 별점, 별 아래 본문 (썸네일 없음)
@@ -221,71 +163,74 @@ class _MyReviewsScreenState extends State<MyReviewsScreen> {
             DramaListService.instance.extraNotifier,
           ]),
           builder: (context, _) {
-          final raw = ReviewService.instance.listNotifier.value;
-          if (raw.isEmpty) {
-            return Center(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 32),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      LucideIcons.star,
-                      size: 56,
-                      color: cs.onSurfaceVariant.withValues(alpha: 0.35),
-                    ),
-                    const SizedBox(height: 20),
-                    Text(
-                      s.get('myReviewsEmptyTitle'),
-                      textAlign: TextAlign.center,
-                      style: GoogleFonts.notoSansKr(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w600,
-                        color: cs.onSurface,
+            final raw = ReviewService.instance.listNotifier.value;
+            if (raw.isEmpty) {
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 32),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        LucideIcons.star,
+                        size: 56,
+                        color: cs.onSurfaceVariant.withValues(alpha: 0.35),
                       ),
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      s.get('myReviewsEmptyHint'),
-                      textAlign: TextAlign.center,
-                      style: GoogleFonts.notoSansKr(
-                        fontSize: 14,
-                        height: 1.45,
-                        color: cs.onSurfaceVariant.withValues(alpha: 0.9),
+                      const SizedBox(height: 20),
+                      Text(
+                        s.get('myReviewsEmptyTitle'),
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.notoSansKr(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w600,
+                          color: cs.onSurface,
+                        ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 10),
+                      Text(
+                        s.get('myReviewsEmptyHint'),
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.notoSansKr(
+                          fontSize: 14,
+                          height: 1.45,
+                          color: cs.onSurfaceVariant.withValues(alpha: 0.9),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            );
-          }
-
-          final list = List<MyReviewItem>.from(raw);
-          if (_newestFirst) {
-            list.sort((a, b) => b.writtenAt.compareTo(a.writtenAt));
-          } else {
-            list.sort((a, b) => a.writtenAt.compareTo(b.writtenAt));
-          }
-
-          return ListView.separated(
-            padding: const EdgeInsets.only(top: 4, bottom: 32),
-            itemCount: list.length,
-            separatorBuilder: (context, index) => Divider(
-              height: 1,
-              thickness: 1,
-              indent: 16,
-              endIndent: 16,
-              color: cs.outline.withValues(alpha: 0.12),
-            ),
-            itemBuilder: (context, index) {
-              return LetterboxdMyReviewTile(
-                item: list[index],
-                dramaTitleOnSurfaceAlpha: 0.8,
-                reviewBodyFontSize: 12.5,
               );
-            },
-          );
-        },
+            }
+
+            final list = List<MyReviewItem>.from(raw);
+            if (_newestFirst) {
+              list.sort((a, b) => b.writtenAt.compareTo(a.writtenAt));
+            } else {
+              list.sort((a, b) => a.writtenAt.compareTo(b.writtenAt));
+            }
+
+            return ListView.separated(
+              padding: EdgeInsets.only(
+                top: 4,
+                bottom: listsStyleSubpageMainTabBottomInset(context),
+              ),
+              itemCount: list.length,
+              separatorBuilder: (context, index) => Divider(
+                height: 1,
+                thickness: 1,
+                indent: 16,
+                endIndent: 16,
+                color: cs.outline.withValues(alpha: 0.12),
+              ),
+              itemBuilder: (context, index) {
+                return LetterboxdMyReviewTile(
+                  item: list[index],
+                  dramaTitleOnSurfaceAlpha: 0.8,
+                  reviewBodyFontSize: 12.5,
+                );
+              },
+            );
+          },
         ),
       ),
     );
@@ -299,8 +244,8 @@ class _MyReviewListPosterThumb extends StatelessWidget {
   final MyReviewItem item;
   final ColorScheme cs;
 
-  static const double _w = 48;
-  static const double _h = 72;
+  static const double width = 48;
+  static const double height = 72;
 
   @override
   Widget build(BuildContext context) {
@@ -310,12 +255,12 @@ class _MyReviewListPosterThumb extends StatelessWidget {
       return ClipRRect(
         borderRadius: BorderRadius.circular(6),
         child: SizedBox(
-          width: _w,
-          height: _h,
+          width: width,
+          height: height,
           child: OptimizedNetworkImage(
             imageUrl: url,
-            width: _w,
-            height: _h,
+            width: width,
+            height: height,
             fit: BoxFit.cover,
             memCacheWidth: 160,
             memCacheHeight: 240,
@@ -335,8 +280,8 @@ class _MyReviewListPosterThumb extends StatelessWidget {
       return ClipRRect(
         borderRadius: BorderRadius.circular(6),
         child: SizedBox(
-          width: _w,
-          height: _h,
+          width: width,
+          height: height,
           child: Image.asset(
             url,
             fit: BoxFit.cover,
@@ -357,8 +302,8 @@ class _MyReviewListPosterThumb extends StatelessWidget {
       child: ColoredBox(
         color: cs.surfaceContainerHighest,
         child: SizedBox(
-          width: _w,
-          height: _h,
+          width: width,
+          height: height,
           child: Icon(
             LucideIcons.tv,
             size: 22,
@@ -424,10 +369,15 @@ DramaDetail _detailFromReview(BuildContext context, MyReviewItem item) {
   ];
   final locale = CountryScope.maybeOf(context)?.country;
   final displayTitle = item.dramaId.isNotEmpty
-      ? (DramaListService.instance.getDisplayTitle(item.dramaId, locale).isNotEmpty
-          ? DramaListService.instance.getDisplayTitle(item.dramaId, locale)
-          : item.dramaTitle)
-      : DramaListService.instance.getDisplayTitleByTitle(item.dramaTitle, locale);
+      ? (DramaListService.instance
+                .getDisplayTitle(item.dramaId, locale)
+                .isNotEmpty
+            ? DramaListService.instance.getDisplayTitle(item.dramaId, locale)
+            : item.dramaTitle)
+      : DramaListService.instance.getDisplayTitleByTitle(
+          item.dramaTitle,
+          locale,
+        );
   final dramaItem = DramaItem(
     id: item.dramaId,
     title: displayTitle,
@@ -500,34 +450,28 @@ class LetterboxdMyReviewTile extends StatelessWidget {
     super.key,
     required this.item,
     this.showDramaTitle = true,
-    this.starSize,
-    this.starInterGap,
-    this.starFilledColor,
-    this.starRowScale,
-    /// 기본 리스트 별 줄에만 적용. null이면 기본값(겹침) 사용.
-    this.starGlyphOverlap,
+
     /// true: 아바타 + (닉네임|별점 한 줄) + 본문 — Letterboxd 활동 피드 스타일.
     this.letterboxdActivityAuthorRow = false,
+
     /// 지정 시 닉네임 옆에 Edit 버튼 표시 (letterboxdActivityAuthorRow일 때만).
     this.onEdit,
+
     /// 지정 시 닉네임 옆에 Delete 버튼 표시 (letterboxdActivityAuthorRow일 때만).
     this.onDelete,
+
     /// letterboxdActivityAuthorRow일 때 오른쪽 닉네임 글자 크기. null이면 15.
     this.activityAuthorNameFontSize,
+
     /// 드라마 제목 색 (`onSurface` 알파). null이면 0.66 (프로필 리뷰 목록 등에서 더 밝게 지정 가능).
     this.dramaTitleOnSurfaceAlpha,
+
     /// 리뷰 본문 글자 크기. null이면 14.
     this.reviewBodyFontSize,
   });
 
   final MyReviewItem item;
   final bool showDramaTitle;
-  final double? starSize;
-  final double? starInterGap;
-  final Color? starFilledColor;
-  /// 1 미만이면 별 줄 전체를 가로로 살짝 축소해 간격을 더 좁게 보이게 함.
-  final double? starRowScale;
-  final double? starGlyphOverlap;
   final bool letterboxdActivityAuthorRow;
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
@@ -549,10 +493,67 @@ class LetterboxdMyReviewTile extends StatelessWidget {
     );
   }
 
+  Future<void> _openReviewDetail(BuildContext context) async {
+    final locale = CountryScope.maybeOf(context)?.country ??
+        UserProfileService.instance.signupCountryNotifier.value ??
+        'us';
+    final s = CountryScope.of(context).strings;
+    final feedPostId = item.feedPostId?.trim();
+    final reviewId = item.id.trim();
+    final hasFetchableId =
+        (feedPostId != null && feedPostId.isNotEmpty) || reviewId.isNotEmpty;
+    final seedId = (feedPostId != null && feedPostId.isNotEmpty)
+        ? feedPostId
+        : (reviewId.isNotEmpty
+            ? reviewId
+            : 'local_review_${item.writtenAt.millisecondsSinceEpoch}');
+    final displayTitle = _displayTitle(context).trim();
+    final fallbackTitle = displayTitle.isNotEmpty ? displayTitle : item.dramaTitle.trim();
+    final displayName = _reviewActivityDisplayName(item);
+    final post = Post(
+      id: seedId,
+      title: fallbackTitle,
+      subreddit: s.get('tabReviews'),
+      author: 'u/$displayName',
+      timeAgo: formatTimeAgo(item.modifiedAt ?? item.writtenAt, locale),
+      votes: 0,
+      comments: 0,
+      views: 0,
+      body: item.comment,
+      authorUid: AuthService.instance.currentUser.value?.uid,
+      authorPhotoUrl: UserProfileService.instance.profileImageUrlNotifier.value,
+      authorAvatarColorIndex: UserProfileService.instance.avatarColorNotifier.value,
+      country: UserProfileService.instance.signupCountryNotifier.value ?? locale,
+      category: 'free',
+      type: 'review',
+      dramaId: item.dramaId,
+      dramaTitle: fallbackTitle,
+      dramaThumbnail: _posterUrlForMyReview(item, locale),
+      rating: item.rating,
+      hasSpoiler: false,
+      isLiked: false,
+      isFirstWatch: true,
+      tags: const [],
+      allowReply: true,
+      createdAt: item.writtenAt,
+    );
+
+    if (!context.mounted) return;
+    await Navigator.push<void>(
+      context,
+      CupertinoPageRoute<void>(
+        builder: (_) => PostDetailPage(
+          post: post,
+          hideBottomDramaFeed: true,
+          offlineSyntheticReview: !hasFetchableId,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final detail = _detailFromReview(context, item);
     final r = item.rating.clamp(0.0, 5.0);
     final rawComment = item.comment.replaceAll(RegExp(r'\s+'), ' ').trim();
     final bodyFontSize = reviewBodyFontSize ?? 14.0;
@@ -574,14 +575,8 @@ class LetterboxdMyReviewTile extends StatelessWidget {
       return Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: () {
-            Navigator.push<void>(
-              context,
-              CupertinoPageRoute<void>(
-                builder: (_) =>
-                    DramaDetailPage(detail: detail, scrollToRatings: true),
-              ),
-            );
+          onTap: () async {
+            await _openReviewDetail(context);
           },
           child: ListenableBuilder(
             listenable: Listenable.merge([
@@ -592,7 +587,10 @@ class LetterboxdMyReviewTile extends StatelessWidget {
             ]),
             builder: (context, _) {
               final displayName = _reviewActivityDisplayName(item);
-              var url = UserProfileService.instance.profileImageUrlNotifier.value
+              var url = UserProfileService
+                  .instance
+                  .profileImageUrlNotifier
+                  .value
                   ?.trim();
               if (url == null || url.isEmpty) {
                 url = AuthService.instance.currentUser.value?.photoURL?.trim();
@@ -601,8 +599,9 @@ class LetterboxdMyReviewTile extends StatelessWidget {
                   UserProfileService.instance.avatarColorNotifier.value ?? 0;
               final letter = _avatarLetterFromName(displayName);
               final fill = UserProfileService.bgColorFromIndex(colorIdx);
-              final letterColor =
-                  UserProfileService.iconColorFromIndex(colorIdx);
+              final letterColor = UserProfileService.iconColorFromIndex(
+                colorIdx,
+              );
               const avatarD = 40.0;
 
               Widget avatar;
@@ -647,12 +646,9 @@ class LetterboxdMyReviewTile extends StatelessWidget {
                 height: 1.15,
                 color: cs.onSurface.withValues(alpha: 0.60),
               );
-              Widget starRow = _MyReviewsListStarRow(
+              final starRow = FeedReviewRatingStars(
                 rating: r,
-                size: starSize ?? 16,
-                interStarGap: starInterGap ?? 0,
-                filledColor: starFilledColor ?? const Color(0xFFFFB020),
-                glyphOverlap: 3,
+                layoutThumbWidth: kFeedReviewRatingThumbWidth,
               );
 
               return Padding(
@@ -679,8 +675,9 @@ class LetterboxdMyReviewTile extends StatelessWidget {
                                     style: GoogleFonts.notoSansKr(
                                       fontSize: 12,
                                       fontWeight: FontWeight.w500,
-                                      color: cs.onSurfaceVariant
-                                          .withValues(alpha: 0.82),
+                                      color: cs.onSurfaceVariant.withValues(
+                                        alpha: 0.82,
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -694,8 +691,9 @@ class LetterboxdMyReviewTile extends StatelessWidget {
                                     style: GoogleFonts.notoSansKr(
                                       fontSize: 12,
                                       fontWeight: FontWeight.w500,
-                                      color: cs.onSurfaceVariant
-                                          .withValues(alpha: 0.82),
+                                      color: cs.onSurfaceVariant.withValues(
+                                        alpha: 0.82,
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -736,35 +734,17 @@ class LetterboxdMyReviewTile extends StatelessWidget {
     }
 
     Widget buildDefaultStarRow() {
-      Widget row = _MyReviewsListStarRow(
+      return FeedReviewRatingStars(
         rating: r,
-        size: starSize ?? 16,
-        interStarGap: starInterGap ?? 0,
-        filledColor: starFilledColor ?? _kMyReviewsListStarYellow,
-        glyphOverlap: starGlyphOverlap ?? 3,
+        layoutThumbWidth: kFeedReviewRatingThumbWidth,
       );
-      final sc = starRowScale;
-      if (sc != null && sc > 0 && sc < 1) {
-        row = Transform.scale(
-          scale: sc,
-          alignment: Alignment.centerLeft,
-          child: row,
-        );
-      }
-      return row;
     }
 
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: () {
-          Navigator.push<void>(
-            context,
-            CupertinoPageRoute<void>(
-              builder: (_) =>
-                  DramaDetailPage(detail: detail, scrollToRatings: true),
-            ),
-          );
+        onTap: () async {
+          await _openReviewDetail(context);
         },
         child: Padding(
           padding: const EdgeInsets.fromLTRB(
@@ -777,44 +757,60 @@ class LetterboxdMyReviewTile extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               if (showDramaTitle) ...[
-                IntrinsicHeight(
-                  child: Row(
-                    crossAxisAlignment: rawComment.isNotEmpty
-                        ? CrossAxisAlignment.end
-                        : CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              _displayTitle(context),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: titleStyle,
-                            ),
-                            const SizedBox(height: 6),
-                            Align(
-                              alignment: Alignment.centerLeft,
-                              child: buildDefaultStarRow(),
-                            ),
-                            if (rawComment.isNotEmpty) ...[
-                              const SizedBox(height: 8),
-                              Text(
-                                rawComment,
-                                maxLines: 24,
-                                overflow: TextOverflow.ellipsis,
-                                style: bodyStyle,
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: SizedBox(
+                        height: _MyReviewListPosterThumb.height,
+                        child: ClipRect(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Flexible(
+                                flex: 0,
+                                fit: FlexFit.loose,
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      _displayTitle(context),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: titleStyle,
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: buildDefaultStarRow(),
+                                    ),
+                                  ],
+                                ),
                               ),
+                              if (rawComment.isNotEmpty) ...[
+                                const SizedBox(height: 4),
+                                Expanded(
+                                  child: Align(
+                                    alignment: Alignment.bottomLeft,
+                                    child: Text(
+                                      rawComment,
+                                      maxLines: 24,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: bodyStyle,
+                                    ),
+                                  ),
+                                ),
+                              ] else
+                                const Spacer(),
                             ],
-                          ],
+                          ),
                         ),
                       ),
-                      const SizedBox(width: 10),
-                      _MyReviewListPosterThumb(item: item, cs: cs),
-                    ],
-                  ),
+                    ),
+                    const SizedBox(width: 10),
+                    _MyReviewListPosterThumb(item: item, cs: cs),
+                  ],
                 ),
               ] else ...[
                 Align(

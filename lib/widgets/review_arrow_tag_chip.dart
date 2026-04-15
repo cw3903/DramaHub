@@ -7,31 +7,63 @@ class ReviewArrowTagChip extends StatelessWidget {
     super.key,
     required this.label,
     this.compact = false,
+    /// [compact]보다 우선. 지정 시 **높이만** 바꿈(글자·모서리·화살·가로 패딩은 30px 칩과 동일).
+    this.height,
     this.maxLabelWidth = 140,
     this.onRemove,
+    /// 피드 등에서 탭 시 (예: 통합 검색). [onRemove]와 동시 사용하지 않음.
+    this.onTap,
   });
 
   final String label;
   final bool compact;
+  /// null이면 [compact]에 따라 19 또는 30. 지정 시 높이만 바뀜(비율 축소 없음).
+  final double? height;
   final double maxLabelWidth;
   /// 지정 시 글자 오른쪽에 X를 두고 탭하면 호출 (피드 등 읽기 전용에서는 null).
   final VoidCallback? onRemove;
+  final VoidCallback? onTap;
 
   static const _slateBlue = Color(0xFF2C3440);
   static const _textLight = Color(0xFFB8C0CC);
 
   @override
   Widget build(BuildContext context) {
-    final h = compact ? 22.0 : 30.0;
-    final fontSize = compact ? 10.0 : 12.0;
-    final radius = compact ? 5.0 : 7.0;
-    final tip = compact ? 6.0 : 8.0;
-    final horizPad = compact ? 7.0 : 11.0;
+    final double h;
+    final double fontSize;
+    final double radius;
+    final double tip;
+    final double horizPad;
+    final bool tightClose;
+
+    if (height != null) {
+      h = height!.clamp(16.0, 30.0);
+      fontSize = 12.0;
+      radius = 7.0;
+      tip = 8.0;
+      horizPad = 11.0;
+      tightClose = false;
+    } else if (compact) {
+      h = 19.0;
+      fontSize = 10.0;
+      radius = 5.0;
+      tip = 6.0;
+      horizPad = 7.0;
+      tightClose = true;
+    } else {
+      h = 30.0;
+      fontSize = 12.0;
+      radius = 7.0;
+      tip = 8.0;
+      horizPad = 11.0;
+      tightClose = false;
+    }
+
     final rightPad = onRemove != null
-        ? horizPad + tip + (compact ? 2.0 : 4.0)
+        ? horizPad + tip + (tightClose ? 2.0 : 4.0)
         : horizPad + tip * 0.4;
 
-    return IntrinsicWidth(
+    final chip = IntrinsicWidth(
       child: ClipPath(
         clipper: _ArrowTagClipper(radius: radius, tipWidth: tip),
         child: Container(
@@ -41,6 +73,7 @@ class ReviewArrowTagChip extends StatelessWidget {
           alignment: Alignment.centerLeft,
           child: Row(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               ConstrainedBox(
                 constraints: BoxConstraints(maxWidth: maxLabelWidth),
@@ -64,10 +97,10 @@ class ReviewArrowTagChip extends StatelessWidget {
                     onTap: onRemove,
                     borderRadius: BorderRadius.circular(10),
                     child: Padding(
-                      padding: EdgeInsets.fromLTRB(compact ? 2 : 4, 0, compact ? 0 : 2, 0),
+                      padding: EdgeInsets.fromLTRB(tightClose ? 2 : 4, 0, tightClose ? 0 : 2, 0),
                       child: Icon(
                         Icons.close_rounded,
-                        size: compact ? 13 : 16,
+                        size: tightClose ? 13 : 16,
                         color: _textLight.withValues(alpha: 0.92),
                       ),
                     ),
@@ -79,6 +112,21 @@ class ReviewArrowTagChip extends StatelessWidget {
         ),
       ),
     );
+
+    if (onTap != null) {
+      return Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          onTap: onTap,
+          splashColor: Colors.white.withValues(alpha: 0.14),
+          highlightColor: Colors.white.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(radius),
+          canRequestFocus: false,
+          child: chip,
+        ),
+      );
+    }
+    return chip;
   }
 }
 
