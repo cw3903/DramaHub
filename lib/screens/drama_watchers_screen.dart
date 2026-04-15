@@ -10,6 +10,7 @@ import '../services/watch_history_service.dart';
 import '../widgets/country_scope.dart';
 import '../widgets/green_rating_stars.dart';
 import '../widgets/optimized_network_image.dart';
+import '../widgets/user_profile_nav.dart';
 
 /// Letterboxd 스타일 — 이 드라마에 별점/리뷰를 남긴 사용자 목록(시청 활동).
 /// 상단 탭(Everyone / …)은 구현하지 않음.
@@ -31,7 +32,7 @@ class DramaWatchersScreen extends StatefulWidget {
   State<DramaWatchersScreen> createState() => _DramaWatchersScreenState();
 }
 
-const Color _kStarGreen = Color(0xFF00C46C);
+const Color _kStarGreen = Color(0xFFFFB020);
 
 class _WatcherRowVm {
   const _WatcherRowVm({
@@ -39,12 +40,14 @@ class _WatcherRowVm {
     required this.rating,
     this.photoUrl,
     this.hasReview = false,
+    this.authorUid,
   });
 
   final String userName;
   final double rating;
   final String? photoUrl;
   final bool hasReview;
+  final String? authorUid;
 }
 
 class _DramaWatchersScreenState extends State<DramaWatchersScreen> {
@@ -105,7 +108,12 @@ class _DramaWatchersScreenState extends State<DramaWatchersScreen> {
       if (mounted) setState(() => _loading = true);
     }
     try {
-      final list = await ReviewService.instance.getDramaReviews(widget.dramaId);
+      final country = CountryScope.maybeOf(context)?.country ??
+          UserProfileService.instance.signupCountryNotifier.value;
+      final list = await ReviewService.instance.getDramaReviews(
+        widget.dramaId,
+        country: country,
+      );
       if (!mounted) return;
       setState(() {
         _reviews = list;
@@ -121,14 +129,17 @@ class _DramaWatchersScreenState extends State<DramaWatchersScreen> {
     final out = <_WatcherRowVm>[];
     for (final r in _reviews) {
       final name = r.userName.trim();
-      if (name.isEmpty || seen.contains(name)) continue;
-      seen.add(name);
+      final uid = r.authorUid?.trim();
+      final key = (uid != null && uid.isNotEmpty) ? 'uid:$uid' : 'name:$name';
+      if (name.isEmpty || seen.contains(key)) continue;
+      seen.add(key);
       out.add(
         _WatcherRowVm(
           userName: name,
           rating: r.rating.clamp(0.0, 5.0),
           photoUrl: r.authorPhotoUrl,
           hasReview: r.comment.trim().isNotEmpty,
+          authorUid: uid,
         ),
       );
     }
@@ -236,31 +247,39 @@ class _WatcherListTile extends StatelessWidget {
 
     return Material(
       color: cs.surface,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            _Avatar(url: row.photoUrl, label: initial, cs: cs),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                row.userName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: GoogleFonts.notoSansKr(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                  color: cs.onSurface,
+      child: InkWell(
+        onTap: () {
+          final u = row.authorUid?.trim();
+          if (u != null && u.isNotEmpty) {
+            openUserProfileFromAuthorUid(context, u);
+          }
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              _Avatar(url: row.photoUrl, label: initial, cs: cs),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  row.userName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.notoSansKr(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: cs.onSurface,
+                  ),
                 ),
               ),
-            ),
-            GreenRatingStars(rating: row.rating, size: 16, color: _kStarGreen),
-            if (row.hasReview) ...[
-              const SizedBox(width: 6),
-              Icon(LucideIcons.list, size: 16, color: cs.onSurfaceVariant.withValues(alpha: 0.65)),
+              GreenRatingStars(rating: row.rating, size: 16, color: _kStarGreen),
+              if (row.hasReview) ...[
+                const SizedBox(width: 6),
+                Icon(LucideIcons.list, size: 16, color: cs.onSurfaceVariant.withValues(alpha: 0.65)),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );

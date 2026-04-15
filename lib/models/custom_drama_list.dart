@@ -9,6 +9,7 @@ class CustomDramaList {
     required this.createdAt,
     required this.updatedAt,
     this.coverDramaId,
+    this.coverImageUrl,
     this.likeCount = 0,
     this.likedBy = const [],
   });
@@ -22,6 +23,9 @@ class CustomDramaList {
 
   /// 리스트 상단 히어로에 쓸 드라마 id. null이면 히어로 없음(첫 편 자동 사용 안 함).
   final String? coverDramaId;
+
+  /// 갤러리 등에서 올린 커스텀 표지 URL. 있으면 [coverDramaId]보다 우선.
+  final String? coverImageUrl;
 
   /// 좋아요 수(문서 `likeCount`, 없으면 likedBy 길이로 보정).
   final int likeCount;
@@ -39,6 +43,11 @@ class CustomDramaList {
     final ids = rawIds is List
         ? rawIds.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toList()
         : <String>[];
+    final rawImg = (data['coverImageUrl'] as String?)?.trim();
+    final coverImageUrl =
+        rawImg != null && rawImg.isNotEmpty && _isHttpUrl(rawImg)
+            ? rawImg
+            : null;
     final rawCover = (data['coverDramaId'] as String?)?.trim();
     final cover =
         rawCover != null && rawCover.isNotEmpty && ids.contains(rawCover)
@@ -59,8 +68,12 @@ class CustomDramaList {
       createdAt: parseTs(data['createdAt']),
       updatedAt: parseTs(data['updatedAt']),
       coverDramaId: cover,
+      coverImageUrl: coverImageUrl,
       likeCount: likeCount,
       likedBy: likedBy,
     );
   }
+
+  static bool _isHttpUrl(String s) =>
+      s.startsWith('https://') || s.startsWith('http://');
 }

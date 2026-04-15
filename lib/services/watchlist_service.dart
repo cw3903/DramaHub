@@ -68,6 +68,23 @@ class WatchlistService {
     _lastUid = null;
   }
 
+  /// 타 유저 프로필 메뉴 카운트용.
+  Future<int> countWatchlistForUid(String uid) async {
+    final u = uid.trim();
+    if (u.isEmpty) return 0;
+    try {
+      final snap = await _firestore
+          .collection('users')
+          .doc(u)
+          .collection('watchlist')
+          .get();
+      return snap.docs.length;
+    } catch (e, st) {
+      debugPrint('WatchlistService.countWatchlistForUid: $e\n$st');
+      return 0;
+    }
+  }
+
   /// 드라마 상세에서 호출. [country]는 `CountryScope` / 가입 국가 코드.
   Future<void> add(String dramaId, String? country) async {
     final uid = _uid;

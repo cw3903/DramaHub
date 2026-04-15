@@ -45,12 +45,12 @@ String formatTimeAgo(DateTime at, [String? locale]) {
 const Map<String, Map<String, String>> _timeAgoMap = {
   'us': {
     'timeAgoJustNow': 'Just now',
-    'timeAgoMinutes': '%d min ago',
-    'timeAgoHours': '%d hr ago',
-    'timeAgoDays': '%d day ago',
-    'timeAgoWeeks': '%d wk ago',
-    'timeAgoMonths': '%d mo ago',
-    'timeAgoYears': '%d yr ago',
+    'timeAgoMinutes': '%dmin',
+    'timeAgoHours': '%dh',
+    'timeAgoDays': '%dd',
+    'timeAgoWeeks': '%dw',
+    'timeAgoMonths': '%dm',
+    'timeAgoYears': '%dy',
   },
   'kr': {
     'timeAgoJustNow': '방금 전',

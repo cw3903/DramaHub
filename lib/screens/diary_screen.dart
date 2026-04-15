@@ -1,5 +1,6 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -11,13 +12,11 @@ import '../services/drama_list_service.dart';
 import '../services/review_service.dart';
 import '../services/user_profile_service.dart';
 import '../services/watch_history_service.dart';
-import '../widgets/app_bar_back_icon_button.dart';
 import '../widgets/country_scope.dart';
+import '../widgets/feed_review_star_row.dart';
+import '../widgets/lists_style_subpage_app_bar.dart';
 import '../widgets/optimized_network_image.dart';
 import 'drama_detail_page.dart';
-
-/// Favorites 작품 활동 다이어리 탭과 동일 — 노란 별.
-const Color _kDiaryEntryStarYellow = Color(0xFFFFC107);
 
 const List<String> _kMonthNamesEn = [
   'January',
@@ -182,23 +181,6 @@ MyReviewItem? _reviewForWatched(WatchedDramaItem item, String? country) {
   return null;
 }
 
-/// 닉네임 → displayName → 이메일 @ 앞부분. 없으면 null → [diaryTitleWhenAnonymous] 사용.
-String? _diaryOwnerDisplayName() {
-  final n = UserProfileService.instance.nicknameNotifier.value?.trim();
-  if (n != null && n.isNotEmpty) return n;
-  final d = AuthService.instance.currentUser.value?.displayName?.trim();
-  if (d != null && d.isNotEmpty) {
-    if (d.contains('@')) return d.split('@').first;
-    return d;
-  }
-  final email = AuthService.instance.currentUser.value?.email?.trim();
-  if (email != null && email.contains('@')) {
-    final local = email.split('@').first.trim();
-    if (local.isNotEmpty) return local;
-  }
-  return null;
-}
-
 /// Letterboxd Diary — 월별 고정 헤더 + 일·포스터·제목·메타 아이콘
 class DiaryScreen extends StatefulWidget {
   const DiaryScreen({super.key});
@@ -216,10 +198,12 @@ class _DiaryScreenState extends State<DiaryScreen> {
   @override
   void initState() {
     super.initState();
-    WatchHistoryService.instance.refresh();
-    DramaListService.instance.loadFromAsset();
-    ReviewService.instance.loadIfNeeded();
-    UserProfileService.instance.loadIfNeeded();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      WatchHistoryService.instance.refresh();
+      DramaListService.instance.loadFromAsset();
+      ReviewService.instance.loadIfNeeded();
+      UserProfileService.instance.loadIfNeeded();
+    });
   }
 
   @override
@@ -329,64 +313,42 @@ class _DiaryScreenState extends State<DiaryScreen> {
         AuthService.instance.currentUser,
       ]),
       builder: (context, _) {
-        final owner = _diaryOwnerDisplayName();
-        final titleText = (owner == null || owner.isEmpty)
-            ? s.get('diaryTitleWhenAnonymous')
-            : s.get('diaryTitleWithName').replaceAll('{name}', owner);
+        final titleText = s.get('diary');
         final sortIconColor =
             cs.onSurfaceVariant.withValues(alpha: 0.78);
-        return Scaffold(
-          backgroundColor: theme.scaffoldBackgroundColor,
-          appBar: AppBar(
-            toolbarHeight: kToolbarHeight,
-            centerTitle: false,
-            titleSpacing: 0,
-            title: Padding(
-              padding: const EdgeInsets.only(right: 4),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      titleText,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.start,
-                      style: GoogleFonts.notoSansKr(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 16,
-                        letterSpacing: 0.12,
+        final headerBg = listsStyleSubpageHeaderBackground(theme);
+        return AnnotatedRegion<SystemUiOverlayStyle>(
+          value: listsStyleSubpageSystemOverlay(theme, headerBg),
+          child: Scaffold(
+            backgroundColor: theme.scaffoldBackgroundColor,
+            appBar: PreferredSize(
+              preferredSize:
+                  ListsStyleSubpageHeaderBar.preferredSizeOf(context),
+              child: ListsStyleSubpageHeaderBar(
+                title: titleText,
+                onBack: () => popListsStyleSubpage(context),
+                trailing: Tooltip(
+                  message: s.get('myReviewsSortTitle'),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: () => _openSortSheet(context, s),
+                      child: Padding(
+                        padding: const EdgeInsets.all(6),
+                        child: Icon(
+                          LucideIcons.sliders_horizontal,
+                          size: 18,
+                          color: sortIconColor,
+                        ),
                       ),
                     ),
                   ),
-                  IconButton(
-                    tooltip: s.get('myReviewsSortTitle'),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(
-                      minWidth: 40,
-                      minHeight: 40,
-                    ),
-                    style: IconButton.styleFrom(
-                      foregroundColor: sortIconColor,
-                      backgroundColor: Colors.transparent,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    onPressed: () => _openSortSheet(context, s),
-                    icon: Icon(
-                      LucideIcons.sliders_horizontal,
-                      size: 20,
-                      color: sortIconColor,
-                    ),
-                  ),
-                ],
+                ),
               ),
             ),
-            backgroundColor: theme.scaffoldBackgroundColor,
-            elevation: 0,
-            leading: AppBarBackIconButton(
-              onPressed: () => Navigator.pop(context),
-            ),
+            body: _buildBody(context, cs, s, appCountry),
           ),
-          body: _buildBody(context, cs, s, appCountry),
         );
       },
     );
@@ -648,14 +610,15 @@ class DiaryEntryRow extends StatelessWidget {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           if (rating != null) ...[
-                            _DiaryEntryStars(rating: rating, size: 15),
+                            FeedReviewRatingStars(
+                              rating: rating.clamp(0.0, 5.0),
+                              layoutThumbWidth: 62,
+                            ),
                           ],
                           if (hasReviewText) ...[
                             if (rating != null) const SizedBox(width: 2),
-                            Icon(
-                              LucideIcons.text_align_start,
-                              size: 14,
-                              color: cs.onSurfaceVariant.withValues(alpha: 0.62),
+                            _DiaryReviewBodyIndicator(
+                              color: cs.onSurfaceVariant.withValues(alpha: 0.44),
                             ),
                           ],
                         ],
@@ -672,50 +635,40 @@ class DiaryEntryRow extends StatelessWidget {
   }
 }
 
-class _DiaryEntryStars extends StatelessWidget {
-  const _DiaryEntryStars({required this.rating, this.size = 14});
+/// 리뷰 본문 있음 표시 — 얇은 벡터 아이콘보다 살짝 굵은 3줄.
+class _DiaryReviewBodyIndicator extends StatelessWidget {
+  const _DiaryReviewBodyIndicator({required this.color});
 
-  final double rating;
-  final double size;
+  final Color color;
 
-  /// 인접 별 글리프 간 시각적 겹침(px). Row+SizedBox로 자르면 가로 overflow가 나므로 Stack으로 배치.
-  static const double _glyphOverlap = 3.0;
+  static const double _w = 12;
+  static const double _stroke = 1.65;
+  static const double _gap = 2.35;
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final empty = cs.onSurfaceVariant.withValues(alpha: 0.28);
-    final step = size - _glyphOverlap;
-    final w = 4 * step + size;
-
+    Widget line(double width) => Container(
+          width: width,
+          height: _stroke,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(_stroke / 2),
+          ),
+        );
     return SizedBox(
-      width: w,
-      height: size,
-      child: ClipRect(
-        child: Stack(
-          clipBehavior: Clip.hardEdge,
-          children: List.generate(5, (i) {
-            final starValue = i + 1.0;
-            final isFull = rating >= starValue;
-            final isHalf = rating >= starValue - 0.5 && rating < starValue;
-            late IconData icon;
-            late Color color;
-            if (isFull) {
-              icon = Icons.star_rounded;
-              color = _kDiaryEntryStarYellow;
-            } else if (isHalf) {
-              icon = Icons.star_half_rounded;
-              color = _kDiaryEntryStarYellow;
-            } else {
-              icon = Icons.star_border_rounded;
-              color = empty;
-            }
-            return Positioned(
-              left: i * step,
-              top: 0,
-              child: Icon(icon, size: size, color: color),
-            );
-          }),
+      height: 15,
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            line(_w),
+            SizedBox(height: _gap),
+            line(_w * 0.9),
+            SizedBox(height: _gap),
+            line(_w * 0.75),
+          ],
         ),
       ),
     );

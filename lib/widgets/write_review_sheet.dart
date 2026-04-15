@@ -348,7 +348,7 @@ class _WriteReviewSheetState extends State<WriteReviewSheet>
                       child: Icon(
                         isFull ? Icons.star_rounded : (isHalf ? Icons.star_half_rounded : Icons.star_border_rounded),
                         size: 36,
-                        color: isFull || isHalf ? Colors.amber : Colors.grey.shade600,
+                        color: isFull || isHalf ? AppColors.ratingStar : Colors.grey.shade600,
                       ),
                     ),
                   );

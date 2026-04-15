@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 /// DramaHub - 모던 컬러 팔레트 (라이트/다크 공통 브랜드 색)
 class AppColors {
   static const Color accent = Color(0xFFFF4500);
+  static const Color ratingStar = Color(0xFFFFB020);
   static const Color redditOrange = accent;
   static const Color darkGrey = Color(0xFF1A1A1A);
   static const Color mediumGrey = Color(0xFF6B6B6B);
@@ -18,6 +19,15 @@ class AppColors {
   static const Color darkSurfaceVariant = Color(0xFF1E1E1E);
   static const Color darkOnSurface = Color(0xFFE5E5E5);
   static const Color darkOnSurfaceVariant = Color(0xFFB0B0B0);
+
+  /// Community 홈 탭 상단(DramaFeed) AppBar 배경과 동일 — 글 상세 상단 바 등에서 재사용
+  static Color homeHeaderBarBackground(ThemeData theme) {
+    final pageBg = theme.scaffoldBackgroundColor;
+    if (theme.brightness == Brightness.dark) {
+      return Color.lerp(Colors.black, pageBg, 0.45) ?? const Color(0xFF0A0A0A);
+    }
+    return pageBg;
+  }
 }
 
 /// 모던 테마

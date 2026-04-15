@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
+import 'country_service.dart';
 import '../models/drama.dart';
 import '../models/post.dart';
 import '../utils/format_utils.dart';
@@ -80,6 +81,7 @@ class ReviewService {
   final ValueNotifier<List<MyReviewItem>> listNotifier =
       ValueNotifier<List<MyReviewItem>>([]);
   bool _loaded = false;
+  String? _lastUid;
 
   /// [delete]로 DramaFeed `posts`에서 리뷰 글이 지워졌을 때 +1. [consumeLastDeletedFeedPostIds]로 id 목록 소비.
   final ValueNotifier<int> reviewFeedPostsDeletedTick = ValueNotifier(0);
@@ -136,6 +138,7 @@ class ReviewService {
     }
     listNotifier.value = list;
     _loaded = true;
+    _lastUid = _uid;
     _persist(list);
   }
 
@@ -162,7 +165,35 @@ class ReviewService {
   }
 
   Future<void> loadIfNeeded() async {
+    final uid = _uid;
+    // UID가 바뀌면 이전 사용자 데이터를 즉시 클리어하고 재로드
+    if (uid != _lastUid) await clearForLogout();
     if (!_loaded) await _load();
+  }
+
+  /// 타 유저 프로필·Recent activity용. [drama_reviews]에서 `uid` 일치 문서만.
+  Future<List<MyReviewItem>> fetchReviewsForUserUid(String uid) async {
+    final u = uid.trim();
+    if (u.isEmpty) return [];
+    try {
+      final snapshot = await _firestore
+          .collection(_collection)
+          .where('uid', isEqualTo: u)
+          .get();
+      final list = snapshot.docs
+          .map((d) => _itemFromFirestore(d.id, d.data()))
+          .whereType<MyReviewItem>()
+          .toList();
+      list.sort((a, b) {
+        final tb = b.modifiedAt ?? b.writtenAt;
+        final ta = a.modifiedAt ?? a.writtenAt;
+        return tb.compareTo(ta);
+      });
+      return list;
+    } catch (e, st) {
+      debugPrint('fetchReviewsForUserUid: $e\n$st');
+      return [];
+    }
   }
 
   /// 화면 진입 시 Firestore에서 다시 로드 (로그인 후·다른 기기에서 작성한 리뷰 반영)
@@ -430,6 +461,17 @@ class ReviewService {
     }
   }
 
+  /// 로그아웃 또는 계정 전환 시 호출 — 메모리·로컬 캐시 완전 초기화.
+  Future<void> clearForLogout() async {
+    listNotifier.value = [];
+    _loaded = false;
+    _lastUid = null;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_key);
+    } catch (_) {}
+  }
+
   Future<void> _persist(List<MyReviewItem> list) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -497,9 +539,16 @@ class ReviewService {
   }
 
   /// 해당 드라마의 전체 리뷰 목록 (상세 페이지 평점·리뷰 섹션용)
-  Future<List<DramaReview>> getDramaReviews(String dramaId) async {
+  /// [country]: `us`/`kr`/`jp`/`cn` — 상대 시각 문자열([formatTimeAgo])에 사용.
+  Future<List<DramaReview>> getDramaReviews(
+    String dramaId, {
+    String? country,
+  }) async {
     if (dramaId.isEmpty) return [];
     try {
+      final loc = (country != null && country.trim().isNotEmpty)
+          ? country.trim().toLowerCase()
+          : CountryService.instance.countryNotifier.value.toLowerCase();
       final snapshot = await _firestore
           .collection(_collection)
           .where('dramaId', isEqualTo: dramaId)
@@ -516,11 +565,13 @@ class ReviewService {
           userName: d['authorName'] as String? ?? 'u/익명',
           rating: (d['rating'] as num?)?.toDouble() ?? 0,
           comment: d['comment'] as String? ?? '',
-          timeAgo: formatTimeAgo(at),
+          timeAgo: formatTimeAgo(at, loc),
           likeCount: (d['likeCount'] as num?)?.toInt() ??
               (d['likes'] as num?)?.toInt() ??
               0,
           writtenAt: at,
+          authorPhotoUrl: d['authorPhotoUrl'] as String?,
+          authorUid: d['uid'] as String?,
         ));
       }
       return list;

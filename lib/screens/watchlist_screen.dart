@@ -1,29 +1,23 @@
+import 'dart:async' show unawaited;
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../models/drama.dart';
 import '../models/watchlist_item.dart';
 import '../services/auth_service.dart';
 import '../services/drama_list_service.dart';
 import '../services/user_profile_service.dart';
 import '../services/watchlist_service.dart';
-import '../widgets/app_bar_back_icon_button.dart';
 import '../widgets/country_scope.dart';
+import '../widgets/lists_style_subpage_app_bar.dart';
 import '../widgets/optimized_network_image.dart';
 import 'drama_detail_page.dart';
+import 'drama_search_screen.dart';
 import 'login_page.dart';
-
-String _watchlistOwnerDisplayName() {
-  final n = UserProfileService.instance.nicknameNotifier.value?.trim();
-  if (n != null && n.isNotEmpty) return n;
-  final d = AuthService.instance.currentUser.value?.displayName?.trim();
-  if (d != null && d.isNotEmpty) {
-    if (d.contains('@')) return d.split('@').first;
-    return d;
-  }
-  return 'Member';
-}
 
 bool _isFavoriteDrama(String dramaId) {
   if (dramaId.trim().isEmpty) return false;
@@ -41,6 +35,41 @@ List<WatchlistItem> _sortedWatchlist(List<WatchlistItem> items, bool newestFirst
   return copy;
 }
 
+/// [MainScreen] 하단 탭(`extendBody`) 위 영역 안에서 빈 화면 콘텐츠를 세로 중앙에 두기 위한 하단 예약.
+double _watchlistEmptyBottomReserve(BuildContext context) {
+  final mq = MediaQuery.of(context);
+  return mq.padding.bottom + kBottomNavigationBarHeight + 16;
+}
+
+/// List 상세(`CustomDramaListDetailScreen`) 그리드와 동일 — `childAspectRatio` = 가로/세로.
+const double _kListStyleGridAspectRatio = 0.74;
+/// List 상세 그리드 좌우 패딩과 동일.
+const double _kListStyleGridHorizontalPadding = 15;
+/// List 상세 그리드 셀 간격과 동일.
+const double _kListStyleGridGap = 7;
+
+Future<void> _openWatchlistAddDramaSearch(BuildContext context) async {
+  FocusManager.instance.primaryFocus?.unfocus();
+  DramaListService.instance.loadFromAsset();
+  final country = CountryScope.maybeOf(context)?.country ??
+      UserProfileService.instance.signupCountryNotifier.value;
+  final exclude = WatchlistService.instance.itemsNotifier.value
+      .map((e) => e.dramaId)
+      .toSet();
+  // 프로필 즐겨찾기 슬롯과 동일하게 Material 라우트 사용 (Cupertino만 쓸 때 결과 미전달 이슈 방지).
+  final result = await Navigator.push<DramaItem>(
+    context,
+    MaterialPageRoute<DramaItem>(
+      builder: (_) => DramaSearchScreen(
+        pickMode: true,
+        pickExcludeDramaIds: exclude.isEmpty ? null : exclude,
+      ),
+    ),
+  );
+  if (!context.mounted || result == null) return;
+  await WatchlistService.instance.add(result.id, country);
+}
+
 /// 보고 싶은 드라마(Watchlist) — Letterboxd 스타일 그리드·앱바
 class WatchlistScreen extends StatefulWidget {
   const WatchlistScreen({super.key});
@@ -50,10 +79,6 @@ class WatchlistScreen extends StatefulWidget {
 }
 
 class _WatchlistScreenState extends State<WatchlistScreen> {
-  bool _newestFirst = true;
-  /// true: 4열 촘촘 그리드, false: 3열(포스터 조금 큼)
-  bool _fourColumns = true;
-
   @override
   void initState() {
     super.initState();
@@ -62,85 +87,13 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
     });
   }
 
-  void _openSortSheet(BuildContext context, dynamic s) {
-    final cs = Theme.of(context).colorScheme;
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) {
-        final sheetCs = Theme.of(ctx).colorScheme;
-        return Container(
-          padding: const EdgeInsets.fromLTRB(8, 12, 8, 16),
-          decoration: BoxDecoration(
-            color: sheetCs.surface,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-          ),
-          child: SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-                  child: Text(
-                    s.get('myReviewsSortTitle'),
-                    style: GoogleFonts.notoSansKr(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                      color: sheetCs.onSurface,
-                    ),
-                  ),
-                ),
-                ListTile(
-                  title: Text(
-                    s.get('myReviewsSortNewest'),
-                    style: GoogleFonts.notoSansKr(
-                      fontSize: 15,
-                      color: sheetCs.onSurface,
-                    ),
-                  ),
-                  trailing: _newestFirst
-                      ? Icon(Icons.check, color: cs.primary, size: 22)
-                      : null,
-                  onTap: () {
-                    setState(() => _newestFirst = true);
-                    Navigator.pop(ctx);
-                  },
-                ),
-                ListTile(
-                  title: Text(
-                    s.get('myReviewsSortOldest'),
-                    style: GoogleFonts.notoSansKr(
-                      fontSize: 15,
-                      color: sheetCs.onSurface,
-                    ),
-                  ),
-                  trailing: !_newestFirst
-                      ? Icon(Icons.check, color: cs.primary, size: 22)
-                      : null,
-                  onTap: () {
-                    setState(() => _newestFirst = false);
-                    Navigator.pop(ctx);
-                  },
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final cs = theme.colorScheme;
     final s = CountryScope.of(context).strings;
-    final isDark = theme.brightness == Brightness.dark;
-    final barBg = theme.scaffoldBackgroundColor;
-    final name = _watchlistOwnerDisplayName();
-    final titleText =
-        s.get('watchlistTitleWithName').replaceAll('{name}', name);
+    final titleText = s.get('tabWatchlist');
+    final headerBg = listsStyleSubpageHeaderBackground(theme);
+    final overlay = listsStyleSubpageSystemOverlay(theme, headerBg);
 
     return AnimatedBuilder(
       animation: Listenable.merge([
@@ -149,71 +102,24 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
         UserProfileService.instance.nicknameNotifier,
       ]),
       builder: (context, _) {
-        return Scaffold(
-          backgroundColor: theme.scaffoldBackgroundColor,
-          appBar: AppBar(
-            toolbarHeight: kToolbarHeight,
-            centerTitle: true,
-            title: Text(
-              titleText,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: GoogleFonts.notoSansKr(
-                fontWeight: FontWeight.w700,
-                fontSize: 16,
-                letterSpacing: 0.12,
-                color: isDark ? Colors.white : cs.onSurface,
-              ),
-            ),
-            backgroundColor: barBg,
-            foregroundColor: isDark ? Colors.white : cs.onSurface,
-            elevation: 0,
-            iconTheme: IconThemeData(
-              color: isDark ? Colors.white : cs.onSurface,
-            ),
-            leading: AppBarBackIconButton(
-              onPressed: () => Navigator.pop(context),
-            ),
-            actions: [
-              IconButton(
-                icon: Icon(
-                  _fourColumns ? Icons.view_week_outlined : Icons.grid_view_rounded,
-                  size: 22,
-                ),
-                onPressed: () =>
-                    setState(() => _fourColumns = !_fourColumns),
-              ),
-              Padding(
-                padding: const EdgeInsets.only(right: 10),
-                child: Center(
-                  child: Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      customBorder: const CircleBorder(),
-                      onTap: () => _openSortSheet(context, s),
-                      child: Ink(
-                        width: 36,
-                        height: 36,
-                        decoration: BoxDecoration(
-                          color: cs.primary.withValues(alpha: 0.22),
-                          shape: BoxShape.circle,
-                        ),
-                        child: Icon(
-                          LucideIcons.sliders_horizontal,
-                          size: 18,
-                          color: cs.primary,
-                        ),
-                      ),
-                    ),
-                  ),
+        return AnnotatedRegion<SystemUiOverlayStyle>(
+          value: overlay,
+          child: Scaffold(
+            backgroundColor: theme.scaffoldBackgroundColor,
+            appBar: PreferredSize(
+              preferredSize:
+                  ListsStyleSubpageHeaderBar.preferredSizeOf(context),
+              child: ListsStyleSubpageHeaderBar(
+                title: titleText,
+                onBack: () => popListsStyleSubpage(context),
+                trailing: ListsStyleSubpageHeaderAddButton(
+                  onTap: () => _openWatchlistAddDramaSearch(context),
                 ),
               ),
-            ],
-          ),
-          body: _WatchlistBody(
-            newestFirst: _newestFirst,
-            fourColumns: _fourColumns,
-            gridBackground: theme.scaffoldBackgroundColor,
+            ),
+            body: _WatchlistBody(
+              gridBackground: theme.scaffoldBackgroundColor,
+            ),
           ),
         );
       },
@@ -223,13 +129,9 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
 
 class _WatchlistBody extends StatelessWidget {
   const _WatchlistBody({
-    required this.newestFirst,
-    required this.fourColumns,
     required this.gridBackground,
   });
 
-  final bool newestFirst;
-  final bool fourColumns;
   final Color gridBackground;
 
   @override
@@ -244,39 +146,48 @@ class _WatchlistBody extends StatelessWidget {
         if (!loggedIn) {
           return ColoredBox(
             color: gridBackground,
-            child: Center(
-              child: Padding(
-                padding: const EdgeInsets.all(32),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      LucideIcons.clock,
-                      size: 56,
-                      color: cs.onSurfaceVariant.withValues(alpha: 0.45),
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      s.get('watchlistLoginRequired'),
-                      textAlign: TextAlign.center,
-                      style: GoogleFonts.notoSansKr(
-                        fontSize: 15,
-                        color: cs.onSurfaceVariant,
+            child: Padding(
+              padding: EdgeInsets.only(bottom: _watchlistEmptyBottomReserve(context)),
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(32),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Center(
+                        child: Icon(
+                          LucideIcons.clock,
+                          size: 56,
+                          color: cs.onSurfaceVariant.withValues(alpha: 0.45),
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 20),
-                    FilledButton(
-                      onPressed: () {
-                        Navigator.push<void>(
-                          context,
-                          MaterialPageRoute<void>(
-                            builder: (_) => const LoginPage(),
-                          ),
-                        );
-                      },
-                      child: Text(s.get('login')),
-                    ),
-                  ],
+                      const SizedBox(height: 16),
+                      Text(
+                        s.get('watchlistLoginRequired'),
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.notoSansKr(
+                          fontSize: 15,
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      Align(
+                        alignment: Alignment.center,
+                        child: FilledButton(
+                          onPressed: () {
+                            Navigator.push<void>(
+                              context,
+                              MaterialPageRoute<void>(
+                                builder: (_) => const LoginPage(),
+                              ),
+                            );
+                          },
+                          child: Text(s.get('login')),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -289,37 +200,41 @@ class _WatchlistBody extends StatelessWidget {
             if (items.isEmpty) {
               return ColoredBox(
                 color: gridBackground,
-                child: Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(32),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          LucideIcons.layout_grid,
-                          size: 56,
-                          color: cs.onSurfaceVariant.withValues(alpha: 0.4),
+                child: Padding(
+                  padding: EdgeInsets.only(
+                    bottom: _watchlistEmptyBottomReserve(context),
+                  ),
+                  child: Center(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => _openWatchlistAddDramaSearch(context),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 32,
+                          vertical: 24,
                         ),
-                        const SizedBox(height: 16),
-                        Text(
-                          s.get('watchlistEmptyTitle'),
-                          style: GoogleFonts.notoSansKr(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: cs.onSurface,
-                          ),
-                          textAlign: TextAlign.center,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Icon(
+                              LucideIcons.layout_grid,
+                              size: 56,
+                              color: cs.onSurfaceVariant.withValues(alpha: 0.4),
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              s.get('watchlistEmptyTitle'),
+                              textAlign: TextAlign.center,
+                              style: GoogleFonts.notoSansKr(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: cs.onSurface,
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(height: 8),
-                        Text(
-                          s.get('watchlistEmptyHint'),
-                          style: GoogleFonts.notoSansKr(
-                            fontSize: 14,
-                            color: cs.onSurfaceVariant,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ],
+                      ),
                     ),
                   ),
                 ),
@@ -328,20 +243,23 @@ class _WatchlistBody extends StatelessWidget {
 
             final country = CountryScope.maybeOf(context)?.country ??
                 UserProfileService.instance.signupCountryNotifier.value;
-            final sorted = _sortedWatchlist(items, newestFirst);
-            final crossAxis = fourColumns ? 4 : 3;
-            const spacing = 6.0;
-            final ratio = fourColumns ? 0.62 : 0.64;
+            final sorted = _sortedWatchlist(items, true);
+            const crossAxis = 4;
 
             return ColoredBox(
               color: gridBackground,
               child: GridView.builder(
-                padding: const EdgeInsets.fromLTRB(8, 10, 8, 28),
+                padding: const EdgeInsets.fromLTRB(
+                  _kListStyleGridHorizontalPadding,
+                  10,
+                  _kListStyleGridHorizontalPadding,
+                  28,
+                ),
                 gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: crossAxis,
-                  childAspectRatio: ratio,
-                  crossAxisSpacing: spacing,
-                  mainAxisSpacing: spacing,
+                  childAspectRatio: _kListStyleGridAspectRatio,
+                  crossAxisSpacing: _kListStyleGridGap,
+                  mainAxisSpacing: _kListStyleGridGap,
                 ),
                 itemCount: sorted.length,
                 itemBuilder: (context, index) {
@@ -356,6 +274,7 @@ class _WatchlistBody extends StatelessWidget {
                     key: ValueKey(dramaId),
                     imageUrl: imageUrl,
                     showFavoriteStar: fav,
+                    removeTooltip: s.get('watchlistRemoveTitle'),
                     onOpen: () {
                       final item =
                           WatchlistService.instance.resolveDramaItem(dramaId);
@@ -368,39 +287,8 @@ class _WatchlistBody extends StatelessWidget {
                         ),
                       );
                     },
-                    onLongPressRemove: () async {
-                      final ok = await showDialog<bool>(
-                        context: context,
-                        builder: (ctx) => AlertDialog(
-                          title: Text(
-                            s.get('watchlistRemoveTitle'),
-                            style: GoogleFonts.notoSansKr(),
-                          ),
-                          content: Text(
-                            s.get('watchlistRemoveMessage'),
-                            style: GoogleFonts.notoSansKr(),
-                          ),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.pop(ctx, false),
-                              child: Text(
-                                s.get('cancel'),
-                                style: GoogleFonts.notoSansKr(),
-                              ),
-                            ),
-                            TextButton(
-                              onPressed: () => Navigator.pop(ctx, true),
-                              child: Text(
-                                s.get('ok'),
-                                style: GoogleFonts.notoSansKr(),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                      if (ok == true) {
-                        await WatchlistService.instance.remove(dramaId);
-                      }
+                    onRemove: () {
+                      unawaited(WatchlistService.instance.remove(dramaId));
                     },
                   );
                 },
@@ -418,78 +306,127 @@ class _WatchlistPosterCell extends StatelessWidget {
     super.key,
     required this.imageUrl,
     required this.onOpen,
-    required this.onLongPressRemove,
+    required this.onRemove,
+    required this.removeTooltip,
     this.showFavoriteStar = false,
   });
 
   final String? imageUrl;
   final VoidCallback onOpen;
-  final VoidCallback onLongPressRemove;
+  final VoidCallback onRemove;
+  final String removeTooltip;
   final bool showFavoriteStar;
 
-  static const _radius = 4.0;
+  /// List 상세 `_PosterCell`과 동일.
+  static const double _radius = 4.5;
+  static const double _borderWidth = 0.6;
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final cs = theme.colorScheme;
     final url = imageUrl;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onOpen,
-        onLongPress: onLongPressRemove,
+    final borderColor = isDark
+        ? const Color(0xFF4A5568)
+        : cs.outline.withValues(alpha: 0.38);
+
+    return Container(
+      decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(_radius),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(_radius),
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              ColoredBox(color: cs.surfaceContainerHighest.withValues(alpha: 0.5)),
-              if (url != null && url.startsWith('http'))
-                OptimizedNetworkImage(
-                  imageUrl: url,
-                  fit: BoxFit.cover,
-                  memCacheWidth: 200,
-                  memCacheHeight: 300,
-                )
-              else if (url != null && url.isNotEmpty)
-                Image.asset(
-                  url,
-                  fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) => Center(
-                    child: Icon(
-                      LucideIcons.tv,
-                      color: cs.onSurfaceVariant.withValues(alpha: 0.35),
+        border: Border.all(color: borderColor, width: _borderWidth),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          const ColoredBox(color: Color(0xFF1E252E)),
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: onOpen,
+              onLongPress: onRemove,
+              borderRadius: BorderRadius.circular(_radius),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (url != null && url.startsWith('http'))
+                    OptimizedNetworkImage(
+                      imageUrl: url,
+                      fit: BoxFit.cover,
+                      memCacheWidth: 184,
+                      memCacheHeight: 276,
+                    )
+                  else if (url != null && url.isNotEmpty)
+                    Image.asset(
+                      url,
+                      fit: BoxFit.cover,
+                      errorBuilder: (context, error, stackTrace) => Center(
+                        child: Icon(
+                          LucideIcons.tv,
+                          size: 20,
+                          color: Colors.white.withValues(alpha: 0.18),
+                        ),
+                      ),
+                    )
+                  else
+                    Center(
+                      child: Icon(
+                        LucideIcons.tv,
+                        size: 20,
+                        color: Colors.white.withValues(alpha: 0.18),
+                      ),
                     ),
-                  ),
-                )
-              else
-                Center(
-                  child: Icon(
-                    LucideIcons.tv,
-                    color: cs.onSurfaceVariant.withValues(alpha: 0.35),
-                  ),
-                ),
-              if (showFavoriteStar)
-                Positioned(
-                  top: 3,
-                  left: 3,
-                  child: Container(
-                    padding: const EdgeInsets.all(1),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.45),
-                      borderRadius: BorderRadius.circular(3),
-                    ),
-                    child: const Icon(
-                      Icons.star_rounded,
-                      size: 13,
-                      color: Color(0xFFFFB020),
-                    ),
-                  ),
-                ),
-            ],
+                ],
+              ),
+            ),
           ),
-        ),
+          if (showFavoriteStar)
+            Positioned(
+              top: 3,
+              left: 3,
+              child: Container(
+                padding: const EdgeInsets.all(1),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.45),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+                child: const Icon(
+                  Icons.star_rounded,
+                  size: 13,
+                  color: Color(0xFFFFB020),
+                ),
+              ),
+            ),
+          Positioned(
+            top: 2,
+            right: 2,
+            child: Tooltip(
+              message: removeTooltip,
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: onRemove,
+                  customBorder: const CircleBorder(),
+                  child: Container(
+                    width: 26,
+                    height: 26,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.52),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.close_rounded,
+                      size: 15,
+                      color: Colors.white.withValues(alpha: 0.95),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

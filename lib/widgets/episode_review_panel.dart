@@ -9,6 +9,7 @@ import '../services/episode_review_service.dart';
 import '../services/user_profile_service.dart';
 import '../theme/app_theme.dart';
 import 'optimized_network_image.dart';
+import 'user_profile_nav.dart';
 
 /// 각 화 별점 없을 때 별·숫자 색 (회색으로 통일)
 Color episodeNoRatingColor(BuildContext context) {
@@ -101,7 +102,7 @@ class _EpisodeReviewPanelState extends State<EpisodeReviewPanel> {
                       Icon(
                         Icons.star_rounded,
                         size: 18,
-                        color: hasRating ? Colors.amber : episodeNoRatingColor(context),
+                        color: hasRating ? AppColors.ratingStar : episodeNoRatingColor(context),
                       ),
                       const SizedBox(width: 4),
                       Text(
@@ -207,7 +208,7 @@ class _EpisodeReviewPanelState extends State<EpisodeReviewPanel> {
                                       ? Icons.star_rounded
                                       : (half ? Icons.star_half_rounded : Icons.star_border_rounded),
                                   size: 28,
-                                  color: (full || half) ? Colors.amber : cs.onSurfaceVariant,
+                                  color: (full || half) ? AppColors.ratingStar : cs.onSurfaceVariant,
                                 ),
                                 Row(
                                   children: [
@@ -303,6 +304,11 @@ class EpisodeReviewCard extends StatelessWidget {
         child: Icon(Icons.person, size: 16, color: iconColor),
       );
     }
+    avatar = GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => openUserProfileFromAuthorUid(context, item.uid),
+      child: avatar,
+    );
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -315,17 +321,22 @@ class EpisodeReviewCard extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Text(
-                    item.authorName,
-                    style: GoogleFonts.notoSansKr(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: cs.onSurface,
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () =>
+                        openUserProfileFromAuthorUid(context, item.uid),
+                    child: Text(
+                      item.authorName,
+                      style: GoogleFonts.notoSansKr(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: cs.onSurface,
+                      ),
                     ),
                   ),
                   if (item.rating != null && item.rating! > 0) ...[
                     const SizedBox(width: 6),
-                    Icon(Icons.star_rounded, size: 14, color: Colors.amber),
+                    Icon(Icons.star_rounded, size: 14, color: AppColors.ratingStar),
                     const SizedBox(width: 2),
                     Text(
                       item.rating!.toStringAsFixed(1),

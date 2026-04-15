@@ -1,4 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+
+import '../services/locale_service.dart';
 import '../utils/format_utils.dart';
 
 /// 커뮤니티 게시글
@@ -389,6 +391,7 @@ class PostComment {
     this.authorAvatarColorIndex,
     this.createdAtDate,
     this.imageUrl,
+    this.authorUid,
   });
   final String id;
   final String author;
@@ -400,14 +403,29 @@ class PostComment {
   final List<String> dislikedBy;
   final String? authorPhotoUrl;
   final int? authorAvatarColorIndex;
+  /// 댓글 작성자 Firebase UID (있으면 닉·아바타 탭 시 프로필 이동)
+  final String? authorUid;
   /// Firestore에서 읽어온 실제 작성 시각 (있으면 timeAgo를 동적으로 계산 가능)
   final DateTime? createdAtDate;
   /// 댓글 첨부 이미지/GIF URL (없으면 null)
   final String? imageUrl;
 
   /// 실제 작성 시각 기준으로 상대 시간 반환. createdAtDate가 없으면 저장된 timeAgo 반환.
-  String get displayTimeAgo =>
-      createdAtDate != null ? formatTimeAgo(createdAtDate!) : timeAgo;
+  String get displayTimeAgo => createdAtDate != null
+      ? formatTimeAgo(createdAtDate!, LocaleService.instance.locale)
+      : timeAgo;
+
+  /// [locale]에 맞는 상대 시간. createdAtDate → id(ms) → 저장값 순으로 폴백.
+  String timeAgoLocalized(String locale) {
+    if (createdAtDate != null) {
+      return formatTimeAgo(createdAtDate!, locale);
+    }
+    final idMs = int.tryParse(id);
+    if (idMs != null && idMs > 1_000_000_000_000) {
+      return formatTimeAgo(DateTime.fromMillisecondsSinceEpoch(idMs), locale);
+    }
+    return timeAgo;
+  }
 
   Map<String, dynamic> toMap() {
     return {
@@ -423,6 +441,7 @@ class PostComment {
       if (authorAvatarColorIndex != null) 'authorAvatarColorIndex': authorAvatarColorIndex,
       if (createdAtDate != null) 'createdAt': Timestamp.fromDate(createdAtDate!),
       if (imageUrl != null) 'imageUrl': imageUrl,
+      if (authorUid != null) 'authorUid': authorUid,
     };
   }
 
@@ -454,7 +473,7 @@ class PostComment {
     final createdAt = map['createdAt'];
     final createdAtDate = createdAt is Timestamp ? createdAt.toDate() : null;
     final timeAgoStr = createdAtDate != null
-        ? formatTimeAgo(createdAtDate)
+        ? formatTimeAgo(createdAtDate, LocaleService.instance.locale)
         : (map['timeAgo'] as String? ?? '');
     return PostComment(
       id: map['id'] as String? ?? '',
@@ -469,6 +488,7 @@ class PostComment {
       authorAvatarColorIndex: (map['authorAvatarColorIndex'] as num?)?.toInt(),
       createdAtDate: createdAtDate,
       imageUrl: map['imageUrl'] as String?,
+      authorUid: map['authorUid'] as String?,
     );
   }
 }

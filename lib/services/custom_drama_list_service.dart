@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 
 import '../models/custom_drama_list.dart';
@@ -11,6 +12,7 @@ class CustomDramaListService {
   static final CustomDramaListService instance = CustomDramaListService._();
 
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseStorage _storage = FirebaseStorage.instance;
   final ValueNotifier<List<CustomDramaList>> listsNotifier =
       ValueNotifier<List<CustomDramaList>>([]);
 
@@ -65,11 +67,28 @@ class CustomDramaListService {
     _lastUid = null;
   }
 
+  /// 갤러리 표지 업로드. Storage 규칙상 `posts/` 경로 사용.
+  Future<String?> uploadListCoverImage(Uint8List bytes) async {
+    final uid = _uid;
+    if (uid == null || bytes.isEmpty) return null;
+    try {
+      final name =
+          'list_cover_${uid}_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final ref = _storage.ref().child('posts').child(name);
+      await ref.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
+      return await ref.getDownloadURL();
+    } catch (e, st) {
+      debugPrint('CustomDramaListService.uploadListCoverImage: $e\n$st');
+      return null;
+    }
+  }
+
   Future<void> createList({
     required String title,
     required String description,
     required List<String> dramaIds,
     String? coverDramaId,
+    String? coverImageUrl,
   }) async {
     final uid = _uid;
     if (uid == null) return;
@@ -82,6 +101,13 @@ class CustomDramaListService {
         .take(20)
         .toList();
     if (cleanTitle.isEmpty || cleanIds.isEmpty) return;
+
+    final rawImg = coverImageUrl?.trim();
+    final validImg = rawImg != null &&
+            rawImg.isNotEmpty &&
+            (rawImg.startsWith('http://') || rawImg.startsWith('https://'))
+        ? rawImg
+        : null;
 
     final cover = coverDramaId?.trim();
     final validCover =
@@ -100,7 +126,9 @@ class CustomDramaListService {
       'likeCount': 0,
       'likedBy': <String>[],
     };
-    if (validCover != null) {
+    if (validImg != null) {
+      data['coverImageUrl'] = validImg;
+    } else if (validCover != null) {
       data['coverDramaId'] = validCover;
     }
 
@@ -113,7 +141,8 @@ class CustomDramaListService {
       dramaIds: List<String>.from(cleanIds),
       createdAt: nowLocal,
       updatedAt: nowLocal,
-      coverDramaId: validCover,
+      coverDramaId: validImg != null ? null : validCover,
+      coverImageUrl: validImg,
       likeCount: 0,
       likedBy: const [],
     );
@@ -130,8 +159,112 @@ class CustomDramaListService {
     );
   }
 
+  /// 리스트 삭제. 성공 시 true.
+  Future<bool> deleteList(String listId) async {
+    final uid = _uid;
+    if (uid == null || listId.trim().isEmpty) return false;
+    try {
+      await _listCol.doc(listId).delete();
+      listsNotifier.value =
+          listsNotifier.value.where((e) => e.id != listId).toList();
+      unawaited(
+        loadIfNeeded(force: true).catchError((Object e, StackTrace st) {
+          debugPrint('CustomDramaListService.deleteList refresh: $e\n$st');
+        }),
+      );
+      return true;
+    } catch (e, st) {
+      debugPrint('CustomDramaListService.deleteList: $e\n$st');
+      return false;
+    }
+  }
+
+  /// 리스트 수정(제목·설명·드라마·표지). [clearAllCovers] true면 표지 필드 둘 다 제거.
+  Future<bool> updateList({
+    required String listId,
+    required String title,
+    required String description,
+    required List<String> dramaIds,
+    String? coverDramaId,
+    String? coverImageUrl,
+    bool clearAllCovers = false,
+  }) async {
+    final uid = _uid;
+    if (uid == null || listId.trim().isEmpty) return false;
+    final cleanTitle = title.trim();
+    final cleanDesc = description.trim();
+    final cleanIds = dramaIds
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .take(20)
+        .toList();
+    if (cleanTitle.isEmpty || cleanIds.isEmpty) return false;
+
+    final rawImg = coverImageUrl?.trim();
+    final validImg = rawImg != null &&
+            rawImg.isNotEmpty &&
+            (rawImg.startsWith('http://') || rawImg.startsWith('https://'))
+        ? rawImg
+        : null;
+
+    final cover = coverDramaId?.trim();
+    final validCover =
+        cover != null && cover.isNotEmpty && cleanIds.contains(cover)
+            ? cover
+            : null;
+
+    final update = <String, dynamic>{
+      'title': cleanTitle,
+      'description': cleanDesc,
+      'dramaIds': cleanIds,
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
+
+    if (clearAllCovers) {
+      update['coverImageUrl'] = FieldValue.delete();
+      update['coverDramaId'] = FieldValue.delete();
+    } else if (validImg != null) {
+      update['coverImageUrl'] = validImg;
+      update['coverDramaId'] = FieldValue.delete();
+    } else if (validCover != null) {
+      update['coverDramaId'] = validCover;
+      update['coverImageUrl'] = FieldValue.delete();
+    }
+
+    try {
+      await _listCol.doc(listId).update(update);
+      unawaited(
+        loadIfNeeded(force: true).catchError((Object e, StackTrace st) {
+          debugPrint('CustomDramaListService.updateList refresh: $e\n$st');
+        }),
+      );
+      return true;
+    } catch (e, st) {
+      debugPrint('CustomDramaListService.updateList: $e\n$st');
+      return false;
+    }
+  }
+
   /// 커스텀 리스트 문서의 좋아요 토글(본인 `users/{uid}/custom_lists`만).
   /// 성공 시 true=좋아요 적용, false=취소, 문서 없음·오류 시 null.
+  /// 타 유저 프로필 메뉴 카운트용.
+  Future<int> countListsForUid(String uid) async {
+    final u = uid.trim();
+    if (u.isEmpty) return 0;
+    try {
+      final snap = await _firestore
+          .collection('users')
+          .doc(u)
+          .collection('custom_lists')
+          .get();
+      return snap.docs.length;
+    } catch (e, st) {
+      debugPrint('CustomDramaListService.countListsForUid: $e\n$st');
+      return 0;
+    }
+  }
+
   Future<bool?> toggleListLike(String listId) async {
     final uid = _uid;
     if (uid == null || listId.isEmpty) return null;

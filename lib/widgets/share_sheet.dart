@@ -1,4 +1,3 @@
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
@@ -6,9 +5,8 @@ import 'package:google_fonts/google_fonts.dart';
 import '../services/share_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/country_scope.dart';
-import '../screens/share_settings_page.dart';
 
-/// 공유 바텀시트 - 링크 복사, 앱 공유, 설정
+/// 공유 바텀시트 - 링크 복사, 앱 공유
 class ShareSheet extends StatefulWidget {
   const ShareSheet({
     super.key,
@@ -37,24 +35,9 @@ class ShareSheet extends StatefulWidget {
 }
 
 class _ShareSheetState extends State<ShareSheet> {
-  String _country = 'us';
-
-  @override
-  void initState() {
-    super.initState();
-    ShareService.instance.getPreferredShareCountry().then((c) {
-      if (mounted && c != null) setState(() => _country = c);
-    });
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _country = CountryScope.maybeOf(context)?.country ?? _country;
-  }
-
-  ShareContent get _content => ShareService.instance.buildContent(
-        country: _country,
+  ShareContent _contentFor(BuildContext context) =>
+      ShareService.instance.buildContent(
+        country: CountryScope.of(context).country,
         title: widget.title,
         type: widget.type,
       );
@@ -92,7 +75,7 @@ class _ShareSheetState extends State<ShareSheet> {
             icon: LucideIcons.link,
             label: s.get('copyLink'),
             onTap: () async {
-              await ShareService.instance.copyLink(_content);
+              await ShareService.instance.copyLink(_contentFor(context));
               if (context.mounted) {
                 Navigator.pop(context);
                 ScaffoldMessenger.of(context).showSnackBar(
@@ -113,24 +96,8 @@ class _ShareSheetState extends State<ShareSheet> {
             label: s.get('shareToApps'),
             onTap: () async {
               HapticFeedback.lightImpact();
-              await ShareService.instance.share(_content);
+              await ShareService.instance.share(_contentFor(context));
               if (context.mounted) Navigator.pop(context);
-            },
-          ),
-          const SizedBox(height: 16),
-          const Divider(color: Colors.white24, height: 1),
-          const SizedBox(height: 12),
-          // 공유 설정
-          _ShareOptionTile(
-            icon: LucideIcons.settings,
-            label: s.get('shareSettings'),
-            onTap: () {
-              HapticFeedback.lightImpact();
-              final navigator = Navigator.of(context);
-              Navigator.pop(context);
-              navigator.push(
-                CupertinoPageRoute(builder: (_) => const ShareSettingsPage()),
-              );
             },
           ),
         ],

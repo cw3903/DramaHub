@@ -1,5 +1,6 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -11,9 +12,10 @@ import '../services/drama_list_service.dart';
 import '../services/review_service.dart';
 import '../services/user_profile_service.dart';
 import '../services/watch_history_service.dart';
-import '../widgets/app_bar_back_icon_button.dart';
 import '../widgets/country_scope.dart';
+import '../widgets/lists_style_subpage_app_bar.dart';
 import '../widgets/optimized_network_image.dart';
+import '../widgets/two_tab_segment_bar.dart';
 import '../widgets/write_review_sheet.dart';
 import 'diary_screen.dart';
 import 'drama_detail_page.dart';
@@ -80,17 +82,6 @@ String _monthHeaderLabel(String appCountry, int year, int month) {
   }
 }
 
-String _activityOwnerDisplayName() {
-  final n = UserProfileService.instance.nicknameNotifier.value?.trim();
-  if (n != null && n.isNotEmpty) return n;
-  final d = AuthService.instance.currentUser.value?.displayName?.trim();
-  if (d != null && d.isNotEmpty) {
-    if (d.contains('@')) return d.split('@').first;
-    return d;
-  }
-  return 'DramaHub';
-}
-
 typedef _FavoriteDramaLine = ({
   String displayTitle,
   String? releaseYear,
@@ -144,6 +135,7 @@ DramaItem _navDramaItemForFavorite(ProfileFavorite f, _FavoriteDramaLine line) {
   );
 }
 
+/// 프로필 FAVORITES 슬롯([_favoriteSlotContent])과 동일: 고정 프레임 안에 `cover` + memCache 미지정으로 비율 왜곡 방지.
 class _FavoriteDiaryThumb extends StatelessWidget {
   const _FavoriteDiaryThumb({
     required this.url,
@@ -160,54 +152,54 @@ class _FavoriteDiaryThumb extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final u = url?.trim() ?? '';
-    final iconSize = (width * 0.42).clamp(20.0, 40.0);
-    final mw = (width * MediaQuery.devicePixelRatioOf(context))
-        .round()
-        .clamp(48, 512);
-    final mh = (height * MediaQuery.devicePixelRatioOf(context))
-        .round()
-        .clamp(72, 768);
-    if (u.startsWith('http')) {
-      return OptimizedNetworkImage(
-        imageUrl: u,
-        width: width,
-        height: height,
-        fit: BoxFit.cover,
-        memCacheWidth: mw,
-        memCacheHeight: mh,
-        errorWidget: ColoredBox(
+    final iconSize =
+        ((width < height ? width : height) * 0.42).clamp(20.0, 40.0);
+    Widget errorIcon() => ColoredBox(
           color: cs.surfaceContainerHighest,
           child: Icon(
             LucideIcons.tv,
             size: iconSize,
             color: cs.onSurfaceVariant.withValues(alpha: 0.35),
+          ),
+        );
+    if (u.startsWith('http')) {
+      return SizedBox(
+        width: width,
+        height: height,
+        child: ColoredBox(
+          color: cs.surfaceContainerHighest,
+          child: OptimizedNetworkImage(
+            imageUrl: u,
+            width: double.infinity,
+            height: double.infinity,
+            fit: BoxFit.cover,
+            memCacheWidth: null,
+            memCacheHeight: null,
+            errorWidget: errorIcon(),
           ),
         ),
       );
     }
     if (u.startsWith('assets/')) {
-      return Image.asset(
-        u,
+      return SizedBox(
         width: width,
         height: height,
-        fit: BoxFit.cover,
-        errorBuilder: (context, error, stackTrace) => ColoredBox(
+        child: ColoredBox(
           color: cs.surfaceContainerHighest,
-          child: Icon(
-            LucideIcons.tv,
-            size: iconSize,
-            color: cs.onSurfaceVariant.withValues(alpha: 0.35),
+          child: Image.asset(
+            u,
+            fit: BoxFit.cover,
+            width: double.infinity,
+            height: double.infinity,
+            errorBuilder: (context, error, stackTrace) => errorIcon(),
           ),
         ),
       );
     }
-    return ColoredBox(
-      color: cs.surfaceContainerHighest,
-      child: Icon(
-        LucideIcons.tv,
-        size: iconSize,
-        color: cs.onSurfaceVariant.withValues(alpha: 0.35),
-      ),
+    return SizedBox(
+      width: width,
+      height: height,
+      child: errorIcon(),
     );
   }
 }
@@ -274,10 +266,7 @@ class _FavoriteTitleActivityScreenState
     super.dispose();
   }
 
-  String _headerTitle(dynamic s) {
-    final name = _activityOwnerDisplayName();
-    return s.get('favoriteActivityTitle').replaceAll('{name}', name);
-  }
+  String _headerTitle(dynamic s) => s.get('favoriteActivityHeaderTitle');
 
   void _openDramaDetailForFavorite(BuildContext context, String? country) {
     final line = _favoriteDramaLineMeta(widget.favorite, country);
@@ -325,10 +314,10 @@ class _FavoriteTitleActivityScreenState
             child: Material(
               color: Colors.transparent,
               child: InkWell(
-                borderRadius: BorderRadius.circular(5),
+                borderRadius: BorderRadius.circular(8),
                 onTap: () => _openDramaDetailForFavorite(context, country),
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(5),
+                  borderRadius: BorderRadius.circular(8),
                   child: _FavoriteDiaryThumb(
                     url: line.posterUrl,
                     cs: cs,
@@ -416,106 +405,6 @@ class _FavoriteTitleActivityScreenState
     if (ok == true && mounted) {
       await ReviewService.instance.deleteById(review.id);
     }
-  }
-
-  /// 리뷰/다이어리 세그먼트 — 트랙 안을 칩이 가득 채움(내부 inset 없음).
-  Widget _segmentBar(ColorScheme cs, Brightness brightness, dynamic s) {
-    const segmentTrackRadius = 7.0;
-    /// 트랙 clip과 맞춘 선택 칩 모서리(1px 테두리 안쪽 느낌).
-    const innerCornerRadius = 6.0;
-    const trackDark = Color(0xFF1C1C1E);
-    const trackBorderDark = Color(0xFF2C2C2E);
-    final trackBg = brightness == Brightness.dark
-        ? trackDark
-        : cs.surfaceContainerHighest.withValues(alpha: 0.92);
-    final trackBorder = brightness == Brightness.dark
-        ? trackBorderDark
-        : cs.outline.withValues(alpha: 0.22);
-    const selectedBlueGray = Color(0xFF5D6D7E);
-    final selectedBg = brightness == Brightness.dark
-        ? selectedBlueGray
-        : Color.lerp(selectedBlueGray, cs.surface, 0.25) ?? selectedBlueGray;
-    final dimLabel = brightness == Brightness.dark
-        ? const Color(0xFF8E8E93)
-        : cs.onSurfaceVariant.withValues(alpha: 0.72);
-    const barHeight = 28.0;
-
-    BorderRadius chipRadius(bool on, int index) {
-      if (!on) return BorderRadius.zero;
-      if (index == 0) {
-        return const BorderRadius.only(
-          topLeft: Radius.circular(innerCornerRadius),
-          bottomLeft: Radius.circular(innerCornerRadius),
-        );
-      }
-      return const BorderRadius.only(
-        topRight: Radius.circular(innerCornerRadius),
-        bottomRight: Radius.circular(innerCornerRadius),
-      );
-    }
-
-    Widget chip(String label, int index) {
-      final on = _segment == index;
-      final radius = chipRadius(on, index);
-      return Expanded(
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOut,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: on ? selectedBg : Colors.transparent,
-            borderRadius: radius,
-          ),
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: () => setState(() => _segment = index),
-              borderRadius: radius,
-              splashColor: cs.primary.withValues(alpha: 0.1),
-              highlightColor: Colors.transparent,
-              child: Center(
-                child: Text(
-                  label,
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: GoogleFonts.notoSansKr(
-                    fontSize: 12,
-                    height: 1.0,
-                    fontWeight: on ? FontWeight.w900 : FontWeight.w800,
-                    color: on ? Colors.white : dimLabel,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-    }
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-      child: SizedBox(
-        height: barHeight,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: trackBg,
-            borderRadius: BorderRadius.circular(segmentTrackRadius),
-            border: Border.all(color: trackBorder, width: 1),
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(segmentTrackRadius),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                chip(s.get('tabReviews'), 0),
-                chip(s.get('diary'), 1),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
   }
 
   Widget _buildDiaryTab(
@@ -641,35 +530,27 @@ class _FavoriteTitleActivityScreenState
     final appCountry = CountryScope.of(context).country;
     final brightness = theme.brightness;
 
-    return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
-      appBar: AppBar(
-        centerTitle: true,
-        title: Text(
-          _headerTitle(s),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: GoogleFonts.notoSansKr(
-            fontWeight: FontWeight.w700,
-            fontSize: 16,
-            letterSpacing: 0.12,
+    final headerBg = listsStyleSubpageHeaderBackground(theme);
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: listsStyleSubpageSystemOverlay(theme, headerBg),
+      child: Scaffold(
+        backgroundColor: theme.scaffoldBackgroundColor,
+        appBar: PreferredSize(
+          preferredSize: ListsStyleSubpageHeaderBar.preferredSizeOf(context),
+          child: ListsStyleSubpageHeaderBar(
+            title: _headerTitle(s),
+            onBack: () => popListsStyleSubpage(context),
           ),
         ),
-        backgroundColor: theme.scaffoldBackgroundColor,
-        elevation: 0,
-        leading: AppBarBackIconButton(
-          onPressed: () => Navigator.pop(context),
-        ),
-      ),
-      body: AnimatedBuilder(
-        animation: Listenable.merge([
-          WatchHistoryService.instance.listNotifier,
-          ReviewService.instance.listNotifier,
-          DramaListService.instance.listNotifier,
-          DramaListService.instance.extraNotifier,
-          UserProfileService.instance.nicknameNotifier,
-        ]),
-        builder: (context, _) {
+        body: AnimatedBuilder(
+          animation: Listenable.merge([
+            WatchHistoryService.instance.listNotifier,
+            ReviewService.instance.listNotifier,
+            DramaListService.instance.listNotifier,
+            DramaListService.instance.extraNotifier,
+            UserProfileService.instance.nicknameNotifier,
+          ]),
+          builder: (context, _) {
           // CountryScope는 상위 build에서 이미 of로 구독함. 여기서 maybeOf(dependOn) 중복 시
           // framework ancestor assertion이 날 수 있어 appCountry 사용.
           final review = _reviewForFavorite(widget.favorite, appCountry);
@@ -677,7 +558,14 @@ class _FavoriteTitleActivityScreenState
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _segmentBar(cs, brightness, s),
+              TwoTabSegmentBar(
+                selectedIndex: _segment,
+                onSelect: (i) => setState(() => _segment = i),
+                labelLeft: s.get('tabReviews'),
+                labelRight: s.get('diary'),
+                colorScheme: cs,
+                brightness: brightness,
+              ),
               Expanded(
                 child: _segment == 0
                     ? (review == null
@@ -760,7 +648,7 @@ class _FavoriteTitleActivityScreenState
                                 activityAuthorNameFontSize: 12,
                                 starSize: 16,
                                 starInterGap: 0,
-                                starFilledColor: const Color(0xFFFFC107),
+                                starFilledColor: const Color(0xFFFFB020),
                                 onEdit: widget.readOnly
                                     ? null
                                     : () => _openWriteReviewForFavorite(
@@ -785,6 +673,7 @@ class _FavoriteTitleActivityScreenState
             ],
           );
         },
+        ),
       ),
     );
   }

@@ -238,10 +238,11 @@ class _CommunitySearchPageState extends State<CommunitySearchPage> {
           filter: _filter,
           highlight: _highlight,
           onTap: () async {
-            final updated = await Navigator.push<Post>(
+            final result = await Navigator.push<PostDetailResult>(
               context,
               MaterialPageRoute(builder: (_) => PostDetailPage(post: post)),
             );
+            final updated = result?.updatedPost;
             if (updated != null) {
               final idx = _allPosts.indexWhere((p) => p.id == updated.id);
               if (idx != -1 && mounted) {

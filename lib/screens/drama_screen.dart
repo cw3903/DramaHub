@@ -24,6 +24,10 @@ class DramaScreen extends StatefulWidget {
 }
 
 class _DramaScreenState extends State<DramaScreen> {
+  /// [build]마다 새 [Future]를 만들면 [FutureBuilder]가 조회를 반복 호출함 → 한 번만.
+  late final Future<Map<String, int>> _allViewCountsFuture =
+      DramaViewService.instance.getAllViewCounts();
+
   /// 카테고리 탭 타깃 필터. null 또는 '전체'면 전체.
   String? _categoryTargetFilter;
 
@@ -506,7 +510,7 @@ class _DramaScreenState extends State<DramaScreen> {
                     children: [
                   Positioned.fill(
                     child: FutureBuilder<Map<String, int>>(
-                      future: DramaViewService.instance.getAllViewCounts(),
+                      future: _allViewCountsFuture,
                       builder: (context, viewSnapshot) {
                         final viewCounts = viewSnapshot.data ?? {};
                         return ValueListenableBuilder<List<DramaItem>>(

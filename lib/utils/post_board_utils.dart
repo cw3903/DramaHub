@@ -47,3 +47,9 @@ bool postMatchesFeedFilter(Post post, String board) {
       return true;
   }
 }
+
+/// 프로필 Posts(톡·에스크): 리뷰 게시판·트렌드 전용 글 제외.
+bool postIsCommunityTalkOrAsk(Post p) {
+  final t = postDisplayType(p);
+  return t == 'talk' || t == 'ask';
+}

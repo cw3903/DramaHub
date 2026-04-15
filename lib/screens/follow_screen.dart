@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -7,10 +8,12 @@ import '../services/auth_service.dart';
 import '../services/follow_service.dart';
 import '../services/user_profile_service.dart';
 import '../widgets/country_scope.dart';
+import '../widgets/lists_style_subpage_app_bar.dart';
 import '../widgets/optimized_network_image.dart';
-import 'user_posts_screen.dart';
+import '../widgets/two_tab_segment_bar.dart';
+import '../widgets/user_profile_nav.dart';
 
-/// Letterboxd 스타일 Network — `{닉네임}'s Network` + 팔로잉/팔로워 탭.
+/// Letterboxd 스타일 Network — Following/Followers 탭.
 class FollowScreen extends StatefulWidget {
   const FollowScreen({
     super.key,
@@ -27,30 +30,12 @@ class FollowScreen extends StatefulWidget {
   State<FollowScreen> createState() => _FollowScreenState();
 }
 
-class _FollowScreenState extends State<FollowScreen> with SingleTickerProviderStateMixin {
-  late final TabController _tabController;
+class _FollowScreenState extends State<FollowScreen> {
+  int _segment = 0;
 
   static const Color _lbGreen = Color(0xFF00C030);
 
-  @override
-  void initState() {
-    super.initState();
-    _tabController = TabController(length: 2, vsync: this);
-  }
-
-  @override
-  void dispose() {
-    _tabController.dispose();
-    super.dispose();
-  }
-
   String _effectiveOwnerUid() => widget.networkOwnerUid ?? AuthService.instance.currentUser.value?.uid ?? '';
-
-  String _titleName(String fallback) {
-    final w = widget.ownerDisplayName?.trim();
-    if (w != null && w.isNotEmpty) return w;
-    return fallback;
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -58,113 +43,83 @@ class _FollowScreenState extends State<FollowScreen> with SingleTickerProviderSt
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final ownerUid = _effectiveOwnerUid();
+    final headerBg = listsStyleSubpageHeaderBackground(theme);
 
     if (ownerUid.isEmpty) {
-      return Scaffold(
-        backgroundColor: theme.scaffoldBackgroundColor,
-        appBar: AppBar(
-          title: Text(s.get('followScreenTitle'), style: GoogleFonts.notoSansKr(fontWeight: FontWeight.w600)),
+      return AnnotatedRegion<SystemUiOverlayStyle>(
+        value: listsStyleSubpageSystemOverlay(theme, headerBg),
+        child: Scaffold(
           backgroundColor: theme.scaffoldBackgroundColor,
-          elevation: 0,
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back_ios_new),
-            onPressed: () => Navigator.pop(context),
+          appBar: PreferredSize(
+            preferredSize: ListsStyleSubpageHeaderBar.preferredSizeOf(context),
+            child: ListsStyleSubpageHeaderBar(
+              title: 'Follow',
+              onBack: () => popListsStyleSubpage(context),
+            ),
           ),
-        ),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(
-              s.get('loginRequiredForFollow'),
-              textAlign: TextAlign.center,
-              style: GoogleFonts.notoSansKr(fontSize: 15, color: cs.onSurfaceVariant),
+          body: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(
+                s.get('loginRequiredForFollow'),
+                textAlign: TextAlign.center,
+                style: GoogleFonts.notoSansKr(fontSize: 15, color: cs.onSurfaceVariant),
+              ),
             ),
           ),
         ),
       );
     }
 
-    return FutureBuilder<String>(
-      future: _resolveOwnerTitle(ownerUid),
-      builder: (context, titleSnap) {
-        final displayName = _titleName(titleSnap.data ?? 'Member');
-        final title = s.get('networkPageTitle').replaceAll('{name}', displayName);
-
-        return Scaffold(
-          backgroundColor: theme.scaffoldBackgroundColor,
-          appBar: AppBar(
-            title: Text(
-              title,
-              style: GoogleFonts.notoSansKr(
-                fontWeight: FontWeight.w700,
-                fontSize: 17,
-                letterSpacing: -0.2,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            backgroundColor: theme.scaffoldBackgroundColor,
-            elevation: 0,
-            centerTitle: false,
-            leading: IconButton(
-              icon: Icon(Icons.arrow_back_ios_new, size: 20, color: cs.onSurface),
-              onPressed: () => Navigator.pop(context),
-            ),
-            bottom: PreferredSize(
-              preferredSize: const Size.fromHeight(44),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: TabBar(
-                  controller: _tabController,
-                  isScrollable: true,
-                  tabAlignment: TabAlignment.start,
-                  labelColor: cs.onSurface,
-                  unselectedLabelColor: cs.onSurfaceVariant,
-                  indicatorColor: _lbGreen,
-                  indicatorWeight: 3,
-                  dividerColor: cs.outline.withValues(alpha: 0.15),
-                  labelStyle: GoogleFonts.notoSansKr(fontWeight: FontWeight.w800, fontSize: 14),
-                  unselectedLabelStyle: GoogleFonts.notoSansKr(fontWeight: FontWeight.w500, fontSize: 14),
-                  tabs: [
-                    Tab(text: s.get('tabFollowing')),
-                    Tab(text: s.get('tabFollowers')),
-                  ],
-                ),
-              ),
-            ),
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: listsStyleSubpageSystemOverlay(theme, headerBg),
+      child: Scaffold(
+        backgroundColor: theme.scaffoldBackgroundColor,
+        appBar: PreferredSize(
+          preferredSize: ListsStyleSubpageHeaderBar.preferredSizeOf(context),
+          child: ListsStyleSubpageHeaderBar(
+            title: 'Follow',
+            onBack: () => popListsStyleSubpage(context),
           ),
-          body: TabBarView(
-            controller: _tabController,
-            children: [
-              _NetworkList(
-                ownerUid: ownerUid,
-                isFollowingTab: true,
-                cs: cs,
-                s: s,
-                lbGreen: _lbGreen,
+        ),
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TwoTabSegmentBar(
+              selectedIndex: _segment,
+              onSelect: (i) => setState(() => _segment = i),
+              labelLeft: s.get('tabFollowing'),
+              labelRight: s.get('tabFollowers'),
+              colorScheme: cs,
+              brightness: theme.brightness,
+            ),
+            Expanded(
+              child: IndexedStack(
+                index: _segment,
+                children: [
+                  _NetworkList(
+                    ownerUid: ownerUid,
+                    isFollowingTab: true,
+                    cs: cs,
+                    s: s,
+                    lbGreen: _lbGreen,
+                  ),
+                  _NetworkList(
+                    ownerUid: ownerUid,
+                    isFollowingTab: false,
+                    cs: cs,
+                    s: s,
+                    lbGreen: _lbGreen,
+                  ),
+                ],
               ),
-              _NetworkList(
-                ownerUid: ownerUid,
-                isFollowingTab: false,
-                cs: cs,
-                s: s,
-                lbGreen: _lbGreen,
-              ),
-            ],
-          ),
-        );
-      },
+            ),
+          ],
+        ),
+      ),
     );
   }
 
-  Future<String> _resolveOwnerTitle(String ownerUid) async {
-    if (widget.ownerDisplayName != null && widget.ownerDisplayName!.trim().isNotEmpty) {
-      return widget.ownerDisplayName!.trim();
-    }
-    final pub = await FollowService.instance.getUserPublic(ownerUid);
-    if (pub != null && pub.nickname.isNotEmpty && pub.nickname != ownerUid) return pub.nickname;
-    return AuthService.instance.currentUser.value?.displayName?.trim() ?? 'Member';
-  }
 }
 
 class _NetworkList extends StatelessWidget {
@@ -272,10 +227,7 @@ class _NetworkMemberRow extends StatelessWidget {
   final Color lbGreen;
 
   void _openProfile(BuildContext context) {
-    Navigator.push<void>(
-      context,
-      MaterialPageRoute<void>(builder: (_) => UserPostsScreen(authorName: displayNickname)),
-    );
+    openUserProfileFromAuthorUid(context, rowUid);
   }
 
   @override

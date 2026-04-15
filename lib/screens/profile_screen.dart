@@ -17,19 +17,20 @@ import '../services/saved_service.dart';
 import '../services/watchlist_service.dart';
 import '../services/watch_history_service.dart';
 import '../services/review_service.dart';
+import '../services/custom_drama_list_service.dart';
 import '../services/share_service.dart';
 import '../services/user_profile_service.dart';
 import '../services/theme_service.dart';
 import '../services/post_service.dart';
 import '../services/follow_service.dart';
+import '../theme/app_theme.dart';
 import 'follow_screen.dart';
 import 'profile_photo_preview_page.dart';
 import 'lists_screen.dart';
 import 'watchlist_screen.dart';
-import 'share_settings_page.dart';
 import 'language_select_screen.dart';
 import 'user_posts_screen.dart';
-import 'user_comments_screen.dart';
+import 'user_public_reviews_screen.dart';
 import 'my_reviews_screen.dart';
 import '../models/drama.dart';
 import '../models/post.dart';
@@ -153,7 +154,7 @@ Widget _profileMenuRowDivider(ColorScheme cs) => Divider(
 const double _kProfileSectionBleedPadV = 16.0;
 const double _kProfileSectionBleedPadH = 16.0;
 
-/// 프로필 메뉴(리뷰~언어) 리딩·트레일 아이콘 크기.
+/// 프로필 메뉴(다이어리~언어) 리딩·트레일 아이콘 크기.
 const double _kProfileMenuLeadingIconSize = 11.0;
 const double _kProfileMenuTrailingIconSize = 10.0;
 
@@ -162,10 +163,23 @@ class _ProfileLinksMenu extends StatefulWidget {
   const _ProfileLinksMenu({
     required this.cs,
     required this.strings,
+    this.showAppSettings = true,
+    this.menuDiaryCount,
+    this.menuListsCount,
+    this.menuWatchlistCount,
+    this.menuLikesCount,
   });
 
   final ColorScheme cs;
   final dynamic strings;
+
+  /// false: Theme·Language 행 숨김 (타 유저 프로필).
+  final bool showAppSettings;
+
+  final int? menuDiaryCount;
+  final int? menuListsCount;
+  final int? menuWatchlistCount;
+  final int? menuLikesCount;
 
   @override
   State<_ProfileLinksMenu> createState() => _ProfileLinksMenuState();
@@ -180,7 +194,12 @@ class _ProfileLinksMenuState extends State<_ProfileLinksMenu> {
     _profileStatsRefreshNotifier.addListener(_onLikesRefreshSignal);
     AuthService.instance.currentUser.addListener(_onLikesRefreshSignal);
     WatchHistoryService.instance.loadIfNeeded();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _reloadLikesTotal());
+    CustomDramaListService.instance.loadIfNeeded();
+    if (widget.menuLikesCount != null) {
+      _likesCount = widget.menuLikesCount!;
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _reloadLikesTotal());
+    }
   }
 
   @override
@@ -191,17 +210,21 @@ class _ProfileLinksMenuState extends State<_ProfileLinksMenu> {
   }
 
   void _onLikesRefreshSignal() {
+    if (widget.menuLikesCount != null) return;
+    CustomDramaListService.instance.loadIfNeeded(force: true);
     _reloadLikesTotal();
   }
 
   Future<void> _reloadLikesTotal() async {
+    if (widget.menuLikesCount != null) return;
     final uid = AuthService.instance.currentUser.value?.uid;
     if (!mounted) return;
     if (uid == null || uid.isEmpty) {
       setState(() => _likesCount = 0);
       return;
     }
-    final country = CountryScope.maybeOf(context)?.country ??
+    final country =
+        CountryScope.maybeOf(context)?.country ??
         UserProfileService.instance.signupCountryNotifier.value;
     try {
       final list = await PostService.instance.getPostsLikedByUid(
@@ -219,20 +242,23 @@ class _ProfileLinksMenuState extends State<_ProfileLinksMenu> {
   Widget build(BuildContext context) {
     final cs = widget.cs;
     final s = widget.strings;
-    /// Lists 탭에 정의된 리스트 행 수(현재 워치리스트 카드 1행만).
-    const listsCount = 1;
+    final w = widget;
 
     return AnimatedBuilder(
       animation: Listenable.merge([
-        ReviewService.instance.listNotifier,
         WatchlistService.instance.itemsNotifier,
         WatchHistoryService.instance.listNotifier,
+        CustomDramaListService.instance.listsNotifier,
       ]),
       builder: (context, _) {
-        final reviewCount = ReviewService.instance.list.length;
         final watchlistCount =
+            w.menuWatchlistCount ??
             WatchlistService.instance.itemsNotifier.value.length;
-        final diaryCount = WatchHistoryService.instance.list.length;
+        final diaryCount =
+            w.menuDiaryCount ?? WatchHistoryService.instance.list.length;
+        final listsCount =
+            w.menuListsCount ??
+            CustomDramaListService.instance.listsNotifier.value.length;
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -245,24 +271,7 @@ class _ProfileLinksMenuState extends State<_ProfileLinksMenu> {
               onTap: () {
                 Navigator.push(
                   context,
-                  CupertinoPageRoute(
-                    builder: (_) => const DiaryScreen(),
-                  ),
-                );
-              },
-              color: cs,
-            ),
-            _profileMenuRowDivider(cs),
-            _ProfileTile(
-              icon: LucideIcons.star,
-              label: s.get('tabReviews'),
-              trailingCount: reviewCount,
-              onTap: () {
-                Navigator.push(
-                  context,
-                  CupertinoPageRoute(
-                    builder: (_) => const MyReviewsScreen(),
-                  ),
+                  CupertinoPageRoute(builder: (_) => const DiaryScreen()),
                 );
               },
               color: cs,
@@ -275,9 +284,7 @@ class _ProfileLinksMenuState extends State<_ProfileLinksMenu> {
               onTap: () {
                 Navigator.push(
                   context,
-                  CupertinoPageRoute(
-                    builder: (_) => const ListsScreen(),
-                  ),
+                  CupertinoPageRoute(builder: (_) => const ListsScreen()),
                 );
               },
               color: cs,
@@ -290,9 +297,7 @@ class _ProfileLinksMenuState extends State<_ProfileLinksMenu> {
               onTap: () {
                 Navigator.push(
                   context,
-                  CupertinoPageRoute(
-                    builder: (_) => const WatchlistScreen(),
-                  ),
+                  CupertinoPageRoute(builder: (_) => const WatchlistScreen()),
                 );
               },
               color: cs,
@@ -301,65 +306,50 @@ class _ProfileLinksMenuState extends State<_ProfileLinksMenu> {
             _ProfileTile(
               icon: LucideIcons.heart,
               label: s.get('likes'),
-              trailingCount: _likesCount,
+              trailingCount: w.menuLikesCount ?? _likesCount,
               onTap: () {
                 Navigator.push(
                   context,
-                  CupertinoPageRoute(
-                    builder: (_) => const LikesScreen(),
-                  ),
+                  CupertinoPageRoute(builder: (_) => const LikesScreen()),
                 );
               },
               color: cs,
             ),
-            _profileMenuRowDivider(cs),
-            _ProfileTile(
-              icon: LucideIcons.share_2,
-              label: s.get('shareSettings'),
-              onTap: () {
-                Navigator.push(
-                  context,
-                  CupertinoPageRoute(
-                    builder: (_) => const ShareSettingsPage(),
-                  ),
-                );
-              },
-              color: cs,
-            ),
-            _profileMenuRowDivider(cs),
-            ListenableBuilder(
-              listenable: ThemeService.instance.themeModeNotifier,
-              builder: (context, _) {
-                final themeIcon =
-                    Theme.of(context).brightness == Brightness.dark
-                    ? LucideIcons.moon
-                    : LucideIcons.sun;
-                return _ProfileTile(
-                  icon: themeIcon,
-                  label: s.get('theme'),
-                  onTap: () => _showThemeSheet(context, s),
-                  color: cs,
-                );
-              },
-            ),
-            _profileMenuRowDivider(cs),
-            _ProfileTile(
-              icon: LucideIcons.languages,
-              label: s.get('language'),
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => LanguageSelectScreen(
-                      title: s.get('language'),
-                      showCloseButton: true,
+            if (w.showAppSettings) ...[
+              _profileMenuRowDivider(cs),
+              ListenableBuilder(
+                listenable: ThemeService.instance.themeModeNotifier,
+                builder: (context, _) {
+                  final themeIcon =
+                      Theme.of(context).brightness == Brightness.dark
+                      ? LucideIcons.moon
+                      : LucideIcons.sun;
+                  return _ProfileTile(
+                    icon: themeIcon,
+                    label: s.get('theme'),
+                    onTap: () => _showThemeSheet(context, s),
+                    color: cs,
+                  );
+                },
+              ),
+              _profileMenuRowDivider(cs),
+              _ProfileTile(
+                icon: LucideIcons.languages,
+                label: s.get('language'),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => LanguageSelectScreen(
+                        title: s.get('language'),
+                        showCloseButton: true,
+                      ),
                     ),
-                  ),
-                );
-              },
-              color: cs,
-            ),
-            _profileMenuRowDivider(cs),
+                  );
+                },
+                color: cs,
+              ),
+            ],
           ],
         );
       },
@@ -437,12 +427,24 @@ typedef _PostCommentData = ({
   String commentAuthor,
   int postCount,
   int commentCount,
+  int reviewCount,
+  int? followCountOverride,
 });
 
 class _ProfileStatRow extends StatefulWidget {
-  const _ProfileStatRow({required this.cs, required this.strings});
+  const _ProfileStatRow({
+    required this.cs,
+    required this.strings,
+    this.statsForUid,
+    this.statsDisplayNickname,
+  });
+
   final ColorScheme cs;
   final dynamic strings;
+
+  /// 타 유저 프로필: 게시글/댓글/팔로우 통계용 UID 및 표시 닉네임( `u/` 없음 ).
+  final String? statsForUid;
+  final String? statsDisplayNickname;
 
   @override
   State<_ProfileStatRow> createState() => _ProfileStatRowState();
@@ -469,9 +471,32 @@ class _ProfileStatRowState extends State<_ProfileStatRow> {
   }
 
   Future<_PostCommentData> _load() async {
+    final w = widget;
+    if (w.statsForUid != null &&
+        w.statsForUid!.isNotEmpty &&
+        w.statsDisplayNickname != null &&
+        w.statsDisplayNickname!.trim().isNotEmpty) {
+      final nick = w.statsDisplayNickname!.trim();
+      final postAuthor = 'u/$nick';
+      final posts = await PostService.instance.getPostsByAuthor(postAuthor);
+      final comments = await PostService.instance.getCommentsByAuthor(nick);
+      final reviews = await ReviewService.instance.fetchReviewsForUserUid(
+        w.statsForUid!,
+      );
+      final fc = await FollowService.instance.getFollowingCountOnce(
+        w.statsForUid!,
+      );
+      return (
+        postAuthor: postAuthor,
+        commentAuthor: nick,
+        postCount: posts.length,
+        commentCount: comments.length,
+        reviewCount: reviews.length,
+        followCountOverride: fc,
+      );
+    }
     final base = await UserProfileService.instance.getAuthorBaseName();
-    final postAuthor =
-        await UserProfileService.instance.getAuthorForPost();
+    final postAuthor = await UserProfileService.instance.getAuthorForPost();
     final posts = await PostService.instance.getPostsByAuthor(postAuthor);
     final comments = await PostService.instance.getCommentsByAuthor(base);
     return (
@@ -479,6 +504,8 @@ class _ProfileStatRowState extends State<_ProfileStatRow> {
       commentAuthor: base,
       postCount: posts.length,
       commentCount: comments.length,
+      reviewCount: ReviewService.instance.listNotifier.value.length,
+      followCountOverride: null,
     );
   }
 
@@ -486,9 +513,63 @@ class _ProfileStatRowState extends State<_ProfileStatRow> {
   Widget build(BuildContext context) {
     final cs = widget.cs;
     final s = widget.strings;
+    final w = widget;
     return Row(
       children: [
-        // ── My posts ──
+        // ── Reviews ──
+        Expanded(
+          child: w.statsForUid != null
+              ? FutureBuilder<_PostCommentData>(
+                  future: _statsFuture,
+                  builder: (context, snap) {
+                    final reviewCount = snap.data?.reviewCount ?? 0;
+                    final uid = w.statsForUid!;
+                    final disp = w.statsDisplayNickname?.trim();
+                    return _StatCard(
+                      icon: LucideIcons.star,
+                      label: s.get('tabReviews'),
+                      count: reviewCount,
+                      loading: snap.connectionState == ConnectionState.waiting,
+                      onTap: () {
+                        Navigator.push<void>(
+                          context,
+                          CupertinoPageRoute<void>(
+                            builder: (_) => UserPublicReviewsScreen(
+                              uid: uid,
+                              ownerDisplayName: disp,
+                            ),
+                          ),
+                        );
+                      },
+                      isLight: true,
+                    );
+                  },
+                )
+              : ListenableBuilder(
+                  listenable: ReviewService.instance.listNotifier,
+                  builder: (context, _) {
+                    final reviewCount =
+                        ReviewService.instance.listNotifier.value.length;
+                    return _StatCard(
+                      icon: LucideIcons.star,
+                      label: s.get('tabReviews'),
+                      count: reviewCount,
+                      loading: false,
+                      onTap: () {
+                        Navigator.push<void>(
+                          context,
+                          CupertinoPageRoute<void>(
+                            builder: (_) => const MyReviewsScreen(),
+                          ),
+                        );
+                      },
+                      isLight: true,
+                    );
+                  },
+                ),
+        ),
+        Container(width: 1, height: 28, color: cs.outline.withOpacity(0.4)),
+        // ── Posts (글 + 댓글 탭) ──
         Expanded(
           child: FutureBuilder<_PostCommentData>(
             future: _statsFuture,
@@ -497,7 +578,7 @@ class _ProfileStatRowState extends State<_ProfileStatRow> {
               final postAuthor = snap.data?.postAuthor ?? 'u/익명';
               return _StatCard(
                 icon: LucideIcons.file_text,
-                label: s.get('myPosts'),
+                label: s.get('userPostsTabPosts'),
                 count: postCount,
                 loading: snap.connectionState == ConnectionState.waiting,
                 onTap: () => Navigator.push(
@@ -512,72 +593,82 @@ class _ProfileStatRowState extends State<_ProfileStatRow> {
           ),
         ),
         Container(width: 1, height: 28, color: cs.outline.withOpacity(0.4)),
-        // ── Comments ──
+        // ── Follow (실시간 notifier) ──
         Expanded(
           child: FutureBuilder<_PostCommentData>(
             future: _statsFuture,
             builder: (context, snap) {
-              final commentCount = snap.data?.commentCount ?? 0;
-              final commentAuthor = snap.data?.commentAuthor ?? '익명';
-              return _StatCard(
-                icon: LucideIcons.message_circle,
-                label: s.get('comments'),
-                count: commentCount,
-                loading: snap.connectionState == ConnectionState.waiting,
-                onTap: () => Navigator.push(
-                  context,
-                  CupertinoPageRoute(
-                    builder: (_) =>
-                        UserCommentsScreen(authorName: commentAuthor),
-                  ),
-                ),
-                isLight: true,
-              );
-            },
-          ),
-        ),
-        Container(width: 1, height: 28, color: cs.outline.withOpacity(0.4)),
-        // ── Follow (실시간 notifier) ──
-        Expanded(
-          child: ValueListenableBuilder<int>(
-            valueListenable: FollowService.instance.followingCountNotifier,
-            builder: (context, followCount, _) {
-              return _StatCard(
-                icon: LucideIcons.user_plus,
-                label: s.get('profileStatFollow'),
-                count: followCount,
-                onTap: () async {
-                  await UserProfileService.instance.loadIfNeeded();
-                  if (!context.mounted) return;
-                  final uid =
-                      AuthService.instance.currentUser.value?.uid;
-                  if (uid == null) return;
-                  final nick = UserProfileService
-                      .instance
-                      .nicknameNotifier
-                      .value
-                      ?.trim();
-                  final disp = nick != null && nick.isNotEmpty
-                      ? nick
-                      : (AuthService
-                                .instance
-                                .currentUser
-                                .value
-                                ?.displayName
-                                ?.trim() ??
-                            'Member');
-                  if (!context.mounted) return;
-                  Navigator.push<void>(
-                    context,
-                    CupertinoPageRoute<void>(
-                      builder: (_) => FollowScreen(
-                        networkOwnerUid: uid,
-                        ownerDisplayName: disp,
+              final w = widget;
+              if (w.statsForUid != null) {
+                if (snap.connectionState != ConnectionState.done) {
+                  return _StatCard(
+                    icon: LucideIcons.user_plus,
+                    label: s.get('profileStatFollow'),
+                    count: 0,
+                    loading: true,
+                    onTap: () {},
+                    isLight: true,
+                  );
+                }
+                final fc = snap.data?.followCountOverride ?? 0;
+                final uid = w.statsForUid!;
+                final disp = w.statsDisplayNickname?.trim().isNotEmpty == true
+                    ? w.statsDisplayNickname!.trim()
+                    : 'Member';
+                return _StatCard(
+                  icon: LucideIcons.user_plus,
+                  label: s.get('profileStatFollow'),
+                  count: fc,
+                  onTap: () {
+                    Navigator.push<void>(
+                      context,
+                      CupertinoPageRoute<void>(
+                        builder: (_) => FollowScreen(
+                          networkOwnerUid: uid,
+                          ownerDisplayName: disp,
+                        ),
                       ),
-                    ),
+                    );
+                  },
+                  isLight: true,
+                );
+              }
+              return ValueListenableBuilder<int>(
+                valueListenable: FollowService.instance.followingCountNotifier,
+                builder: (context, followCount, _) {
+                  return _StatCard(
+                    icon: LucideIcons.user_plus,
+                    label: s.get('profileStatFollow'),
+                    count: followCount,
+                    onTap: () async {
+                      await UserProfileService.instance.loadIfNeeded();
+                      if (!context.mounted) return;
+                      final uid = AuthService.instance.currentUser.value?.uid;
+                      if (uid == null) return;
+                      final nick = UserProfileService
+                          .instance
+                          .nicknameNotifier
+                          .value
+                          ?.trim();
+                      final disp = nick != null && nick.isNotEmpty
+                          ? nick
+                          : (AuthService.instance.currentUser.value?.displayName
+                                    ?.trim() ??
+                                'Member');
+                      if (!context.mounted) return;
+                      Navigator.push<void>(
+                        context,
+                        CupertinoPageRoute<void>(
+                          builder: (_) => FollowScreen(
+                            networkOwnerUid: uid,
+                            ownerDisplayName: disp,
+                          ),
+                        ),
+                      );
+                    },
+                    isLight: true,
                   );
                 },
-                isLight: true,
               );
             },
           ),
@@ -587,9 +678,304 @@ class _ProfileStatRowState extends State<_ProfileStatRow> {
   }
 }
 
-/// 프로필 탭 - 로그인 후 표시 (UX 중심)
+/// 메인 탭에서 내 프로필, 또는 [viewedUserUid]로 푸시된 타 유저 프로필.
 class ProfileScreen extends StatelessWidget {
-  const ProfileScreen({super.key, this.favoritesReadOnly = false});
+  const ProfileScreen({
+    super.key,
+    this.favoritesReadOnly = false,
+    this.viewedUserUid,
+  });
+
+  /// true면 즐겨찾기 슬롯 탭·추가·제거 불가 (다른 유저 프로필용 확장).
+  final bool favoritesReadOnly;
+
+  /// 비어 있지 않으면 해당 UID의 공개 프로필(Theme·Language 숨김).
+  final String? viewedUserUid;
+
+  @override
+  Widget build(BuildContext context) {
+    final v = viewedUserUid?.trim();
+    if (v != null && v.isNotEmpty) {
+      return _OtherUserProfileScreen(uid: v);
+    }
+    return _MyProfileScreen(favoritesReadOnly: favoritesReadOnly);
+  }
+}
+
+class _OtherProfileBundle {
+  _OtherProfileBundle({
+    required this.profile,
+    required this.reviews,
+    required this.likesCount,
+    required this.listsCount,
+    required this.watchlistCount,
+    required this.diaryCount,
+  });
+
+  final PublicUserProfile profile;
+  final List<MyReviewItem> reviews;
+  final int likesCount;
+  final int listsCount;
+  final int watchlistCount;
+  final int diaryCount;
+}
+
+/// 푸시된 타 유저 공개 프로필 (Theme·Language·로그아웃 없음).
+class _OtherUserProfileScreen extends StatefulWidget {
+  const _OtherUserProfileScreen({super.key, required this.uid});
+
+  final String uid;
+
+  @override
+  State<_OtherUserProfileScreen> createState() =>
+      _OtherUserProfileScreenState();
+}
+
+class _OtherUserProfileScreenState extends State<_OtherUserProfileScreen> {
+  late Future<_OtherProfileBundle?> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _load();
+  }
+
+  Future<_OtherProfileBundle?> _load() async {
+    final uid = widget.uid;
+    final profile = await UserProfileService.instance.fetchPublicUserProfile(
+      uid,
+    );
+    if (profile == null) return null;
+    final reviews = await ReviewService.instance.fetchReviewsForUserUid(uid);
+    final likes = await PostService.instance.getPostsLikedByUid(uid);
+    final listsCount = await CustomDramaListService.instance.countListsForUid(
+      uid,
+    );
+    final watchlistCount = await WatchlistService.instance.countWatchlistForUid(
+      uid,
+    );
+    final diaryCount = await WatchHistoryService.instance
+        .countWatchHistoryForUid(uid);
+    return _OtherProfileBundle(
+      profile: profile,
+      reviews: reviews,
+      likesCount: likes.length,
+      listsCount: listsCount,
+      watchlistCount: watchlistCount,
+      diaryCount: diaryCount,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final s = CountryScope.of(context).strings;
+    return FutureBuilder<_OtherProfileBundle?>(
+      future: _future,
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return Scaffold(
+            appBar: AppBar(
+              leading: IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () => Navigator.maybePop(context),
+              ),
+            ),
+            body: const Center(child: CircularProgressIndicator()),
+          );
+        }
+        final b = snap.data;
+        if (b == null) {
+          return Scaffold(
+            appBar: AppBar(
+              leading: IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () => Navigator.maybePop(context),
+              ),
+            ),
+            body: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(
+                  s.get('profilePublicUserUnavailable'),
+                  textAlign: TextAlign.center,
+                  style: _profileText(cs, size: 15, letterSpacing: 0.2),
+                ),
+              ),
+            ),
+          );
+        }
+        final p = b.profile;
+        final hasPhoto =
+            p.profileImageUrl != null && p.profileImageUrl!.isNotEmpty;
+        return Scaffold(
+          backgroundColor: theme.scaffoldBackgroundColor,
+          appBar: AppBar(
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () => Navigator.maybePop(context),
+            ),
+            title: Text(
+              p.displayNickname,
+              overflow: TextOverflow.ellipsis,
+              style: _profileText(cs, size: 17, weight: FontWeight.w600),
+            ),
+          ),
+          body: SafeArea(
+            child: RefreshIndicator(
+              onRefresh: () async {
+                setState(() => _future = _load());
+                await _future;
+              },
+              child: CustomScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                slivers: [
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        20,
+                        20,
+                        20,
+                        _kProfileSectionBleedPadV,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Align(
+                            alignment: Alignment.center,
+                            child: Container(
+                              width: 80,
+                              height: 80,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: hasPhoto
+                                    ? cs.surfaceContainerHighest
+                                    : (p.avatarColorIndex != null
+                                          ? UserProfileService.bgColorFromIndex(
+                                              p.avatarColorIndex!,
+                                            )
+                                          : cs.surfaceContainerHighest),
+                                border: Border.all(
+                                  color: cs.outline.withOpacity(0.4),
+                                  width: 2,
+                                ),
+                                image: hasPhoto
+                                    ? DecorationImage(
+                                        image: CachedNetworkImageProvider(
+                                          p.profileImageUrl!,
+                                        ),
+                                        fit: BoxFit.cover,
+                                      )
+                                    : null,
+                              ),
+                              child: hasPhoto
+                                  ? null
+                                  : Icon(
+                                      Icons.person,
+                                      size: 44,
+                                      color: p.avatarColorIndex != null
+                                          ? UserProfileService.iconColorFromIndex(
+                                              p.avatarColorIndex!,
+                                            )
+                                          : cs.onSurfaceVariant.withOpacity(
+                                              0.6,
+                                            ),
+                                    ),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            p.displayNickname,
+                            textAlign: TextAlign.center,
+                            style: _profileText(
+                              cs,
+                              size: 20,
+                              weight: FontWeight.w700,
+                              color: cs.onSurface,
+                              letterSpacing: 0.22,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                          ),
+                          const SizedBox(height: 12),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(
+                              vertical: 4,
+                              horizontal: 12,
+                            ),
+                            decoration: BoxDecoration(
+                              color: theme.cardTheme.color ?? cs.surface,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: cs.outline.withOpacity(0.4),
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: cs.shadow.withOpacity(0.05),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: _ProfileStatRow(
+                              cs: cs,
+                              strings: s,
+                              statsForUid: p.uid,
+                              statsDisplayNickname: p.displayNickname,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  SliverToBoxAdapter(child: _profileFullBleedDivider(cs)),
+                  SliverToBoxAdapter(
+                    child: _ProfileFavoritesSection(
+                      readOnly: true,
+                      favoritesOverride: p.favorites,
+                    ),
+                  ),
+                  SliverToBoxAdapter(
+                    child: _ProfileRecentActivitySection(
+                      reviewsOverride: b.reviews,
+                    ),
+                  ),
+                  SliverToBoxAdapter(child: _profileFullBleedDivider(cs)),
+                  SliverToBoxAdapter(
+                    child: _ProfileRatingsSection(ratingsUid: p.uid),
+                  ),
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.only(
+                        top: _kProfileSectionBleedPadV,
+                      ),
+                      child: _ProfileLinksMenu(
+                        cs: cs,
+                        strings: s,
+                        showAppSettings: false,
+                        menuDiaryCount: b.diaryCount,
+                        menuListsCount: b.listsCount,
+                        menuWatchlistCount: b.watchlistCount,
+                        menuLikesCount: b.likesCount,
+                      ),
+                    ),
+                  ),
+                  const SliverToBoxAdapter(child: SizedBox(height: 32)),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// 프로필 탭 - 로그인 후 표시 (내 계정)
+class _MyProfileScreen extends StatelessWidget {
+  const _MyProfileScreen({super.key, this.favoritesReadOnly = false});
 
   /// true면 즐겨찾기 슬롯 탭·추가·제거 불가 (다른 유저 프로필용 확장).
   final bool favoritesReadOnly;
@@ -768,7 +1154,7 @@ class ProfileScreen extends StatelessWidget {
                         },
                       ),
                       const SizedBox(height: 12),
-                      // 내가 쓴 글 · 댓글 · 팔로우 (닉네임 바로 아래)
+                      // Reviews · Posts · Follow (닉네임 바로 아래)
                       Container(
                         width: double.infinity,
                         padding: const EdgeInsets.symmetric(
@@ -829,6 +1215,9 @@ class ProfileScreen extends StatelessWidget {
                         await LevelService.instance.resetForLogout();
                         UserProfileService.instance.clearForLogout();
                         await ShareService.instance.clearForLogout();
+                        await ReviewService.instance.clearForLogout();
+                        await WatchHistoryService.instance.clearForLogout();
+                        CustomDramaListService.instance.clearForLogout();
                         final prefs = await SharedPreferences.getInstance();
                         await prefs.remove('last_free_board_post_time_ms');
                         messenger.showSnackBar(
@@ -889,9 +1278,15 @@ class ProfileScreen extends StatelessWidget {
 
 /// Letterboxd 프로필 FAVORITES — 가로 4슬롯(2:3), 슬롯 패딩은 RECENT ACTIVITY와 동일.
 class _ProfileFavoritesSection extends StatelessWidget {
-  const _ProfileFavoritesSection({required this.readOnly});
+  const _ProfileFavoritesSection({
+    required this.readOnly,
+    this.favoritesOverride,
+  });
 
   final bool readOnly;
+
+  /// 타 유저 프로필: Firestore에서 읽은 즐겨찾기(최대 4).
+  final List<ProfileFavorite>? favoritesOverride;
 
   Future<void> _openFavoriteDetail(
     BuildContext context,
@@ -1014,8 +1409,9 @@ class _ProfileFavoritesSection extends StatelessWidget {
             color: cs.surfaceContainerHighest,
             child: InkWell(
               onTap: () => _openFavoriteDetail(context, fav),
-              onLongPress:
-                  readOnly ? null : () => _onLongPressFavorite(context, fav),
+              onLongPress: readOnly
+                  ? null
+                  : () => _onLongPressFavorite(context, fav),
               borderRadius: BorderRadius.circular(8),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(8),
@@ -1060,6 +1456,36 @@ class _ProfileFavoritesSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = CountryScope.of(context).strings;
     final cs = Theme.of(context).colorScheme;
+    Widget rowFor(List<ProfileFavorite> favs) {
+      return ListenableBuilder(
+        listenable: Listenable.merge([
+          DramaListService.instance.listNotifier,
+          DramaListService.instance.extraNotifier,
+        ]),
+        builder: (context, _) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: List.generate(4, (i) {
+              return Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: AspectRatio(
+                    aspectRatio: _kProfileRecentActivityPosterAspect,
+                    child: _favoriteSlotContent(
+                      context,
+                      cs,
+                      readOnly,
+                      i < favs.length ? favs[i] : null,
+                    ),
+                  ),
+                ),
+              );
+            }),
+          );
+        },
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(
         _kProfileSectionBleedPadH,
@@ -1067,49 +1493,34 @@ class _ProfileFavoritesSection extends StatelessWidget {
         _kProfileSectionBleedPadH,
         _kProfileSectionBleedPadV,
       ),
-      child: ValueListenableBuilder<List<ProfileFavorite>>(
-        valueListenable: UserProfileService.instance.favoritesNotifier,
-        builder: (context, favs, _) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                s.get('profileFavoritesTitle'),
-                style: _profileCapsLabel(cs),
-              ),
-              const SizedBox(height: 6),
-              ListenableBuilder(
-                listenable: Listenable.merge([
-                  DramaListService.instance.listNotifier,
-                  DramaListService.instance.extraNotifier,
-                ]),
-                builder: (context, _) {
-                  // RECENT ACTIVITY와 동일: 칸마다 좌우 4px — 슬롯 가로·세로(2:3) 규격 통일
-                  return Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: List.generate(4, (i) {
-                      return Expanded(
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 4),
-                          child: AspectRatio(
-                            aspectRatio: _kProfileRecentActivityPosterAspect,
-                            child: _favoriteSlotContent(
-                              context,
-                              cs,
-                              readOnly,
-                              i < favs.length ? favs[i] : null,
-                            ),
-                          ),
-                        ),
-                      );
-                    }),
-                  );
-                },
-              ),
-            ],
-          );
-        },
-      ),
+      child: favoritesOverride != null
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  s.get('profileFavoritesTitle'),
+                  style: _profileCapsLabel(cs),
+                ),
+                const SizedBox(height: 6),
+                rowFor(favoritesOverride!),
+              ],
+            )
+          : ValueListenableBuilder<List<ProfileFavorite>>(
+              valueListenable: UserProfileService.instance.favoritesNotifier,
+              builder: (context, favs, _) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      s.get('profileFavoritesTitle'),
+                      style: _profileCapsLabel(cs),
+                    ),
+                    const SizedBox(height: 6),
+                    rowFor(favs),
+                  ],
+                );
+              },
+            ),
     );
   }
 }
@@ -1193,11 +1604,18 @@ class _DashedRRectPainter extends CustomPainter {
 
 /// Letterboxd 스타일 별점 분포 막대 그래프 (탭·드래그로 구간별 별 / 점수 표시).
 class _ProfileRatingsSection extends StatelessWidget {
+  const _ProfileRatingsSection({this.ratingsUid});
+
+  /// null이면 로그인한 사용자 UID.
+  final String? ratingsUid;
+
   @override
   Widget build(BuildContext context) {
     final s = CountryScope.of(context).strings;
     final cs = Theme.of(context).colorScheme;
-    final uid = AuthService.instance.currentUser.value?.uid;
+    final uid = (ratingsUid != null && ratingsUid!.trim().isNotEmpty)
+        ? ratingsUid!.trim()
+        : AuthService.instance.currentUser.value?.uid;
     if (uid == null || uid.isEmpty) return const SizedBox.shrink();
 
     return Padding(
@@ -1272,7 +1690,7 @@ class _ProfileRatingsInteractiveBodyState
 
   static const double _chartBarMaxH = 50.0;
   static const double _axisStarSize = _kProfileRatingsAxisStarSize;
-  static const Color _axisStarColor = Color(0xFFFFB020);
+  static const Color _axisStarColor = AppColors.ratingStar;
   static const double _leftStarSlotW = _axisStarSize + 2;
   static const double _axisInnerGap = 2.0;
   static const double _rightStarsClusterW = _axisStarSize * 5 + 0.5 * 4;
@@ -1325,16 +1743,14 @@ class _ProfileRatingsInteractiveBodyState
     final maxC = hist.maxCount;
     final emptyStarTint = cs.onSurfaceVariant.withValues(alpha: 0.38);
     const double rightDetailH = 56.0;
+
     /// 탭 시 개수 숫자 — 별 줄 위에 붙이기(스택 상단 `top:0`이면 간격이 너무 벌어짐).
     const double rightRatingCountBottom = 15.0;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          s.get('profileRatingsTitle'),
-          style: _profileCapsLabel(cs),
-        ),
+        Text(s.get('profileRatingsTitle'), style: _profileCapsLabel(cs)),
         const SizedBox(height: 12),
         Row(
           crossAxisAlignment: CrossAxisAlignment.end,
@@ -1464,8 +1880,7 @@ class _ProfileRatingsInteractiveBodyState
                       child: Builder(
                         builder: (context) {
                           final ctrl = _starsRevealController;
-                          final count =
-                              hist.countsPerHalfStar[_pressedBucket!];
+                          final count = hist.countsPerHalfStar[_pressedBucket!];
                           final child = Text(
                             '$count',
                             textAlign: TextAlign.center,
@@ -1503,9 +1918,11 @@ class _RatingHistogramPainter extends CustomPainter {
     required this.counts,
     required this.maxCount,
     required this.barMaxHeight,
+
     /// 탭(선택)된 막대 — 이전 기본 톤.
     required this.barMuted,
     required this.barStrong,
+
     /// 평소 막대 — 더 짙은 회색.
     required this.barMutedIdle,
     required this.barStrongIdle,
@@ -1521,15 +1938,18 @@ class _RatingHistogramPainter extends CustomPainter {
 
   /// 막대 최대 픽셀 높이 (count == maxCount일 때 이 값).
   final double barMaxHeight;
+
   /// 탭 시: 낮은 빈도 / 높은 빈도 (기존 기본과 동일).
   final Color barMuted;
   final Color barStrong;
+
   /// 평소: 더 짙은 그라데이션 끝점.
   final Color barMutedIdle;
   final Color barStrongIdle;
   final Color ghostTint;
   final Color ghostTintIdle;
   final int? selectedIndex;
+
   /// 선택된 빈 칸 고스트만 살짝 밝힘.
   final Color selectedLift;
   final Color selectionStroke;
@@ -1737,13 +2157,17 @@ class _StarRow extends StatelessWidget {
   final double size;
   final Color? fillColor;
   final Color? emptyColor;
+
   /// true: 4.5 → 회색 별 N개 + RATINGS와 동일 `½`.
   final bool halfAsTextLabel;
+
   /// true면 `halfAsTextLabel` 줄을 가로 왼쪽 정렬.
   final bool alignStart;
   final Animation<double>? revealAnimation;
+
   /// [revealAnimation] 사용 시 별·½ 각각의 전역 슬롯 시작 인덱스(위쪽 개수 등이 0번이면 1).
   final int revealFirstSlotIndex;
+
   /// 전체 슬롯 수(개수+별 등). 0이면 순차 등장 없음.
   final int revealTotalSlots;
 
@@ -1760,21 +2184,18 @@ class _StarRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final fill = fillColor ?? Colors.amber;
-    final empty =
-        emptyColor ?? cs.onSurfaceVariant.withValues(alpha: 0.28);
+    final fill = fillColor ?? AppColors.ratingStar;
+    final empty = emptyColor ?? cs.onSurfaceVariant.withValues(alpha: 0.28);
     final c = rating.clamp(0.0, 5.0);
     final r = (c * 2).round() / 2.0;
 
     if (halfAsTextLabel) {
-      final grey =
-          fillColor ?? cs.onSurfaceVariant.withValues(alpha: 0.52);
+      final grey = fillColor ?? cs.onSurfaceVariant.withValues(alpha: 0.52);
       final full = r.floor();
       final hasHalf = (r - full) >= 0.5;
       final slotW = size * 0.88;
       final gapBeforeHalf = (size * 0.1).clamp(2.0, 5.0);
-      final useReveal =
-          revealAnimation != null && revealTotalSlots > 0;
+      final useReveal = revealAnimation != null && revealTotalSlots > 0;
       Widget wrapReveal(int localSlot, Widget w) {
         if (!useReveal) return w;
         return _profileRatingsRevealSlot(
@@ -1933,7 +2354,14 @@ Post _syntheticLetterboxdPostFromMyReview({
 
 /// 별점을 준 리뷰만, 최신 작성 순 (최대 4개 표시용).
 List<MyReviewItem> _ratedReviewsForProfileRecentActivity() {
-  final raw = ReviewService.instance.list;
+  return _ratedReviewsForProfileRecentActivityFromList(
+    ReviewService.instance.list,
+  );
+}
+
+List<MyReviewItem> _ratedReviewsForProfileRecentActivityFromList(
+  List<MyReviewItem> raw,
+) {
   final out = raw
       .where((r) => r.rating > 0 && r.dramaId.trim().isNotEmpty)
       .toList();
@@ -1941,12 +2369,47 @@ List<MyReviewItem> _ratedReviewsForProfileRecentActivity() {
   return out;
 }
 
+Widget _profileRecentActivityRow(ColorScheme cs, List<MyReviewItem> list) {
+  const kSlots = 4;
+  if (list.isEmpty) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: List.generate(kSlots, (i) {
+        return Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: _RecentActivityEmptySlot(
+              cs: cs,
+              showBottomPlaceholder: false,
+            ),
+          ),
+        );
+      }),
+    );
+  }
+  final shown = list.take(kSlots).toList();
+  return Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: List.generate(kSlots, (i) {
+      return Expanded(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: i < shown.length
+              ? _RecentActivitySlot(review: shown[i])
+              : _RecentActivityEmptySlot(cs: cs, showBottomPlaceholder: true),
+        ),
+      );
+    }),
+  );
+}
+
 /// [ProfileFavorite.dramaThumbnail]은 저장 시점 URL이라 언어와 어긋날 수 있음 → 현재 표시 국가 기준 카탈로그 URL 우선.
 String? _profileResolvedFavoriteThumbnail(
   BuildContext context,
   ProfileFavorite fav,
 ) {
-  final country = CountryScope.maybeOf(context)?.country ??
+  final country =
+      CountryScope.maybeOf(context)?.country ??
       CountryService.instance.countryNotifier.value;
   final id = fav.dramaId.trim();
   if (id.isNotEmpty && !id.startsWith('short-')) {
@@ -1965,7 +2428,10 @@ String? _profileResolvedFavoriteThumbnail(
 
 /// Recent Activity — [FAVORITES]와 동일: 카드 없음, 동일 패딩·타이포·슬롯 간격.
 class _ProfileRecentActivitySection extends StatelessWidget {
-  const _ProfileRecentActivitySection();
+  const _ProfileRecentActivitySection({this.reviewsOverride});
+
+  /// 타 유저 프로필: 서버에서 가져온 리뷰 목록.
+  final List<MyReviewItem>? reviewsOverride;
 
   @override
   Widget build(BuildContext context) {
@@ -1985,51 +2451,31 @@ class _ProfileRecentActivitySection extends StatelessWidget {
           Text(s.get('recentActivity'), style: _profileCapsLabel(cs)),
           const SizedBox(height: 6),
           _RecentRatedActivityScope(
-            child: AnimatedBuilder(
-              animation: Listenable.merge([
-                ReviewService.instance.listNotifier,
-                DramaListService.instance.listNotifier,
-                DramaListService.instance.extraNotifier,
-              ]),
-              builder: (context, _) {
-                final list = _ratedReviewsForProfileRecentActivity();
-                const kSlots = 4;
-                if (list.isEmpty) {
-                  return Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: List.generate(kSlots, (i) {
-                      return Expanded(
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 4),
-                          child: _RecentActivityEmptySlot(
-                            cs: cs,
-                            showBottomPlaceholder: false,
-                          ),
-                        ),
-                      );
-                    }),
-                  );
-                }
-                final shown = list.take(kSlots).toList();
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: List.generate(kSlots, (i) {
-                    return Expanded(
-                      child: Padding(
-                        // 마지막 칸만 오른쪽 패딩이 없으면 가로가 넓어져 슬롯 높이만 커짐 → 좌우 대칭 패딩으로 통일
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        child: i < shown.length
-                            ? _RecentActivitySlot(review: shown[i])
-                            : _RecentActivityEmptySlot(
-                                cs: cs,
-                                showBottomPlaceholder: true,
-                              ),
-                      ),
-                    );
-                  }),
-                );
-              },
-            ),
+            child: reviewsOverride != null
+                ? ListenableBuilder(
+                    listenable: Listenable.merge([
+                      DramaListService.instance.listNotifier,
+                      DramaListService.instance.extraNotifier,
+                    ]),
+                    builder: (context, _) {
+                      final list =
+                          _ratedReviewsForProfileRecentActivityFromList(
+                            reviewsOverride!,
+                          );
+                      return _profileRecentActivityRow(cs, list);
+                    },
+                  )
+                : AnimatedBuilder(
+                    animation: Listenable.merge([
+                      ReviewService.instance.listNotifier,
+                      DramaListService.instance.listNotifier,
+                      DramaListService.instance.extraNotifier,
+                    ]),
+                    builder: (context, _) {
+                      final list = _ratedReviewsForProfileRecentActivity();
+                      return _profileRecentActivityRow(cs, list);
+                    },
+                  ),
           ),
         ],
       ),
@@ -2437,6 +2883,7 @@ class _ProfileTile extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
   final ColorScheme color;
+
   /// null이면 숫자 없이 chevron만 (Share / Theme / Language 등).
   final int? trailingCount;
 
@@ -2456,10 +2903,7 @@ class _ProfileTile extends StatelessWidget {
             const SizedBox(width: 10),
             Expanded(child: Text(label, style: _profileMenuRowLabel(color))),
             if (trailingCount != null) ...[
-              Text(
-                '$trailingCount',
-                style: _profileMenuRowLabel(color),
-              ),
+              Text('$trailingCount', style: _profileMenuRowLabel(color)),
               const SizedBox(width: 6),
             ],
             Icon(
@@ -2528,11 +2972,12 @@ class _RecentActivityReviewGateState extends State<_RecentActivityReviewGate> {
         if (!mounted) return;
         final author = await UserProfileService.instance.getAuthorForPost();
         if (!mounted) return;
-        final raw = (widget.country ??
-                UserProfileService.instance.signupCountryNotifier.value ??
-                'us')
-            .trim()
-            .toLowerCase();
+        final raw =
+            (widget.country ??
+                    UserProfileService.instance.signupCountryNotifier.value ??
+                    'us')
+                .trim()
+                .toLowerCase();
         final c = raw.isNotEmpty ? raw : 'us';
         offline = _syntheticLetterboxdPostFromMyReview(
           review: widget.review,
@@ -2571,10 +3016,7 @@ class _RecentActivityReviewGateState extends State<_RecentActivityReviewGate> {
       );
     }
     if (_feedPost != null) {
-      return PostDetailPage(
-        post: _feedPost!,
-        hideBelowLetterboxdLike: true,
-      );
+      return PostDetailPage(post: _feedPost!, hideBelowLetterboxdLike: true);
     }
     if (_offlineSyntheticPost != null) {
       return PostDetailPage(

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../theme/app_theme.dart';
 import 'optimized_network_image.dart';
 
 /// 드라마 탭·검색 등 그리드 카드 공통 (포스터 + 제목 + 별·장르).
@@ -69,7 +70,8 @@ class DramaGridCard extends StatelessWidget {
     final metaFontSize = (9 * r).roundToDouble();
     final starSize = 11 * r;
     final genreColor = isDark ? cs.onSurfaceVariant : Colors.grey.shade600;
-    return LayoutBuilder(
+    return RepaintBoundary(
+      child: LayoutBuilder(
       builder: (context, constraints) {
         final w = constraints.maxWidth;
         final posterHeight = w / (1 / 1.4);
@@ -149,7 +151,7 @@ class DramaGridCard extends StatelessWidget {
                     Icon(
                       Icons.star_rounded,
                       size: starSize,
-                      color: rating > 0 ? Colors.amber : greyColor,
+                      color: rating > 0 ? AppColors.ratingStar : greyColor,
                     ),
                     Transform.translate(
                       offset: Offset(0 * r, 0),
@@ -184,6 +186,7 @@ class DramaGridCard extends StatelessWidget {
           ),
         );
       },
+    ),
     );
   }
 }

@@ -11,8 +11,10 @@ import '../services/drama_list_service.dart';
 import '../services/post_service.dart';
 import '../services/user_profile_service.dart';
 import 'country_scope.dart';
+import 'feed_review_star_row.dart';
 import 'optimized_network_image.dart';
 import 'review_arrow_tag_chip.dart';
+import 'user_profile_nav.dart';
 
 /// DramaFeed Reviews 탭용 — 카드 없이 구분선 스타일 리스트 아이템
 class FeedReviewLetterboxdTile extends StatelessWidget {
@@ -20,18 +22,24 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
     super.key,
     required this.post,
     this.onTap,
+
     /// 썸네일 오른쪽 열 **하단**에 붙일 위젯(좋아요·댓글 등). 지정 시 본문은 위쪽, 이 영역은 썸네일 하단과 맞춤.
     this.thumbTrailingActions,
+
     /// 드라마 제목·포스터 탭 시 (상세 이동 등). 지정 시 제목·썸네일만 반응.
     this.onDramaTap,
+
     /// 리뷰 본문 영역 탭(좋아요·댓글 줄 제외). 댓글 펼침 등.
     this.onReviewBodyTap,
+
     /// 별점 행 탭 시 (드라마 상세 리뷰 섹션으로 스크롤 등).
     this.onRatingTap,
+
     /// 로그인 작성자 표기(게시글 `author`와 동일 형식). 내 글이면 닉네임 아래 수정·삭제 표시.
     this.currentUserAuthor,
     this.onPostUpdated,
     this.onPostDeleted,
+
     /// null이면 22. 글 상세 DramaFeed에서 본문·댓글과 맞출 때 지정.
     this.authorAvatarSize,
   });
@@ -48,12 +56,12 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
 
   final double? authorAvatarSize;
 
-  static const double _thumbW = 68;
-  static const double _thumbH = 96;
+  static const double _thumbW = 62;
+  static const double _thumbH = 88;
   static const double _thumbRadius = 4;
 
   /// 리스트 구분선 ~ 제목행까지 세로 패딩.
-  static const double _gapDividerToTitleRow = 6;
+  static const double _gapDividerToTitleRow = 15;
 
   /// 제목(헤더) 행 ↔ 별점 행. 별~썸네일보다 좁게 두어 시각적으로 균형 맞춤.
   static const double _gapTitleToStars = 3;
@@ -61,89 +69,10 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
   /// 별점 행 ↔ 썸네일 행.
   static const double _gapStarsToThumb = 5;
 
-  static const Color _starOrange = Color(0xFFFFB020);
-
-  static Color _reviewTapSplash(ColorScheme cs) => cs.primary.withValues(alpha: 0.14);
-  static Color _reviewTapHighlight(ColorScheme cs) => cs.primary.withValues(alpha: 0.08);
-
-  /// 프로필 RATINGS 막대 탭 시 별줄과 동일 — Unicode `½` (`\u00BD`), [_profileRecentHalfGlyphLabel]과 같은 타이포.
-  static Widget _halfGlyphLabel({
-    required TextStyle halfLabelStyle,
-    required double iconSize,
-  }) {
-    final color = halfLabelStyle.color ?? _starOrange;
-    final fontSize = (iconSize * 12 / 11).clamp(11.0, 16.0);
-    return SizedBox(
-      height: iconSize * 1.05,
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: Text(
-          '\u00BD',
-          style: halfLabelStyle.copyWith(
-            fontSize: fontSize,
-            fontWeight: FontWeight.w800,
-            letterSpacing: 0.2,
-            height: 1.0,
-            color: color,
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// 채워진 별만 표시(빈 테두리 별 없음). 0.5점은 프로필과 동일 `½` 글리프.
-  static Widget _starRow(
-    double rating,
-    double thumbWidth, {
-    required TextStyle halfLabelStyle,
-  }) {
-    final units = (rating.clamp(0.0, 5.0) * 2).round().clamp(0, 10);
-    final fullCount = units ~/ 2;
-    final hasHalf = units.isOdd;
-    final starCount = fullCount;
-    if (starCount == 0 && !hasHalf) return const SizedBox.shrink();
-    final slotW = thumbWidth / 5;
-    final iconSize = (slotW * 0.82).clamp(14.0, 22.0);
-
-    final Widget starsOnly = starCount > 0
-        ? SizedBox(
-            width: starCount * slotW,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: List.generate(
-                starCount,
-                (i) => SizedBox(
-                  width: slotW,
-                  child: Center(
-                    child: Icon(
-                      Icons.star_rounded,
-                      size: iconSize,
-                      color: _starOrange,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          )
-        : const SizedBox.shrink();
-
-    if (!hasHalf) return starsOnly;
-    final gapBeforeHalf = (iconSize * 0.1).clamp(2.0, 5.0);
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        if (starCount > 0) starsOnly,
-        Padding(
-          padding: EdgeInsets.only(left: starCount > 0 ? gapBeforeHalf : 0),
-          child: _halfGlyphLabel(
-            halfLabelStyle: halfLabelStyle,
-            iconSize: iconSize,
-          ),
-        ),
-      ],
-    );
-  }
+  static Color _reviewTapSplash(ColorScheme cs) =>
+      cs.primary.withValues(alpha: 0.14);
+  static Color _reviewTapHighlight(ColorScheme cs) =>
+      cs.primary.withValues(alpha: 0.08);
 
   String _displayAuthor(String author) =>
       author.startsWith('u/') ? author.substring(2) : author;
@@ -186,11 +115,12 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
     }
     final stored = post.dramaTitle?.trim();
     if (stored != null && stored.isNotEmpty) {
-      final byTitle =
-          DramaListService.instance.getDisplayTitleByTitle(stored, country);
+      final byTitle = DramaListService.instance.getDisplayTitleByTitle(
+        stored,
+        country,
+      );
       if (byTitle.isNotEmpty && byTitle != stored) return byTitle;
-      final fromExtras =
-          _displayTitleFromExtraLanguageMatch(stored, country);
+      final fromExtras = _displayTitleFromExtraLanguageMatch(stored, country);
       if (fromExtras.isNotEmpty) return fromExtras;
       return stored;
     }
@@ -215,7 +145,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
     final r = (post.rating ?? 0).clamp(0.0, 5.0);
 
     final bodyStyle = GoogleFonts.notoSansKr(
-      fontSize: 13,
+      fontSize: 12,
       height: 1.35,
       color: cs.onSurfaceVariant,
       fontWeight: FontWeight.w400,
@@ -258,12 +188,9 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
     final Widget bodyForTap = bodyText;
 
     final titleStyle = GoogleFonts.notoSansKr(
-      fontSize: 15,
+      fontSize: 14,
       fontWeight: FontWeight.w700,
-      color: Color.alphaBlend(
-        cs.onSurface.withValues(alpha: 0.78),
-        cs.surface,
-      ),
+      color: Color.alphaBlend(cs.onSurface.withValues(alpha: 0.78), cs.surface),
       height: 1.0,
     );
 
@@ -298,15 +225,19 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
             width: _thumbW,
             height: _thumbH,
             fit: BoxFit.cover,
-            memCacheWidth: 136,
-            memCacheHeight: 192,
+            memCacheWidth: 124,
+            memCacheHeight: 176,
           )
         : Container(
             width: _thumbW,
             height: _thumbH,
             color: cs.surfaceContainerHighest,
             alignment: Alignment.center,
-            child: Icon(Icons.movie_outlined, color: cs.onSurfaceVariant, size: 26),
+            child: Icon(
+              Icons.movie_outlined,
+              color: cs.onSurfaceVariant,
+              size: 26,
+            ),
           );
 
     final Widget thumbBlock = dramaTap != null
@@ -347,6 +278,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
         _LetterboxdAuthorAvatar(
           photoUrl: post.authorPhotoUrl,
           author: post.author,
+          authorUid: post.authorUid,
           colorIndex: post.authorAvatarColorIndex,
           size: authorAvatarSize ?? 22,
         ),
@@ -358,11 +290,16 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
         ? authorRowCore
         : _TapBehindExpanded(
             onTap: () {
-              final nav = navAuthor;
               final ctx = context;
-              // 상위 InkWell(onReviewBodyTap) 등과 겹칠 때 Navigator 잠금 회피
+              final uid = post.authorUid?.trim();
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 if (!ctx.mounted) return;
+                if (uid != null && uid.isNotEmpty) {
+                  openUserProfileFromAuthorUid(ctx, uid);
+                  return;
+                }
+                final nav = navAuthor;
+                if (nav.isEmpty) return;
                 Navigator.push<void>(
                   ctx,
                   MaterialPageRoute<void>(
@@ -380,23 +317,27 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
 
     final bool canModeratorDelete =
         isAppModerator() && onPostDeleted != null && !isMyReview;
-    final bool showOwnerActions = (isMyReview &&
-            (onPostUpdated != null || onPostDeleted != null)) ||
+    final bool showOwnerActions =
+        (isMyReview && (onPostUpdated != null || onPostDeleted != null)) ||
         canModeratorDelete;
     final bool showEditInRow = isMyReview && onPostUpdated != null;
     final bool showDeleteInRow =
         onPostDeleted != null && (isMyReview || isAppModerator());
-    final ownerActionGray = cs.onSurfaceVariant;
+    // Edit — 숫자 행과 톤 맞춘 회색 / Delete는 빨간색 유지.
+    final editLinkColor = cs.onSurface.withValues(alpha: 0.48);
     final linkStyle = GoogleFonts.notoSansKr(
-      fontSize: 11,
+      fontSize: 10,
       fontWeight: FontWeight.w600,
-      color: ownerActionGray,
+      height: 1.0,
+      color: editLinkColor,
     );
+
     /// 수정·삭제 (인라인 피드에서는 댓글 아이콘 오른쪽에 붙임)
     Widget? ownerEditDeleteRow;
     if (showOwnerActions) {
       ownerEditDeleteRow = Row(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           if (showEditInRow)
             _TapBehindGesture(
@@ -420,7 +361,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
             Text(
               '·',
               style: linkStyle.copyWith(
-                color: cs.onSurfaceVariant.withValues(alpha: 0.45),
+                color: editLinkColor.withValues(alpha: 0.55),
               ),
             ),
           if (showDeleteInRow)
@@ -430,18 +371,29 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
                 final confirmed = await showDialog<bool>(
                   context: context,
                   builder: (ctx) => AlertDialog(
-                    title: Text(s.get('delete'), style: GoogleFonts.notoSansKr()),
-                    content: Text(s.get('deletePostConfirm'), style: GoogleFonts.notoSansKr()),
+                    title: Text(
+                      s.get('delete'),
+                      style: GoogleFonts.notoSansKr(),
+                    ),
+                    content: Text(
+                      s.get('deletePostConfirm'),
+                      style: GoogleFonts.notoSansKr(),
+                    ),
                     actions: [
                       TextButton(
                         onPressed: () => Navigator.pop(ctx, false),
-                        child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr()),
+                        child: Text(
+                          s.get('cancel'),
+                          style: GoogleFonts.notoSansKr(),
+                        ),
                       ),
                       TextButton(
                         onPressed: () => Navigator.pop(ctx, true),
                         child: Text(
                           s.get('delete'),
-                          style: GoogleFonts.notoSansKr(color: Theme.of(ctx).colorScheme.error),
+                          style: GoogleFonts.notoSansKr(
+                            color: Theme.of(ctx).colorScheme.error,
+                          ),
                         ),
                       ),
                     ],
@@ -454,7 +406,10 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
               },
               child: Text(
                 s.get('delete'),
-                style: linkStyle.copyWith(color: Colors.redAccent, fontWeight: FontWeight.w700),
+                style: linkStyle.copyWith(
+                  color: Colors.redAccent,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ),
         ],
@@ -490,12 +445,6 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
       ],
     );
 
-    final halfStarLabelStyle = GoogleFonts.notoSansKr(
-      fontSize: 12,
-      fontWeight: FontWeight.w700,
-      height: 1.0,
-      color: _starOrange,
-    );
     final ratingTap = onRatingTap;
     final Widget starRowWidget = ratingTap != null
         ? _TapBehindExpanded(
@@ -504,9 +453,9 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
             borderRadius: BorderRadius.circular(6),
             splashColor: _reviewTapSplash(cs),
             highlightColor: _reviewTapHighlight(cs),
-            child: _starRow(r, _thumbW, halfLabelStyle: halfStarLabelStyle),
+            child: FeedReviewRatingStars(rating: r, layoutThumbWidth: _thumbW),
           )
-        : _starRow(r, _thumbW, halfLabelStyle: halfStarLabelStyle);
+        : FeedReviewRatingStars(rating: r, layoutThumbWidth: _thumbW);
 
     final Widget ratingRow = Align(
       alignment: Alignment.centerLeft,
@@ -520,10 +469,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
-                  child: Align(
-                    alignment: Alignment.topLeft,
-                    child: bodyForTap,
-                  ),
+                  child: Align(alignment: Alignment.topLeft, child: bodyForTap),
                 ),
                 Align(
                   alignment: Alignment.bottomLeft,
@@ -564,10 +510,16 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
         : bodyForTap;
 
     Widget content = Padding(
-      padding: const EdgeInsets.fromLTRB(16, _gapDividerToTitleRow, 16, _gapDividerToTitleRow),
+      padding: const EdgeInsets.fromLTRB(
+        16,
+        _gapDividerToTitleRow,
+        16,
+        _gapDividerToTitleRow,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          const SizedBox(height: 6),
           headerRow,
           SizedBox(height: _gapTitleToStars),
           ratingRow,
@@ -593,7 +545,8 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
       );
     }
 
-    final useWholeCardTap = onTap != null &&
+    final useWholeCardTap =
+        onTap != null &&
         onDramaTap == null &&
         onReviewBodyTap == null &&
         onRatingTap == null;
@@ -602,10 +555,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
     }
     return Material(
       color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        child: content,
-      ),
+      child: InkWell(onTap: onTap, child: content),
     );
   }
 }
@@ -698,12 +648,14 @@ class _LetterboxdAuthorAvatar extends StatelessWidget {
   const _LetterboxdAuthorAvatar({
     required this.photoUrl,
     required this.author,
+    this.authorUid,
     this.colorIndex,
     this.size = 26,
   });
 
   final String? photoUrl;
   final String author;
+  final String? authorUid;
   final int? colorIndex;
   final double size;
 
@@ -715,16 +667,25 @@ class _LetterboxdAuthorAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final uid = authorUid?.trim();
+    Widget child;
     if (photoUrl != null && photoUrl!.isNotEmpty) {
-      return ClipOval(
+      child = ClipOval(
         child: OptimizedNetworkImage.avatar(
           imageUrl: photoUrl!,
           size: size,
           errorWidget: _buildDefault(context),
         ),
       );
+    } else {
+      child = _buildDefault(context);
     }
-    return _buildDefault(context);
+    if (uid == null || uid.isEmpty) return child;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => openUserProfileFromAuthorUid(context, uid),
+      child: child,
+    );
   }
 
   Widget _buildDefault(BuildContext context) {
@@ -840,7 +801,9 @@ class _TapHighlightState extends State<_TapHighlight> {
           _downPosition = null;
         },
         child: ColoredBox(
-          color: (_pressed && !_suppressed) ? widget.pressColor : Colors.transparent,
+          color: (_pressed && !_suppressed)
+              ? widget.pressColor
+              : Colors.transparent,
           child: widget.child,
         ),
       ),

@@ -58,6 +58,7 @@ class WatchHistoryService {
   final ValueNotifier<List<WatchedDramaItem>> listNotifier =
       ValueNotifier<List<WatchedDramaItem>>([]);
   bool _loaded = false;
+  String? _lastUid;
 
   List<WatchedDramaItem> get list => listNotifier.value;
 
@@ -108,6 +109,7 @@ class WatchHistoryService {
     }
     listNotifier.value = list;
     _loaded = true;
+    _lastUid = _uid;
     _persist(list);
   }
 
@@ -134,13 +136,44 @@ class WatchHistoryService {
   }
 
   Future<void> loadIfNeeded() async {
+    final uid = _uid;
+    // UID가 바뀌면 이전 사용자 데이터를 즉시 클리어하고 재로드
+    if (uid != _lastUid) await clearForLogout();
     if (!_loaded) await _load();
+  }
+
+  /// 로그아웃 또는 계정 전환 시 호출 — 메모리·로컬 캐시 완전 초기화.
+  Future<void> clearForLogout() async {
+    listNotifier.value = [];
+    _loaded = false;
+    _lastUid = null;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_key);
+    } catch (_) {}
   }
 
   /// 화면 진입 시 Firestore/로컬에서 최신 데이터 다시 로드
   Future<void> refresh() async {
     _loaded = false;
     await _load();
+  }
+
+  /// 타 유저 프로필 메뉴 카운트용.
+  Future<int> countWatchHistoryForUid(String uid) async {
+    final u = uid.trim();
+    if (u.isEmpty) return 0;
+    try {
+      final snap = await _firestore
+          .collection('users')
+          .doc(u)
+          .collection('watch_history')
+          .get();
+      return snap.docs.length;
+    } catch (e, st) {
+      debugPrint('WatchHistoryService.countWatchHistoryForUid: $e\n$st');
+      return 0;
+    }
   }
 
   /// 숏폼 시청 시 호출 (중복 시 최신으로 갱신). 로그인 시 Firestore에도 저장.

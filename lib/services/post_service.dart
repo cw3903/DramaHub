@@ -1,3 +1,4 @@
+import 'dart:async' show unawaited;
 import 'dart:io';
 import 'dart:math' show min;
 import 'dart:typed_data';
@@ -458,6 +459,7 @@ class PostService {
         authorAvatarColorIndex: parent.authorAvatarColorIndex,
         createdAtDate: parent.createdAtDate,
         imageUrl: parent.imageUrl,
+        authorUid: parent.authorUid,
       );
       final newList = PostService.replaceCommentById(post.commentsList, parentCommentId, updatedParent);
       final newCommentsList = _commentListToMapsWithCreatedAt(newList, addCreatedAtForId: newReply.id);
@@ -768,12 +770,18 @@ class PostService {
       final notifyTargetUid = notifyUid;
       if (nowLiked == true && notifyTargetUid != null && notifyTargetUid.isNotEmpty) {
         final myNickname = 'u/${UserProfileService.instance.nicknameNotifier.value ?? uid}';
-        await NotificationService.instance.send(
-          toUid: notifyTargetUid,
-          type: NotificationType.postLike,
-          fromUser: myNickname,
-          postId: postId,
-          postTitle: notifyTitle ?? '',
+        unawaited(
+          NotificationService.instance
+              .send(
+                toUid: notifyTargetUid,
+                type: NotificationType.postLike,
+                fromUser: myNickname,
+                postId: postId,
+                postTitle: notifyTitle ?? '',
+              )
+              .catchError((Object e, StackTrace st) {
+                debugPrint('postLike notify: $e\n$st');
+              }),
         );
       }
       return nowLiked;
@@ -887,6 +895,11 @@ class PostService {
         replies: found.replies,
         likedBy: newLikedBy,
         dislikedBy: newDislikedBy,
+        authorPhotoUrl: found.authorPhotoUrl,
+        authorAvatarColorIndex: found.authorAvatarColorIndex,
+        createdAtDate: found.createdAtDate,
+        imageUrl: found.imageUrl,
+        authorUid: found.authorUid,
       );
       final newList = replaceCommentById(list, commentId, newComment);
       final newCommentsList = newList.map((c) => c.toMap()).toList();
@@ -949,6 +962,11 @@ class PostService {
         replies: found.replies,
         likedBy: newLikedBy,
         dislikedBy: newDislikedBy,
+        authorPhotoUrl: found.authorPhotoUrl,
+        authorAvatarColorIndex: found.authorAvatarColorIndex,
+        createdAtDate: found.createdAtDate,
+        imageUrl: found.imageUrl,
+        authorUid: found.authorUid,
       );
       final newList = replaceCommentById(list, commentId, newComment);
       final newCommentsList = newList.map((c) => c.toMap()).toList();
@@ -986,6 +1004,7 @@ class PostService {
         authorAvatarColorIndex: c.authorAvatarColorIndex,
         createdAtDate: c.createdAtDate,
         imageUrl: c.imageUrl,
+        authorUid: c.authorUid,
       );
     }).toList();
   }
@@ -1007,6 +1026,32 @@ class PostService {
   Future<List<Post>> getPostsByAuthor(String author) async {
     final all = await getPostsAllPages();
     return all.where((p) => p.author == author).toList();
+  }
+
+  /// 프로필 Posts 탭: 톡·에스크 게시글만.
+  Future<List<Post>> getCommunityBoardPostsByAuthor(String author) async {
+    final all = await getPostsByAuthor(author);
+    return all.where(postIsCommunityTalkOrAsk).toList();
+  }
+
+  /// 프로필 Posts 댓글 탭: 톡·에스크 글에 단 댓글만.
+  Future<List<({Post post, PostComment comment})>>
+      getCommunityBoardCommentsByAuthor(String authorNickname) async {
+    final all = await getCommentsByAuthor(authorNickname);
+    return all.where((e) => postIsCommunityTalkOrAsk(e.post)).toList();
+  }
+
+  /// 프로필 리뷰 탭: 리뷰 게시판(본문 있는 피드 리뷰) 글만.
+  Future<List<Post>> getReviewBoardPostsByAuthor(String author) async {
+    final all = await getPostsByAuthor(author);
+    return all.where((p) => postMatchesFeedFilter(p, 'review')).toList();
+  }
+
+  /// 프로필 리뷰 댓글 탭: 리뷰 게시판 글에 단 댓글만.
+  Future<List<({Post post, PostComment comment})>>
+      getReviewBoardCommentsByAuthor(String authorNickname) async {
+    final all = await getCommentsByAuthor(authorNickname);
+    return all.where((e) => postMatchesFeedFilter(e.post, 'review')).toList();
   }
 
   /// 특정 작성자의 모든 게시글 authorPhotoUrl을 일괄 업데이트
@@ -1156,6 +1201,77 @@ class PostService {
   }
 
   static const int _likedPostsQueryLimit = 200;
+
+  static Post _postWithLocaleTimeAgo(Post p, String? countryForTimeAgo) {
+    final at = p.createdAt;
+    if (at == null) return p;
+    final ta = (countryForTimeAgo != null && countryForTimeAgo.trim().isNotEmpty)
+        ? formatTimeAgo(at, countryForTimeAgo)
+        : formatTimeAgo(at);
+    return p.copyWith(timeAgo: ta);
+  }
+
+  static PostComment _commentWithLocaleTimeAgo(
+    PostComment c,
+    String? countryForTimeAgo,
+  ) {
+    final at = c.createdAtDate;
+    if (at == null) return c;
+    final ta = (countryForTimeAgo != null && countryForTimeAgo.trim().isNotEmpty)
+        ? formatTimeAgo(at, countryForTimeAgo)
+        : formatTimeAgo(at);
+    return PostComment(
+      id: c.id,
+      author: c.author,
+      timeAgo: ta,
+      text: c.text,
+      votes: c.votes,
+      replies: c.replies,
+      likedBy: c.likedBy,
+      dislikedBy: c.dislikedBy,
+      authorPhotoUrl: c.authorPhotoUrl,
+      authorAvatarColorIndex: c.authorAvatarColorIndex,
+      createdAtDate: c.createdAtDate,
+      imageUrl: c.imageUrl,
+      authorUid: c.authorUid,
+    );
+  }
+
+  /// [commentsList] 안에서 [likedBy]에 [uid]가 포함된 댓글·답글(글 정보 포함).
+  /// 전체 `posts` 문서를 읽어 클라이언트에서 수집합니다([getPostsAllPages]).
+  Future<List<({Post post, PostComment comment})>> getCommentsLikedByUid(
+    String uid, {
+    String? countryForTimeAgo,
+  }) async {
+    if (uid.isEmpty) return [];
+    try {
+      final posts = await getPostsAllPages();
+      final out = <({Post post, PostComment comment, DateTime sortAt})>[];
+      void collect(Post post, List<PostComment> list) {
+        for (final c in list) {
+          if (c.likedBy.contains(uid)) {
+            final sortAt =
+                c.createdAtDate ?? DateTime.fromMillisecondsSinceEpoch(0);
+            final cc = _commentWithLocaleTimeAgo(c, countryForTimeAgo);
+            out.add((
+              post: _postWithLocaleTimeAgo(post, countryForTimeAgo),
+              comment: cc,
+              sortAt: sortAt,
+            ));
+          }
+          collect(post, c.replies);
+        }
+      }
+      for (final p in posts) {
+        collect(p, p.commentsList);
+      }
+      out.sort((a, b) => b.sortAt.compareTo(a.sortAt));
+      return out.map((e) => (post: e.post, comment: e.comment)).toList();
+    } catch (e, st) {
+      debugPrint('getCommentsLikedByUid: $e\n$st');
+      return [];
+    }
+  }
 
   /// [likedBy]에 [uid]가 포함된 게시글. `array-contains`만 사용 후 클라이언트에서 `createdAt` 내림차순 정렬.
   /// 국가 피드 가리기는 적용하지 않음(내가 누른 좋아요는 모두 표시).

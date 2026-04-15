@@ -79,14 +79,14 @@ class ReviewShareCard extends StatelessWidget {
               if (hasRating)
                 Row(
                   children: [
-                    Icon(Icons.star_rounded, size: 22, color: Colors.amber.shade400),
+                    Icon(Icons.star_rounded, size: 22, color: AppColors.ratingStar),
                     const SizedBox(width: 6),
                     Text(
                       ratingValue.toStringAsFixed(1),
                       style: GoogleFonts.notoSansKr(
                         fontSize: 18,
                         fontWeight: FontWeight.w700,
-                        color: Colors.amber.shade400,
+                        color: AppColors.ratingStar,
                       ),
                     ),
                   ],

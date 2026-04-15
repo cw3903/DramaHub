@@ -5,12 +5,15 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:flutter/services.dart';
+
 import '../models/drama.dart';
 import '../services/drama_list_service.dart';
 import '../services/drama_search_stats_service.dart';
 import '../services/review_service.dart';
 import '../widgets/country_scope.dart';
 import '../widgets/drama_grid_card.dart';
+import '../widgets/lists_style_subpage_app_bar.dart';
 import 'drama_detail_page.dart';
 
 /// 리뷰(드라마) 탭 검색창 탭 시 — 실제 드라마 목록(dramas.json) 기준 제목·장르 검색
@@ -52,6 +55,25 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
   /// [multiPickMax] 모드에서만 사용 — 선택 순서 유지
   final List<DramaItem> _multiPicked = [];
   final Set<String> _multiPickedIds = {};
+
+  /// 뒤로가기·픽 완료·카드 선택 등 `maybePop`이 겹치면 네비게이터 히스토리가 비는 assert 방지.
+  bool _navBusy = false;
+
+  Future<void> _popSelf<T extends Object?>([T? result]) async {
+    if (!mounted || _navBusy) return;
+    _navBusy = true;
+    try {
+      // 같은 프레임(제스처·그리드 빌드 직후)에서 바로 maybePop 하면 Navigator가
+      // `_debugLocked` 인 채로 `build`가 돌아 `!_debugLocked` assert가 날 수 있음.
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+      final nav = Navigator.maybeOf(context);
+      if (nav == null || !nav.canPop()) return;
+      await nav.maybePop<T>(result);
+    } finally {
+      if (mounted) _navBusy = false;
+    }
+  }
 
   /// getListForCountry / 필터 / 픽 32편 — 빌드마다 재계산 방지
   List<DramaItem>? _memListRef;
@@ -219,7 +241,7 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
 
   void _completeMultiPick() {
     if (!mounted) return;
-    Navigator.pop(context, List<DramaItem>.from(_multiPicked));
+    unawaited(_popSelf<List<DramaItem>>(List<DramaItem>.from(_multiPicked)));
   }
 
   @override
@@ -227,25 +249,50 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final s = CountryScope.of(context).strings;
-    return Scaffold(
+    final headerBg = listsStyleSubpageHeaderBackground(theme);
+    final leadingMuted = listsStyleSubpageLeadingMuted(theme, cs);
+    final overlay = listsStyleSubpageSystemOverlay(theme, headerBg);
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: overlay,
+      child: Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
-        backgroundColor: cs.surface,
+        backgroundColor: headerBg,
         elevation: 0,
         surfaceTintColor: Colors.transparent,
-        leadingWidth: 44,
-        titleSpacing: 4,
-        leading: IconButton(
-          icon: Icon(LucideIcons.arrow_left, size: 24, color: cs.onSurface),
-          onPressed: () => Navigator.pop(context),
+        // 리스트 서브페이지(46)보다 낮게 — 검색 필만 얇게
+        toolbarHeight: 40,
+        // 뒤로만 있으면 108px 슬롯 불필요 → 검색창 가로 확보
+        leadingWidth: 56,
+        titleSpacing: 0,
+        leading: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => unawaited(_popSelf()),
+          child: Padding(
+            padding: const EdgeInsets.only(
+              left: kListsStyleSubpageLeadingEdgeInset,
+              right: 4,
+            ),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Icon(
+                Icons.arrow_back_ios_new_rounded,
+                size: 14,
+                color: leadingMuted,
+              ),
+            ),
+          ),
         ),
         actions: [
           if (_multiPickActive)
             Padding(
-              padding: const EdgeInsets.only(right: 4),
+              padding: const EdgeInsets.only(right: kListsStyleSubpageLeadingEdgeInset),
               child: TextButton(
                 style: TextButton.styleFrom(
                   foregroundColor: cs.onSurface.withValues(alpha: 0.55),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
                 onPressed: _completeMultiPick,
                 child: Text(
@@ -253,13 +300,16 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
                       .get('listMultiPickApply')
                       .replaceAll('{n}', '${_multiPicked.length}'),
                   style: GoogleFonts.notoSansKr(
-                    fontSize: 15,
+                    fontSize: 14,
                     fontWeight: FontWeight.w600,
                     color: cs.onSurface.withValues(alpha: 0.55),
                   ),
                 ),
               ),
             ),
+          // 픽 모드 등 trailing 없을 때 108px 비우지 않음 — 우측 여백만
+          if (!_multiPickActive)
+            const SizedBox(width: kListsStyleSubpageLeadingEdgeInset),
         ],
         title: TextField(
           controller: _searchController,
@@ -284,13 +334,26 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
               DramaSearchStatsService.instance.incrementSearch(ids);
             }
           },
-          style: GoogleFonts.notoSansKr(fontSize: 16, color: cs.onSurface),
+          style: GoogleFonts.notoSansKr(
+            fontSize: 15,
+            height: 1.2,
+            color: cs.onSurface,
+          ),
           decoration: InputDecoration(
             hintText: s.get('dramaSearchHint'),
-            hintStyle: GoogleFonts.notoSansKr(fontSize: 16, color: cs.onSurfaceVariant),
+            hintStyle: GoogleFonts.notoSansKr(
+              fontSize: 15,
+              height: 1.2,
+              color: cs.onSurfaceVariant,
+            ),
+            isDense: true,
             border: InputBorder.none,
-            contentPadding: const EdgeInsets.symmetric(vertical: 12),
-            prefixIcon: Icon(LucideIcons.search, size: 20, color: cs.onSurfaceVariant),
+            contentPadding: const EdgeInsets.symmetric(vertical: 6),
+            prefixIcon: Icon(LucideIcons.search, size: 18, color: cs.onSurfaceVariant),
+            prefixIconConstraints: const BoxConstraints(
+              minWidth: 40,
+              minHeight: 32,
+            ),
           ),
         ),
       ),
@@ -311,6 +374,10 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
             );
           }
           if (_submittedQuery.isEmpty && allList.isEmpty) {
+            // 워치리스트 등 pick 모드: 목록 로드 전 안내 문구 대신 빈 화면(곧 그리드 표시)
+            if (widget.pickMode) {
+              return const SizedBox.expand();
+            }
             return Center(
               child: Text(
                 s.get('searchEnterQuery'),
@@ -354,10 +421,11 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
             builder: (context, snap) {
               final topIds = snap.data ?? [];
               final idSet = topIds.toSet();
+              final byId = {for (final e in allList) e.id: e};
               final ordered = <DramaItem>[];
               for (final id in topIds) {
-                final found = allList.where((e) => e.id == id).toList();
-                if (found.isNotEmpty) ordered.add(found.first);
+                final found = byId[id];
+                if (found != null) ordered.add(found);
               }
               for (final item in allList) {
                 if (ordered.length >= 10) break;
@@ -395,6 +463,7 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
           );
         },
       ),
+    ),
     );
   }
 
@@ -531,8 +600,8 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
                         widget.pickExcludeDramaIds?.contains(item.id) ??
                             false;
                     if (blocked) {
-                      if (!mounted || !navigatorContext.mounted) return;
-                      await _showPickDuplicateDialog(navigatorContext, s);
+                      if (!mounted) return;
+                      await _showPickDuplicateDialog(context, s);
                       return;
                     }
                     if (_multiPickActive) {
@@ -544,11 +613,15 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
                       );
                       return;
                     }
-                    if (!mounted || !navigatorContext.mounted) return;
-                    Navigator.pop(navigatorContext, item);
-                    unawaited(
-                      DramaSearchStatsService.instance.incrementClick(item.id),
-                    );
+                    if (!mounted) return;
+                    await _popSelf<DramaItem>(item);
+                    if (mounted) {
+                      unawaited(
+                        DramaSearchStatsService.instance.incrementClick(
+                          item.id,
+                        ),
+                      );
+                    }
                     return;
                   }
                   unawaited(
@@ -556,9 +629,9 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
                   );
                   final detail =
                       DramaListService.instance.buildDetailForItem(item, country);
-                  if (!mounted || !navigatorContext.mounted) return;
+                  if (!mounted) return;
                   await Navigator.push<void>(
-                    navigatorContext,
+                    context,
                     CupertinoPageRoute<void>(
                       builder: (_) => DramaDetailPage(detail: detail),
                     ),

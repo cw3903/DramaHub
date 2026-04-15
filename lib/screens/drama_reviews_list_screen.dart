@@ -4,9 +4,11 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../models/drama.dart';
 import '../services/review_service.dart';
+import '../services/user_profile_service.dart';
 import '../widgets/country_scope.dart';
 import '../widgets/green_rating_stars.dart';
 import '../widgets/optimized_network_image.dart';
+import '../widgets/user_profile_nav.dart';
 import '../widgets/write_review_sheet.dart';
 import '../services/auth_service.dart';
 import 'login_page.dart';
@@ -28,20 +30,28 @@ class DramaReviewsListScreen extends StatefulWidget {
   State<DramaReviewsListScreen> createState() => _DramaReviewsListScreenState();
 }
 
-const Color _kReviewStarGreen = Color(0xFF00C46C);
+const Color _kReviewStarGreen = Color(0xFFFFB020);
 const Color _kUserNameTint = Color(0xFF9BB0CC);
 
 class _DramaReviewsListScreenState extends State<DramaReviewsListScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
   List<DramaReview> _reviews = [];
+  List<DramaReview> _popularSorted = [];
+  List<DramaReview> _allSorted = [];
   bool _loading = true;
+
+  void _recomputeSortedLists() {
+    _popularSorted = _sortedPopular(_reviews);
+    _allSorted = _sortedAll(_reviews);
+  }
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
     _reviews = List<DramaReview>.from(widget.initialReviews);
+    _recomputeSortedLists();
     _refresh();
   }
 
@@ -56,10 +66,16 @@ class _DramaReviewsListScreenState extends State<DramaReviewsListScreen>
       if (mounted) setState(() => _loading = true);
     }
     try {
-      final list = await ReviewService.instance.getDramaReviews(widget.dramaId);
+      final country = CountryScope.maybeOf(context)?.country ??
+          UserProfileService.instance.signupCountryNotifier.value;
+      final list = await ReviewService.instance.getDramaReviews(
+        widget.dramaId,
+        country: country,
+      );
       if (!mounted) return;
       setState(() {
         _reviews = list;
+        _recomputeSortedLists();
         _loading = false;
       });
     } catch (_) {
@@ -117,9 +133,6 @@ class _DramaReviewsListScreenState extends State<DramaReviewsListScreen>
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final s = CountryScope.of(context).strings;
-    final popular = _sortedPopular(_reviews);
-    final all = _sortedAll(_reviews);
-
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
@@ -191,12 +204,12 @@ class _DramaReviewsListScreenState extends State<DramaReviewsListScreen>
               controller: _tabController,
               children: [
                 _ReviewListBody(
-                  reviews: popular,
+                  reviews: _popularSorted,
                   onRefresh: _refresh,
                   emptyMessage: s.get('dramaSpotlightNoReviews'),
                 ),
                 _ReviewListBody(
-                  reviews: all,
+                  reviews: _allSorted,
                   onRefresh: _refresh,
                   emptyMessage: s.get('dramaSpotlightNoReviews'),
                 ),
@@ -280,32 +293,39 @@ class _ReviewListTile extends StatelessWidget {
 
     return Material(
       color: cs.surface,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _Avatar(url: review.authorPhotoUrl, label: initial, cs: cs),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: Text(
-                          name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: GoogleFonts.notoSansKr(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: _kUserNameTint,
+      child: InkWell(
+        onTap: () {
+          final u = review.authorUid?.trim();
+          if (u != null && u.isNotEmpty) {
+            openUserProfileFromAuthorUid(context, u);
+          }
+        },
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _Avatar(url: review.authorPhotoUrl, label: initial, cs: cs),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: GoogleFonts.notoSansKr(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: _kUserNameTint,
+                            ),
                           ),
                         ),
-                      ),
                       const SizedBox(width: 8),
                       GreenRatingStars(rating: review.rating, size: 15, color: _kReviewStarGreen),
                       if (liked) ...[
@@ -333,6 +353,7 @@ class _ReviewListTile extends StatelessWidget {
               ),
             ),
           ],
+        ),
         ),
       ),
     );

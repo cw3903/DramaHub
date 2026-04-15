@@ -10,6 +10,23 @@ import 'auth_service.dart';
 import 'follow_service.dart';
 import 'post_service.dart';
 
+/// 다른 유저 프로필 조회용 (Firestore `users/{uid}` 공개 필드만).
+class PublicUserProfile {
+  const PublicUserProfile({
+    required this.uid,
+    required this.displayNickname,
+    this.profileImageUrl,
+    this.avatarColorIndex,
+    this.favorites = const [],
+  });
+
+  final String uid;
+  final String displayNickname;
+  final String? profileImageUrl;
+  final int? avatarColorIndex;
+  final List<ProfileFavorite> favorites;
+}
+
 /// 프로필(닉네임, 프로필 사진) Firestore users/{uid} + Storage profile/{uid}
 class UserProfileService {
   UserProfileService._();
@@ -152,6 +169,33 @@ class UserProfileService {
 
   /// 커뮤니티 피드 등에서 가입 국가·프로필을 먼저 채운 뒤 호출할 때 사용. [loadIfNeeded]와 동일.
   Future<void> loadUserProfile() => loadIfNeeded();
+
+  /// 커뮤니티 등에서 타 유저 프로필 화면용. [users/{uid}] 읽기 전용.
+  Future<PublicUserProfile?> fetchPublicUserProfile(String uid) async {
+    final u = uid.trim();
+    if (u.isEmpty) return null;
+    try {
+      final doc = await _firestore.collection('users').doc(u).get();
+      if (!doc.exists || doc.data() == null) return null;
+      final data = doc.data()!;
+      final nick = (data['nickname'] as String?)?.trim();
+      final display =
+          nick != null && nick.isNotEmpty ? nick : (data['email'] as String?)?.split('@').first ?? 'Member';
+      final photo = data['profileImageUrl'] as String?;
+      final colorIdx = data['avatarColorIndex'];
+      final favorites = _parseFavoritesList(data['favorites']);
+      return PublicUserProfile(
+        uid: u,
+        displayNickname: display,
+        profileImageUrl: photo,
+        avatarColorIndex: colorIdx is num ? colorIdx.toInt() : null,
+        favorites: favorites,
+      );
+    } catch (e, st) {
+      debugPrint('fetchPublicUserProfile: $e\n$st');
+      return null;
+    }
+  }
 
   Future<void> setNickname(String nickname) async {
     final uid = AuthService.instance.currentUser.value?.uid;

@@ -14,7 +14,9 @@ import '../services/drama_list_service.dart';
 import '../services/user_profile_service.dart';
 import '../widgets/country_scope.dart';
 import '../widgets/optimized_network_image.dart';
+import '../widgets/lists_style_subpage_app_bar.dart';
 import 'drama_detail_page.dart';
+import 'lists_screen.dart';
 
 String _ownerName() {
   final n = UserProfileService.instance.nicknameNotifier.value?.trim();
@@ -30,16 +32,81 @@ String _ownerName() {
 }
 
 bool _hasListCover(CustomDramaList list) {
+  final img = list.coverImageUrl?.trim();
+  if (img != null &&
+      img.isNotEmpty &&
+      (img.startsWith('http://') || img.startsWith('https://'))) {
+    return true;
+  }
   final c = list.coverDramaId?.trim();
   return c != null && c.isNotEmpty && list.dramaIds.contains(c);
 }
 
 String? _coverImageUrl(CustomDramaList list, String? country) {
-  if (!_hasListCover(list)) return null;
-  final id = list.coverDramaId!.trim();
-  final u = DramaListService.instance.getDisplayImageUrl(id, country);
+  final img = list.coverImageUrl?.trim();
+  if (img != null &&
+      img.isNotEmpty &&
+      (img.startsWith('http://') || img.startsWith('https://'))) {
+    return img;
+  }
+  final c = list.coverDramaId?.trim();
+  if (c == null || c.isEmpty || !list.dramaIds.contains(c)) return null;
+  final u = DramaListService.instance.getDisplayImageUrl(c, country);
   if (u != null && u.isNotEmpty) return u;
   return null;
+}
+
+Future<void> _openListEditor(BuildContext context, CustomDramaList list) async {
+  final ok = await Navigator.push<bool>(
+    context,
+    CupertinoPageRoute<bool>(
+      builder: (_) => DramaListEditorScreen(existingList: list),
+    ),
+  );
+  if (ok == true && context.mounted) {
+    await CustomDramaListService.instance.loadIfNeeded(force: true);
+  }
+}
+
+Future<void> _confirmDeleteList(BuildContext context, CustomDramaList list) async {
+  final s = CountryScope.of(context).strings;
+  final cs = Theme.of(context).colorScheme;
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(
+        s.get('listDeleteConfirmTitle'),
+        style: GoogleFonts.notoSansKr(fontWeight: FontWeight.w700),
+      ),
+      content: Text(
+        s.get('listDeleteConfirmMessage'),
+        style: GoogleFonts.notoSansKr(),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child: Text(s.get('cancel')),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, true),
+          child: Text(
+            s.get('delete'),
+            style: TextStyle(color: cs.error),
+          ),
+        ),
+      ],
+    ),
+  );
+  if (confirmed != true || !context.mounted) return;
+  final deleted = await CustomDramaListService.instance.deleteList(list.id);
+  if (!context.mounted) return;
+  if (deleted) {
+    Navigator.pop(context);
+  } else {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(s.get('listDetailDeleteFailed'))),
+    );
+  }
 }
 
 DramaItem _listDramaItemForId(String dramaId, String? country) {
@@ -57,21 +124,27 @@ DramaItem _listDramaItemForId(String dramaId, String? country) {
   );
 }
 
-/// Lists(목록) ≠ List(단일 리스트). 앱바는 불투명, 표지는 앱바 **아래**에만 표시.
+/// **Lists**(탭 목록) ≠ **List**(단일 커스텀 리스트 상세). 앱바는 불투명, 표지는 앱바 **아래**에만 표시.
+/// 표지 박스: 가로는 화면 전체, 세로는 가로 대비 3:2 — 이미지는 [BoxFit.cover]로 잘라 맞춤.
+/// 그리드 썸네일 셀 비율은 이 화면 전용 상수로만 조정.
 class CustomDramaListDetailScreen extends StatelessWidget {
   const CustomDramaListDetailScreen({super.key, required this.list});
   final CustomDramaList list;
 
-  static const double _heroHeight = 268;
-  static const double _cellGap = 4;
+  /// List 상세 표지 가로:세로 = 3:2 ([ListsScreen] 리스트 작성 크롭과 동일).
+  static const double _coverAspectW = 3;
+  static const double _coverAspectH = 2;
+
+  /// List 상세 그리드 셀 사이 간격(가로·세로 동일). Lists 탭과 무관.
+  static const double _cellGap = 7;
   static const double _cellRadius = 4.5;
-  /// width/height — 값을 키우면 셀 높이가 줄어들어 썸네일이 조금 작아짐.
-  static const double _gridRatio = 0.69;
+  /// List 상세 그리드만의 좌우 패딩. 늘리면 4열 셀 너비가 줄어 썸네일이 작아짐(Lists 탭과 무관).
+  static const double _gridHorizontalPadding = 15;
+  /// List 상세 그리드 `childAspectRatio`(가로/세로). 값을 키우면 세로가 짧아져 썸네일이 작아짐.
+  static const double _gridRatio = 0.74;
   /// 스캐폴드 배경 → 썸네일 띠: 검은색 쪽으로 아주 약하게만 보간 (라이트/다크 동일 비율).
   static const double _gridStripDarkenBlend = 0.14;
-  static const double _listAppBarToolbarHeight = 46;
-  /// `centerTitle`이 화면 정중앙이 되도록 leading과 같은 폭을 오른쪽에 둠.
-  static const double _listAppBarLeadingWidth = 108;
+  /// [kListsStyleSubpageToolbarHeight] / [kListsStyleSubpageSideSlotWidth]와 동일
 
   @override
   Widget build(BuildContext context) {
@@ -101,9 +174,22 @@ class CustomDramaListDetailScreen extends StatelessWidget {
         DramaListService.instance.listNotifier,
         UserProfileService.instance.nicknameNotifier,
         AuthService.instance.currentUser,
+        CustomDramaListService.instance.listsNotifier,
       ]),
       builder: (context, _) {
-        final list = this.list;
+        CustomDramaList? synced;
+        for (final e in CustomDramaListService.instance.listsNotifier.value) {
+          if (e.id == this.list.id) {
+            synced = e;
+            break;
+          }
+        }
+        final list = synced ?? this.list;
+        final uid = AuthService.instance.currentUser.value?.uid;
+        final mine = CustomDramaListService.instance.listsNotifier.value
+            .map((e) => e.id)
+            .toSet();
+        final canManageList = uid != null && mine.contains(list.id);
         final hasCover = _hasListCover(list);
         final coverUrl = _coverImageUrl(list, country);
         final owner = _ownerName();
@@ -233,8 +319,7 @@ class CustomDramaListDetailScreen extends StatelessWidget {
             slivers: [
               SliverAppBar(
                 pinned: true,
-                toolbarHeight:
-                    CustomDramaListDetailScreen._listAppBarToolbarHeight,
+                toolbarHeight: kListsStyleSubpageToolbarHeight,
                 elevation: 0,
                 scrolledUnderElevation: 0,
                 backgroundColor: headerBarBg,
@@ -242,47 +327,76 @@ class CustomDramaListDetailScreen extends StatelessWidget {
                 systemOverlayStyle: statusOverlay,
                 foregroundColor: barFg,
                 iconTheme: IconThemeData(color: leadingMuted, size: 14),
-                leadingWidth: CustomDramaListDetailScreen._listAppBarLeadingWidth,
+                leadingWidth: kListsStyleSubpageSideSlotWidth,
                 actionsPadding: EdgeInsets.zero,
-                actions: const [
-                  SizedBox(
-                    width: CustomDramaListDetailScreen._listAppBarLeadingWidth,
-                  ),
-                ],
-                leading: SizedBox(
-                  height:
-                      CustomDramaListDetailScreen._listAppBarToolbarHeight,
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Padding(
-                      padding: const EdgeInsets.only(left: 4),
-                      child: GestureDetector(
-                        onTap: () => Navigator.pop(context),
-                        behavior: HitTestBehavior.opaque,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.arrow_back_ios_new_rounded,
-                              size: 14,
-                              color: leadingMuted,
+                actions: [
+                  if (canManageList)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 10),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          TextButton(
+                            onPressed: () => _openListEditor(context, list),
+                            style: TextButton.styleFrom(
+                              minimumSize: Size.zero,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 4,
+                              ),
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                             ),
-                            const SizedBox(width: 2),
-                            Flexible(
-                              child: Text(
-                                s.get('tabLists'),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: GoogleFonts.notoSansKr(
-                                  fontSize: 13,
-                                  height: 1.1,
-                                  fontWeight: FontWeight.w500,
-                                  color: leadingMuted,
-                                ),
+                            child: Text(
+                              s.get('edit'),
+                              style: GoogleFonts.notoSansKr(
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w600,
+                                color: leadingMuted,
                               ),
                             ),
-                          ],
+                          ),
+                          TextButton(
+                            onPressed: () => _confirmDeleteList(context, list),
+                            style: TextButton.styleFrom(
+                              minimumSize: Size.zero,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 4,
+                              ),
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            child: Text(
+                              s.get('delete'),
+                              style: GoogleFonts.notoSansKr(
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w600,
+                                color: cs.error,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  else
+                    const SizedBox(width: kListsStyleSubpageSideSlotWidth),
+                ],
+                leading: SizedBox(
+                  width: kListsStyleSubpageSideSlotWidth,
+                  height: kListsStyleSubpageToolbarHeight,
+                  child: Padding(
+                    padding: const EdgeInsets.only(
+                      left: kListsStyleSubpageLeadingEdgeInset,
+                      right: 4,
+                    ),
+                    child: GestureDetector(
+                      onTap: () => Navigator.pop(context),
+                      behavior: HitTestBehavior.opaque,
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Icon(
+                          Icons.arrow_back_ios_new_rounded,
+                          size: 14,
+                          color: leadingMuted,
                         ),
                       ),
                     ),
@@ -290,7 +404,7 @@ class CustomDramaListDetailScreen extends StatelessWidget {
                 ),
                 title: SizedBox(
                   height:
-                      CustomDramaListDetailScreen._listAppBarToolbarHeight,
+                      kListsStyleSubpageToolbarHeight,
                   child: Center(
                     child: Text(
                       s.get('listDetailScreenTitle'),
@@ -306,35 +420,35 @@ class CustomDramaListDetailScreen extends StatelessWidget {
                 centerTitle: true,
               ),
 
-              // 표지: 앱바 아래에만 (설정한 경우에만)
+              // 표지: 앱바 아래, 가로=화면 전체·비율 3:2
               if (hasCover && coverUrl != null) ...[
                 SliverToBoxAdapter(
                   child: Padding(
                     padding: const EdgeInsets.only(top: 6),
-                    child: SizedBox(
-                      height: CustomDramaListDetailScreen._heroHeight,
-                      width: double.infinity,
+                    child: AspectRatio(
+                      aspectRatio: CustomDramaListDetailScreen._coverAspectW /
+                          CustomDramaListDetailScreen._coverAspectH,
                       child: Stack(
                         fit: StackFit.expand,
                         children: [
-                          ColoredBox(color: const Color(0xFF1E252E)),
+                          const ColoredBox(color: Color(0xFF1E252E)),
                           if (coverUrl.startsWith('http'))
-                            OptimizedNetworkImage(
-                              imageUrl: coverUrl,
-                              width: double.infinity,
-                              height: double.infinity,
-                              fit: BoxFit.cover,
-                              memCacheWidth: 900,
-                              memCacheHeight: 540,
+                            Positioned.fill(
+                              child: OptimizedNetworkImage(
+                                imageUrl: coverUrl,
+                                fit: BoxFit.cover,
+                                memCacheWidth: 1200,
+                                memCacheHeight: 800,
+                              ),
                             )
                           else
-                            Image.asset(
-                              coverUrl,
-                              fit: BoxFit.cover,
-                              width: double.infinity,
-                              height: double.infinity,
-                              errorBuilder: (c, e, st) =>
-                                  const SizedBox.shrink(),
+                            Positioned.fill(
+                              child: Image.asset(
+                                coverUrl,
+                                fit: BoxFit.cover,
+                                errorBuilder: (c, e, st) =>
+                                    const SizedBox.shrink(),
+                              ),
                             ),
                           DecoratedBox(
                             decoration: BoxDecoration(
@@ -392,9 +506,11 @@ class CustomDramaListDetailScreen extends StatelessWidget {
                         child: list.dramaIds.isEmpty
                             ? Padding(
                                 padding: EdgeInsets.fromLTRB(
-                                  12,
+                                  CustomDramaListDetailScreen
+                                      ._gridHorizontalPadding,
                                   14,
-                                  12,
+                                  CustomDramaListDetailScreen
+                                      ._gridHorizontalPadding,
                                   MediaQuery.of(context).padding.bottom + 48,
                                 ),
                                 child: SizedBox(
@@ -415,9 +531,11 @@ class CustomDramaListDetailScreen extends StatelessWidget {
                               )
                             : Padding(
                                 padding: EdgeInsets.fromLTRB(
-                                  12,
+                                  CustomDramaListDetailScreen
+                                      ._gridHorizontalPadding,
                                   14,
-                                  12,
+                                  CustomDramaListDetailScreen
+                                      ._gridHorizontalPadding,
                                   MediaQuery.of(context).padding.bottom + 24,
                                 ),
                                 child: GridView.builder(
@@ -426,7 +544,7 @@ class CustomDramaListDetailScreen extends StatelessWidget {
                                   physics:
                                       const NeverScrollableScrollPhysics(),
                                   gridDelegate:
-                                      const SliverGridDelegateWithFixedCrossAxisCount(
+                                      SliverGridDelegateWithFixedCrossAxisCount(
                                     crossAxisCount: 4,
                                     crossAxisSpacing:
                                         CustomDramaListDetailScreen._cellGap,
@@ -504,9 +622,9 @@ class CustomDramaListDetailScreen extends StatelessWidget {
                       color: gridStripBg,
                       child: Padding(
                         padding: EdgeInsets.fromLTRB(
-                          12,
+                          CustomDramaListDetailScreen._gridHorizontalPadding,
                           14,
-                          12,
+                          CustomDramaListDetailScreen._gridHorizontalPadding,
                           MediaQuery.of(context).padding.bottom + 24,
                         ),
                         child: GridView.builder(
@@ -514,7 +632,7 @@ class CustomDramaListDetailScreen extends StatelessWidget {
                           shrinkWrap: true,
                           physics: const NeverScrollableScrollPhysics(),
                           gridDelegate:
-                              const SliverGridDelegateWithFixedCrossAxisCount(
+                              SliverGridDelegateWithFixedCrossAxisCount(
                             crossAxisCount: 4,
                             crossAxisSpacing:
                                 CustomDramaListDetailScreen._cellGap,
@@ -586,17 +704,22 @@ class _ListDetailLikeRow extends StatelessWidget {
     if (uid == null) return const SizedBox.shrink();
 
     final s = CountryScope.of(context).strings;
+    const likeTextHeight = TextHeightBehavior(
+      applyHeightToFirstAscent: false,
+      applyHeightToLastDescent: false,
+    );
     final textStyle = GoogleFonts.notoSansKr(
       fontSize: 12.5,
       fontWeight: FontWeight.w600,
-      height: 1.15,
+      height: 1.0,
       letterSpacing: 0.35,
       color: likeRowColor,
     );
+    // 숫자 라벨: 굵기·행고를 LIKE?와 동일하게 해 세로 정렬 맞춤
     final countStyle = GoogleFonts.notoSansKr(
       fontSize: 12.5,
-      fontWeight: FontWeight.w500,
-      height: 1.15,
+      fontWeight: FontWeight.w600,
+      height: 1.0,
       letterSpacing: 0.1,
       color: likeRowColor,
     );
@@ -623,6 +746,8 @@ class _ListDetailLikeRow extends StatelessWidget {
           count = list.likeCount;
         }
         final liked = likedBy.contains(uid);
+        // 좋아요 시 하트만 채움·빨강 — 라벨·숫자는 설명 톤 유지
+        final heartColor = liked ? Colors.redAccent : likeRowColor;
 
         return Material(
           color: Colors.transparent,
@@ -641,17 +766,19 @@ class _ListDetailLikeRow extends StatelessWidget {
                         ? Icons.favorite_rounded
                         : Icons.favorite_border_rounded,
                     size: 16,
-                    color: likeRowColor,
+                    color: heartColor,
                   ),
                   const SizedBox(width: 6),
                   Text(
                     s.get('listDetailLikePrompt'),
                     style: textStyle,
+                    textHeightBehavior: likeTextHeight,
                   ),
                   const SizedBox(width: 10),
                   Text(
                     _listDetailLikesCountLabel(s, count),
                     style: countStyle,
+                    textHeightBehavior: likeTextHeight,
                   ),
                 ],
               ),
@@ -699,8 +826,8 @@ class _PosterCell extends StatelessWidget {
               OptimizedNetworkImage(
                 imageUrl: url,
                 fit: BoxFit.cover,
-                memCacheWidth: 200,
-                memCacheHeight: 300,
+                memCacheWidth: 184,
+                memCacheHeight: 276,
               )
             else if (url != null && url.isNotEmpty)
               Image.asset(

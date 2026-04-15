@@ -70,6 +70,7 @@ class DramaReview {
     this.replies = const [],
     this.authorPhotoUrl,
     this.writtenAt,
+    this.authorUid,
   });
   final String userName;
   final double rating;
@@ -85,6 +86,8 @@ class DramaReview {
   final List<DramaReviewReply> replies;
   /// 작성자 프로필 사진 URL (회원 아이콘용)
   final String? authorPhotoUrl;
+  /// `drama_reviews` 문서의 `uid`
+  final String? authorUid;
 }
 
 /// 드라마 상세 정보

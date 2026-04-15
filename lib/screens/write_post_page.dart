@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:file_picker/file_picker.dart';
@@ -19,6 +20,7 @@ import '../utils/post_board_utils.dart';
 import '../models/drama.dart';
 import '../services/drama_list_service.dart';
 import 'video_select_page.dart';
+import '../widgets/lists_style_subpage_app_bar.dart';
 import '../widgets/optimized_network_image.dart';
 import '../widgets/review_arrow_tag_chip.dart';
 
@@ -787,38 +789,25 @@ class _WritePostPageState extends State<WritePostPage> {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final bottomPadding = MediaQuery.of(context).padding.bottom;
+    final headerBg = listsStyleSubpageHeaderBackground(theme);
+    final headerOverlay = listsStyleSubpageSystemOverlay(theme, headerBg);
 
-    return Scaffold(
-      resizeToAvoidBottomInset: true,
-      backgroundColor: theme.scaffoldBackgroundColor,
-      appBar: AppBar(
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: headerOverlay,
+      child: Scaffold(
+        resizeToAvoidBottomInset: true,
         backgroundColor: theme.scaffoldBackgroundColor,
-        elevation: 0,
-        surfaceTintColor: Colors.transparent,
-        shadowColor: Colors.transparent,
-        leading: IconButton(
-          icon: Icon(LucideIcons.x, size: 22, color: cs.onSurfaceVariant),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Text(
-          _isEditMode ? s.get('editPost') : s.get('writePost'),
-          style: GoogleFonts.notoSansKr(
-            fontSize: 17,
-            fontWeight: FontWeight.w700,
-            color: cs.onSurface,
-            letterSpacing: -0.2,
-          ),
-        ),
-        centerTitle: true,
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 4),
-            child: _isSubmitting
-                ? Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: SizedBox(
-                      width: 24,
-                      height: 24,
+        appBar: PreferredSize(
+          preferredSize: ListsStyleSubpageHeaderBar.preferredSizeOf(context),
+          child: ListsStyleSubpageHeaderBar(
+            title: _isEditMode ? s.get('editPost') : s.get('writePost'),
+            onBack: () => popListsStyleSubpage(context),
+            trailing: _isSubmitting
+                ? const SizedBox(
+                    width: 28,
+                    height: 28,
+                    child: Padding(
+                      padding: EdgeInsets.all(2),
                       child: CircularProgressIndicator(
                         strokeWidth: 2,
                         color: _kWriteAccentOrange,
@@ -826,7 +815,12 @@ class _WritePostPageState extends State<WritePostPage> {
                     ),
                   )
                 : TextButton(
-                    onPressed: _isSubmitting ? null : _submit,
+                    onPressed: _submit,
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
                     child: Text(
                       _isEditMode ? s.get('edit') : s.get('postSubmit'),
                       style: GoogleFonts.notoSansKr(
@@ -838,9 +832,8 @@ class _WritePostPageState extends State<WritePostPage> {
                     ),
                   ),
           ),
-        ],
-      ),
-      body: Form(
+        ),
+        body: Form(
         key: _formKey,
         child: Column(
           children: [
@@ -1176,6 +1169,7 @@ class _WritePostPageState extends State<WritePostPage> {
               ),
           ],
         ),
+      ),
       ),
     );
   }

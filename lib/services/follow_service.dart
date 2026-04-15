@@ -78,6 +78,23 @@ class FollowService {
     followingCountNotifier.value = 0;
   }
 
+  /// 프로필 통계용 일회성 조회 (다른 유저 프로필 — [followingCountNotifier]와 무관).
+  Future<int> getFollowingCountOnce(String uid) async {
+    final u = uid.trim();
+    if (u.isEmpty) return 0;
+    try {
+      final snap = await _firestore
+          .collection('users')
+          .doc(u)
+          .collection('following')
+          .get();
+      return snap.docs.length;
+    } catch (e, st) {
+      debugPrint('getFollowingCountOnce: $e\n$st');
+      return 0;
+    }
+  }
+
   Future<bool> isFollowing(String currentUid, String targetUid) async {
     if (currentUid.isEmpty || targetUid.isEmpty || currentUid == targetUid) return false;
     try {

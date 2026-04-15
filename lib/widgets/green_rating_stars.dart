@@ -6,7 +6,7 @@ class GreenRatingStars extends StatelessWidget {
     super.key,
     required this.rating,
     this.size = 14,
-    this.color = const Color(0xFF00C46C),
+    this.color = const Color(0xFFFFB020),
   });
 
   final double rating;

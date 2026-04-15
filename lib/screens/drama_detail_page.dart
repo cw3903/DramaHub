@@ -1,5 +1,6 @@
+import 'dart:async' show unawaited;
+
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
 import '../utils/format_utils.dart';
 import 'package:flutter/services.dart';
 import '../services/play_to_shorts_service.dart';
@@ -23,7 +24,10 @@ import 'login_page.dart';
 import '../widgets/share_sheet.dart';
 import '../widgets/review_share_card.dart';
 import '../widgets/optimized_network_image.dart';
+import '../widgets/lists_style_subpage_app_bar.dart';
+import '../widgets/green_rating_stars.dart';
 import '../widgets/episode_review_panel.dart';
+import '../widgets/user_profile_nav.dart';
 import 'drama_episode_reviews_screen.dart';
 import 'tag_drama_list_screen.dart';
 import 'drama_watchers_screen.dart';
@@ -395,13 +399,27 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
     return {widget.detail.item.id: _liveViews!};
   }
 
+  /// 시스템 뒤로 등: Navigator 잠금과 겹치지 않게 [pop] 연기.
+  Future<void> _popDetailRouteWithResult(Map<String, int>? resultToPass) async {
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    final nav = Navigator.of(context);
+    if (!nav.canPop()) return;
+    nav.pop(resultToPass);
+  }
+
   Future<void> _loadRatingStats() async {
     final dramaId = widget.detail.item.id;
+    final country = mounted
+        ? (CountryScope.maybeOf(context)?.country ??
+            UserProfileService.instance.signupCountryNotifier.value)
+        : UserProfileService.instance.signupCountryNotifier.value;
     try {
       final results = await Future.wait([
         ReviewService.instance.getDramaRatingStats(dramaId)
             .timeout(const Duration(seconds: 8), onTimeout: () => (average: 0.0, count: 0)),
-        ReviewService.instance.getDramaReviews(dramaId)
+        ReviewService.instance
+            .getDramaReviews(dramaId, country: country)
             .timeout(const Duration(seconds: 8), onTimeout: () => <DramaReview>[]),
       ]);
       if (mounted) {
@@ -520,35 +538,32 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
   Widget build(BuildContext context) {
     final s = CountryScope.of(context).strings;
     final detail = widget.detail;
+    final theme = Theme.of(context);
+    final headerBg = listsStyleSubpageHeaderBackground(theme);
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
         if (!didPop) {
-          // 뒤로가기 시 콜백 스택에서 바로 pop 하면 ANR 유발 가능 → 다음 프레임으로 연기
           final resultToPass = _buildViewCountResult();
-          SchedulerBinding.instance.addPostFrameCallback((_) {
-            if (!context.mounted) return;
-            Navigator.of(context).pop(resultToPass);
-          });
+          unawaited(_popDetailRouteWithResult(resultToPass));
         }
       },
-      child: Scaffold(
-        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
+        value: listsStyleSubpageSystemOverlay(theme, headerBg),
+        child: Scaffold(
+        backgroundColor: theme.scaffoldBackgroundColor,
         body: CustomScrollView(
         keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         slivers: [
-          // 상단: 포스터 + 제목 + 조회수 한 덩어리 (로드 전에는 아이템 기본 조회수 표시, 로드 후 서버 값)
+          // 상단: 포스터 + 제목 (조회수는 목록 갱신용으로만 서버 반영, UI 비표시)
           SliverToBoxAdapter(
             child: _HeaderSection(
               detail: widget.detail,
-              strings: s,
-              viewsDisplay: _liveViews != null ? formatCompactCount(_liveViews!) : (detail.item.views.isNotEmpty ? detail.item.views : '0'),
               onBack: () {
-                final resultToPass = _buildViewCountResult();
-                SchedulerBinding.instance.addPostFrameCallback((_) {
-                  if (!context.mounted) return;
-                  Navigator.of(context).pop(resultToPass);
-                });
+                popListsStyleSubpage(
+                  context,
+                  _buildViewCountResult(),
+                );
               },
             ),
           ),
@@ -618,7 +633,8 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
           ),
         ],
       ),
-    ),
+        ),
+      ),
     );
   }
 }
@@ -690,13 +706,11 @@ class _FullScreenPosterPage extends StatelessWidget {
   }
 }
 
-/// 상단: 포스터 + 제목 + 조회수 한 덩어리 (화이트 테마)
+/// 상단: 포스터 + 제목 (화이트 테마)
 class _HeaderSection extends StatelessWidget {
-  const _HeaderSection({required this.detail, required this.strings, this.viewsDisplay, this.onBack});
+  const _HeaderSection({required this.detail, this.onBack});
 
   final DramaDetail detail;
-  final dynamic strings;
-  final String? viewsDisplay;
   /// null이면 기본 Navigator.pop(context). 있으면 호출 (pop 시 조회수 결과 전달용).
   final VoidCallback? onBack;
 
@@ -707,7 +721,7 @@ class _HeaderSection extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
     final surfaceColor = cs.surface;
     final surfaceDim = isDark ? cs.surface.withOpacity(0.6) : cs.surface.withOpacity(0.75);
-    final iconColor = cs.onSurface;
+    final trailingIconColor = cs.onSurfaceVariant.withValues(alpha: 0.78);
 
     // 설정 언어(앱 locale) 기준으로 제목·이미지 표시
     final country = CountryScope.maybeOf(context)?.country
@@ -718,175 +732,175 @@ class _HeaderSection extends StatelessWidget {
     }();
     final displayImageUrl = DramaListService.instance.getDisplayImageUrl(detail.item.id, country)
         ?? detail.item.imageUrl;
-    final viewsLine = viewsDisplay ?? detail.item.views;
 
-    return Stack(
+    Future<void> onShareTap() async {
+      final my = ReviewService.instance.getByDramaId(detail.item.id);
+      if (my != null) {
+        final country = CountryScope.maybeOf(context)?.country
+            ?? UserProfileService.instance.signupCountryNotifier.value;
+        final locTitle = DramaListService.instance.getDisplayTitle(detail.item.id, country);
+        final shareTitle = locTitle.trim().isNotEmpty ? locTitle : detail.item.title;
+        final shareImageUrl =
+            DramaListService.instance.getDisplayImageUrl(detail.item.id, country) ?? detail.item.imageUrl;
+        String? posterUrl;
+        String? posterAsset;
+        if (shareImageUrl != null && shareImageUrl.isNotEmpty) {
+          if (shareImageUrl.startsWith('http')) {
+            posterUrl = shareImageUrl;
+          } else {
+            posterAsset = shareImageUrl;
+          }
+        }
+        final nickRaw = UserProfileService.instance.nicknameNotifier.value?.trim();
+        final nick = (nickRaw != null && nickRaw.isNotEmpty)
+            ? nickRaw
+            : (my.authorName?.trim().isNotEmpty == true ? my.authorName! : 'DramaFeed');
+        await ReviewShareImageHelper.captureAndShare(
+          context,
+          ReviewShareCardData(
+            dramaTitle: shareTitle,
+            rating: my.rating,
+            reviewPreview: my.comment,
+            userNickname: nick,
+            posterUrl: posterUrl,
+            posterAsset: posterAsset,
+          ),
+        );
+      } else {
+        await ShareSheet.show(context, title: detail.item.title, type: 'drama');
+      }
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
       children: [
-        // 줄거리 위: 드라마 사진 옅게 배경
-        Positioned(
-          left: 0,
-          right: 0,
-          top: 0,
-          height: 140,
-          child: Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  cs.outline.withOpacity(isDark ? 0.2 : 0.18),
-                  cs.outline.withOpacity(isDark ? 0.1 : 0.08),
-                  surfaceColor,
-                ],
-              ),
-            ),
-            child: Center(
-              child: Icon(
-                LucideIcons.tv,
-                size: 120,
-                color: cs.outline.withOpacity(0.2),
+        ListsStyleSubpageHeaderBar(
+          title: displayTitle,
+          onBack: () {
+            if (onBack != null) {
+              onBack!();
+            } else {
+              popListsStyleSubpage(context);
+            }
+          },
+          trailing: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: onShareTap,
+              child: Padding(
+                padding: const EdgeInsets.all(6),
+                child: Icon(
+                  LucideIcons.share_2,
+                  size: 18,
+                  color: trailingIconColor,
+                ),
               ),
             ),
           ),
         ),
-        Container(
-          width: double.infinity,
-          padding: EdgeInsets.fromLTRB(20, MediaQuery.of(context).padding.top + 56, 20, 20),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [surfaceDim, surfaceColor],
-              stops: const [0.0, 0.5],
-            ),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              // 포스터 (탭 시 크게 보기)
-              GestureDetector(
-                onTap: () {
-                  if (displayImageUrl != null && displayImageUrl.isNotEmpty) {
-                    Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (ctx) => _FullScreenPosterPage(imageUrl: displayImageUrl),
-                      ),
-                    );
-                  }
-                },
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: SizedBox(
-                    width: 80,
-                    height: 80 * 1.3,
-                    child: displayImageUrl != null && displayImageUrl.isNotEmpty
-                        ? (displayImageUrl.startsWith('http')
-                            ? OptimizedNetworkImage(
-                                imageUrl: displayImageUrl,
-                                fit: BoxFit.cover,
-                                width: 80,
-                                height: 80 * 1.3,
-                              )
-                            : Image.asset(
-                                displayImageUrl,
-                                fit: BoxFit.cover,
-                                width: 80,
-                                height: 80 * 1.3,
-                                errorBuilder: (_, __, ___) => _posterPlaceholder(context),
-                              ))
-                        : _posterPlaceholder(context),
+        Stack(
+          children: [
+            // 줄거리 위: 드라마 사진 옅게 배경
+            Positioned(
+              left: 0,
+              right: 0,
+              top: 0,
+              height: 140,
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      cs.outline.withOpacity(isDark ? 0.2 : 0.18),
+                      cs.outline.withOpacity(isDark ? 0.1 : 0.08),
+                      surfaceColor,
+                    ],
+                  ),
+                ),
+                child: Center(
+                  child: Icon(
+                    LucideIcons.tv,
+                    size: 120,
+                    color: cs.outline.withOpacity(0.2),
                   ),
                 ),
               ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      displayTitle,
-                      style: GoogleFonts.notoSansKr(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w700,
-                        color: cs.onSurface,
-                        height: 1.3,
-                      ),
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      strings.get('dramaViewCount').replaceAll('%s', viewsLine),
-                      style: GoogleFonts.notoSansKr(
-                        fontSize: 14,
-                        color: cs.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
+            ),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [surfaceDim, surfaceColor],
+                  stops: const [0.0, 0.5],
                 ),
               ),
-            ],
-          ),
-        ),
-        Positioned(
-          top: MediaQuery.of(context).padding.top + 8,
-          left: 8,
-          right: 8,
-          child: Row(
-            children: [
-              IconButton(
-                icon: Icon(LucideIcons.arrow_left, color: iconColor),
-                onPressed: () {
-                if (onBack != null) {
-                  onBack!();
-                } else {
-                  Navigator.of(context).maybePop();
-                }
-              },
-              ),
-              const Spacer(),
-              IconButton(
-                icon: Icon(LucideIcons.share_2, color: iconColor),
-                onPressed: () async {
-                  final my = ReviewService.instance.getByDramaId(detail.item.id);
-                  if (my != null) {
-                    final country = CountryScope.maybeOf(context)?.country
-                        ?? UserProfileService.instance.signupCountryNotifier.value;
-                    final locTitle = DramaListService.instance.getDisplayTitle(detail.item.id, country);
-                    final displayTitle = locTitle.trim().isNotEmpty ? locTitle : detail.item.title;
-                    final displayImageUrl =
-                        DramaListService.instance.getDisplayImageUrl(detail.item.id, country) ?? detail.item.imageUrl;
-                    String? posterUrl;
-                    String? posterAsset;
-                    if (displayImageUrl != null && displayImageUrl.isNotEmpty) {
-                      if (displayImageUrl.startsWith('http')) {
-                        posterUrl = displayImageUrl;
-                      } else {
-                        posterAsset = displayImageUrl;
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  // 포스터 (탭 시 크게 보기)
+                  GestureDetector(
+                    onTap: () {
+                      if (displayImageUrl != null && displayImageUrl.isNotEmpty) {
+                        Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (ctx) => _FullScreenPosterPage(imageUrl: displayImageUrl),
+                          ),
+                        );
                       }
-                    }
-                    final nickRaw = UserProfileService.instance.nicknameNotifier.value?.trim();
-                    final nick = (nickRaw != null && nickRaw.isNotEmpty)
-                        ? nickRaw
-                        : (my.authorName?.trim().isNotEmpty == true ? my.authorName! : 'DramaFeed');
-                    await ReviewShareImageHelper.captureAndShare(
-                      context,
-                      ReviewShareCardData(
-                        dramaTitle: displayTitle,
-                        rating: my.rating,
-                        reviewPreview: my.comment,
-                        userNickname: nick,
-                        posterUrl: posterUrl,
-                        posterAsset: posterAsset,
+                    },
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: SizedBox(
+                        width: 80,
+                        height: 80 * 1.3,
+                        child: displayImageUrl != null && displayImageUrl.isNotEmpty
+                            ? (displayImageUrl.startsWith('http')
+                                ? OptimizedNetworkImage(
+                                    imageUrl: displayImageUrl,
+                                    fit: BoxFit.cover,
+                                    width: 80,
+                                    height: 80 * 1.3,
+                                  )
+                                : Image.asset(
+                                    displayImageUrl,
+                                    fit: BoxFit.cover,
+                                    width: 80,
+                                    height: 80 * 1.3,
+                                    errorBuilder: (_, __, ___) => _posterPlaceholder(context),
+                                  ))
+                            : _posterPlaceholder(context),
                       ),
-                    );
-                  } else {
-                    await ShareSheet.show(context, title: detail.item.title, type: 'drama');
-                  }
-                },
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          displayTitle,
+                          style: GoogleFonts.notoSansKr(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w700,
+                            color: cs.onSurface,
+                            height: 1.3,
+                          ),
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ],
     );
@@ -1060,7 +1074,7 @@ Future<void> _showEpisodeRatingPicker(
                   child: Icon(
                     Icons.star_rounded,
                     size: 36,
-                    color: filled ? Colors.amber : cs.onSurfaceVariant,
+                    color: filled ? AppColors.ratingStar : cs.onSurfaceVariant,
                   ),
                 ),
               );
@@ -1367,7 +1381,7 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
                                             child: Icon(
                                               Icons.star_rounded,
                                               size: 12,
-                                              color: hasRating ? Colors.amber : episodeNoRatingColor(context),
+                                              color: hasRating ? AppColors.ratingStar : episodeNoRatingColor(context),
                                             ),
                                           ),
                                           SizedBox(width: 12 * 0.25),
@@ -1621,7 +1635,7 @@ class _EpisodesBottomSheetState extends State<_EpisodesBottomSheet> {
                                     child: Icon(
                                       Icons.star_rounded,
                                       size: 10,
-                                      color: hasRating ? Colors.amber : episodeNoRatingColor(context),
+                                      color: hasRating ? AppColors.ratingStar : episodeNoRatingColor(context),
                                     ),
                                   ),
                                   const SizedBox(width: 2),
@@ -1900,9 +1914,17 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
       .toSet();
 
   DramaReview _localMyReviewToCard(MyReviewItem my) {
+    final scopeRaw = CountryScope.maybeOf(context)?.country;
+    final scopeCountry = (scopeRaw?.trim() ?? '');
+    final signupRaw = UserProfileService.instance.signupCountryNotifier.value;
+    final signupCountry = (signupRaw?.trim() ?? '');
+    final loc = scopeCountry.isNotEmpty
+        ? scopeCountry.toLowerCase()
+        : signupCountry.toLowerCase();
+    final safeLoc = loc.isNotEmpty ? loc : 'us';
     final timeAgo = my.modifiedAt != null
-        ? '${formatTimeAgo(my.modifiedAt!)} (${widget.strings.get('edited')})'
-        : formatTimeAgo(my.writtenAt);
+        ? '${formatTimeAgo(my.modifiedAt!, safeLoc)} (${widget.strings.get('edited')})'
+        : formatTimeAgo(my.writtenAt, safeLoc);
     final myPhotoUrl = UserProfileService.instance.profileImageUrlNotifier.value;
     return DramaReview(
       id: my.id,
@@ -1914,6 +1936,7 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
       replies: const [],
       authorPhotoUrl: myPhotoUrl,
       writtenAt: my.modifiedAt ?? my.writtenAt,
+      authorUid: AuthService.instance.currentUser.value?.uid,
     );
   }
 
@@ -2012,7 +2035,7 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
                           crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
                             const SizedBox(width: 6),
-                            Icon(Icons.star_rounded, size: 60, color: Colors.amber),
+                            Icon(Icons.star_rounded, size: 60, color: AppColors.ratingStar),
                             const SizedBox(width: 8),
                             Column(
                               mainAxisSize: MainAxisSize.min,
@@ -2062,16 +2085,13 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
                         ),
                       )
                     else ...[
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                        child: _SortTabsPill(
-                          sortByLikes: _sortByLikes,
-                          onSortChanged: (v) => setState(() {
-                            _sortByLikes = v;
-                            _showAllReviewCards = false;
-                          }),
-                          strings: s,
-                        ),
+                      _SortTabsPill(
+                        sortByLikes: _sortByLikes,
+                        onSortChanged: (v) => setState(() {
+                          _sortByLikes = v;
+                          _showAllReviewCards = false;
+                        }),
+                        strings: s,
                       ),
                       ...preview.asMap().entries.expand((e) {
                         final i = e.key;
@@ -2170,14 +2190,17 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
                           padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
                           child: Center(
                             child: TextButton(
+                              style: TextButton.styleFrom(
+                                foregroundColor: cs.onSurfaceVariant,
+                              ),
                               onPressed: () =>
                                   setState(() => _showAllReviewCards = true),
                               child: Text(
                                 s.get('dramaAllReviewsCta'),
                                 style: GoogleFonts.notoSansKr(
                                   fontSize: 14,
-                                  fontWeight: FontWeight.w700,
-                                  color: cs.primary,
+                                  fontWeight: FontWeight.w600,
+                                  color: cs.onSurfaceVariant,
                                 ),
                               ),
                             ),
@@ -2264,7 +2287,7 @@ class _ReviewsEmptyState extends StatelessWidget {
   }
 }
 
-/// 정렬 탭: 어두운 트랙 + 선택 시 블루그레이 블록 (텍스트만, 50/50)
+/// 정렬 탭: FavoriteTitleActivityScreen의 TwoTabSegmentBar와 동일한 스타일
 class _SortTabsPill extends StatelessWidget {
   const _SortTabsPill({
     required this.sortByLikes,
@@ -2272,10 +2295,12 @@ class _SortTabsPill extends StatelessWidget {
     required this.strings,
   });
 
-  static const _selectedBg = Color(0xFF5D6D7E);
-  static const _inactiveTextDark = Color(0xFF999999);
-  static const _trackDark = Color(0xFF1A1A1A);
-  static const _trackBorderDark = Color(0xFF333333);
+  static const double _trackRadius = 7;
+  static const double _chipRadius = 6;
+  static const double _barHeight = 28;
+  static const Color _trackDark = Color(0xFF1C1C1E);
+  static const Color _trackBorderDark = Color(0xFF2C2C2E);
+  static const Color _selectedBg = Color(0xFF5D6D7E);
 
   final bool sortByLikes;
   final ValueChanged<bool> onSortChanged;
@@ -2284,100 +2309,87 @@ class _SortTabsPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final s = strings;
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final outerBg = isDark ? _trackDark : cs.surfaceContainerHighest;
-    final outerBorder = isDark ? _trackBorderDark : cs.outline.withValues(alpha: 0.35);
-    final inactiveText =
-        isDark ? _inactiveTextDark : cs.onSurfaceVariant;
+    final s = strings;
+    final trackBg = isDark
+        ? _trackDark
+        : cs.surfaceContainerHighest.withValues(alpha: 0.92);
+    final trackBorder = isDark
+        ? _trackBorderDark
+        : cs.outline.withValues(alpha: 0.22);
+    final selectedBg = isDark
+        ? _selectedBg
+        : Color.lerp(_selectedBg, cs.surface, 0.25) ?? _selectedBg;
+    final dimLabel = isDark
+        ? const Color(0xFF8E8E93)
+        : cs.onSurfaceVariant.withValues(alpha: 0.72);
 
-    return Container(
-      decoration: BoxDecoration(
-        color: outerBg,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: outerBorder, width: 1),
-      ),
-      padding: const EdgeInsets.all(4),
-      child: Row(
-        children: [
-          Expanded(
-            child: GestureDetector(
-              onTap: () => onSortChanged(true),
-              behavior: HitTestBehavior.opaque,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                curve: Curves.easeOutCubic,
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: sortByLikes ? _selectedBg : Colors.transparent,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  s.get('sortByLikes'),
-                  style: GoogleFonts.notoSansKr(
-                    fontSize: 13,
-                    fontWeight: sortByLikes ? FontWeight.w700 : FontWeight.w400,
-                    color: sortByLikes ? Colors.white : inactiveText,
-                  ),
-                ),
+    BorderRadius chipRadius(bool on, bool isLeft) {
+      if (!on) return BorderRadius.zero;
+      return isLeft
+          ? const BorderRadius.only(
+              topLeft: Radius.circular(_chipRadius),
+              bottomLeft: Radius.circular(_chipRadius),
+            )
+          : const BorderRadius.only(
+              topRight: Radius.circular(_chipRadius),
+              bottomRight: Radius.circular(_chipRadius),
+            );
+    }
+
+    Widget chip(String label, bool isLeft, bool selected) {
+      final radius = chipRadius(selected, isLeft);
+      return Expanded(
+        child: GestureDetector(
+          onTap: () => onSortChanged(isLeft),
+          behavior: HitTestBehavior.opaque,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: selected ? selectedBg : Colors.transparent,
+              borderRadius: radius,
+            ),
+            child: Text(
+              label,
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.notoSansKr(
+                fontSize: 12,
+                height: 1,
+                fontWeight: selected ? FontWeight.w900 : FontWeight.w800,
+                color: selected ? Colors.white : dimLabel,
               ),
             ),
-          ),
-          Expanded(
-            child: GestureDetector(
-              onTap: () => onSortChanged(false),
-              behavior: HitTestBehavior.opaque,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                curve: Curves.easeOutCubic,
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: !sortByLikes ? _selectedBg : Colors.transparent,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  s.get('sortByLatest'),
-                  style: GoogleFonts.notoSansKr(
-                    fontSize: 13,
-                    fontWeight: !sortByLikes ? FontWeight.w700 : FontWeight.w400,
-                    color: !sortByLikes ? Colors.white : inactiveText,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// 별 1개 + 숫자 (4.5, 5.0 등)
-class _StarRow extends StatelessWidget {
-  const _StarRow({this.rating = 0, this.size = 16});
-
-  final double? rating;
-  final double size;
-
-  @override
-  Widget build(BuildContext context) {
-    final r = rating ?? 0.0;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(Icons.star_rounded, size: size, color: Colors.amber),
-        SizedBox(width: size * 0.25),
-        Text(
-          r.toStringAsFixed(1),
-          style: GoogleFonts.notoSansKr(
-            fontSize: size * 0.875,
-            fontWeight: FontWeight.w600,
-            color: Colors.amber,
           ),
         ),
-      ],
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+      child: SizedBox(
+        height: _barHeight,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: trackBg,
+            borderRadius: BorderRadius.circular(_trackRadius),
+            border: Border.all(color: trackBorder, width: 1),
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(_trackRadius),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                chip(s.get('sortByLikes'), true, sortByLikes),
+                chip(s.get('sortByLatest'), false, !sortByLikes),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -2729,7 +2741,7 @@ class _ReviewCardState extends State<_ReviewCard> {
       _localReplies.add(DramaReviewReply(
         author: author,
         text: text,
-        timeAgo: '방금 전',
+        timeAgo: widget.strings.get('timeAgoJustNow'),
         likeCount: 0,
         authorPhotoUrl: photoUrl,
       ));
@@ -2775,38 +2787,67 @@ class _ReviewCardState extends State<_ReviewCard> {
           children: [
             Row(
               children: [
-                _ReviewAvatar(
-                  review: review,
-                  isMine: widget.isMine,
-                ),
-                const SizedBox(width: 10),
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        review.userName,
-                        style: GoogleFonts.notoSansKr(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: Theme.of(context).colorScheme.onSurface,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {
+                      final u = review.authorUid?.trim();
+                      if (u != null && u.isNotEmpty) {
+                        openUserProfileFromAuthorUid(context, u);
+                      }
+                    },
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _ReviewAvatar(
+                          review: review,
+                          isMine: widget.isMine,
                         ),
-                      ),
-                      const SizedBox(height: 2),
-                      Row(
-                        children: [
-                          _StarRow(rating: review.rating, size: 14),
-                          const SizedBox(width: 8),
-                          Text(
-                            review.timeAgo,
-                            style: GoogleFonts.notoSansKr(
-                              fontSize: 11,
-                              color: Theme.of(context).colorScheme.onSurfaceVariant,
-                            ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                review.userName,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: GoogleFonts.notoSansKr(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: Theme.of(context).colorScheme.onSurface,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Row(
+                                children: [
+                                  GreenRatingStars(
+                                    rating: review.rating,
+                                    size: 14,
+                                    color: AppColors.ratingStar,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Flexible(
+                                    child: Text(
+                                      review.timeAgo,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: GoogleFonts.notoSansKr(
+                                        fontSize: 11,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
-                    ],
+                        ),
+                      ],
+                    ),
                   ),
                 ),
                 if (widget.isMine && (widget.onEdit != null || widget.onDelete != null))
@@ -3090,7 +3131,6 @@ class _SimilarSectionState extends State<_SimilarSection> {
             widget.genreDisplay,
             country,
             limit: 8,
-            maxScan: 700,
           );
           if (!mounted) return;
           setState(() {
@@ -3204,7 +3244,7 @@ class _SimilarSectionState extends State<_SimilarSection> {
                             child: Icon(
                               Icons.star_rounded,
                               size: 12,
-                              color: rating > 0 ? Colors.amber : colorScheme.onSurfaceVariant,
+                              color: rating > 0 ? AppColors.ratingStar : colorScheme.onSurfaceVariant,
                             ),
                           ),
                           const SizedBox(width: 2),

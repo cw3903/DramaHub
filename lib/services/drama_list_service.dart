@@ -6,7 +6,10 @@ import '../models/drama.dart';
 // ── isolate용 top-level 파싱 함수 ─────────────────────────────────────────────
 
 /// compute()가 보내는 결과 타입 (record)
-typedef _ParseResult = ({List<DramaItem> items, Map<String, DramaDetailData> extra});
+typedef _ParseResult = ({
+  List<DramaItem> items,
+  Map<String, DramaDetailData> extra,
+});
 
 /// JSON 문자열 → DramaItem 목록 + extra 맵. 별도 isolate에서 실행.
 _ParseResult _parseDramasIsolate(String json) {
@@ -14,8 +17,8 @@ _ParseResult _parseDramasIsolate(String json) {
   final List<dynamic> dramas = decoded is List<dynamic>
       ? decoded
       : (decoded is Map<String, dynamic>
-          ? (decoded['dramas'] as List<dynamic>? ?? [])
-          : []);
+            ? (decoded['dramas'] as List<dynamic>? ?? [])
+            : []);
 
   final items = <DramaItem>[];
   final extra = <String, DramaDetailData>{};
@@ -41,47 +44,58 @@ _ParseResult _parseDramasIsolate(String json) {
     final imgKo = map['thumbnailImageUrl_ko']?.toString().trim() ?? '';
     final imgEn = map['thumbnailImageUrl_en']?.toString().trim() ?? '';
     final imgJa = map['thumbnailImageUrl_ja']?.toString().trim() ?? '';
-    final imgDefault = (map['thumbnailImageUrl']?.toString().trim().isNotEmpty == true)
+    final imgDefault =
+        (map['thumbnailImageUrl']?.toString().trim().isNotEmpty == true)
         ? map['thumbnailImageUrl'].toString().trim()
         : (map['imageUrl']?.toString().trim().isNotEmpty == true)
-            ? map['imageUrl'].toString().trim()
-            : '';
+        ? map['imageUrl'].toString().trim()
+        : '';
     final defaultImageUrl = imgKo.isNotEmpty
         ? imgKo
-        : (imgDefault.isNotEmpty ? imgDefault : (imgEn.isNotEmpty ? imgEn : imgJa));
+        : (imgDefault.isNotEmpty
+              ? imgDefault
+              : (imgEn.isNotEmpty ? imgEn : imgJa));
 
-    final synopsis_ko = (map['synopsis_ko']?.toString().trim().isNotEmpty == true)
+    final synopsis_ko =
+        (map['synopsis_ko']?.toString().trim().isNotEmpty == true)
         ? map['synopsis_ko'].toString().trim()
         : (map['description_ko']?.toString().trim().isNotEmpty == true)
-            ? map['description_ko'].toString().trim()
-            : map['description']?.toString().trim() ?? '';
-    final synopsis_en = (map['synopsis_en']?.toString().trim().isNotEmpty == true)
+        ? map['description_ko'].toString().trim()
+        : map['description']?.toString().trim() ?? '';
+    final synopsis_en =
+        (map['synopsis_en']?.toString().trim().isNotEmpty == true)
         ? map['synopsis_en'].toString().trim()
         : map['description_en']?.toString().trim() ?? '';
-    final synopsis_ja = (map['synopsis_ja']?.toString().trim().isNotEmpty == true)
+    final synopsis_ja =
+        (map['synopsis_ja']?.toString().trim().isNotEmpty == true)
         ? map['synopsis_ja'].toString().trim()
         : map['description_ja']?.toString().trim() ?? '';
     final displaySynopsis = synopsis_ko.isNotEmpty
         ? synopsis_ko
         : (synopsis_en.isNotEmpty ? synopsis_en : synopsis_ja);
 
-    final episodes = _parseEpisodesIsolate(map['episodes'] ?? map['episode_count']);
+    final episodes = _parseEpisodesIsolate(
+      map['episodes'] ?? map['episode_count'],
+    );
     final releaseDate = _parseReleaseDateIsolate(map);
-    final cast = _parseCastIsolate(map['cast']) ??
+    final cast =
+        _parseCastIsolate(map['cast']) ??
         _parseCastIsolate(map['cast_en']) ??
         _parseCastIsolate(map['cast_ko']) ??
         <String>[];
 
-    items.add(DramaItem(
-      id: id,
-      title: title_ko.isNotEmpty ? title_ko : title_en,
-      subtitle: genre_ko.isNotEmpty ? genre_ko : genre_en,
-      views: '0',
-      rating: 0,
-      isPopular: false,
-      isNew: false,
-      imageUrl: defaultImageUrl.isNotEmpty ? defaultImageUrl : null,
-    ));
+    items.add(
+      DramaItem(
+        id: id,
+        title: title_ko.isNotEmpty ? title_ko : title_en,
+        subtitle: genre_ko.isNotEmpty ? genre_ko : genre_en,
+        views: '0',
+        rating: 0,
+        isPopular: false,
+        isNew: false,
+        imageUrl: defaultImageUrl.isNotEmpty ? defaultImageUrl : null,
+      ),
+    );
 
     extra[id] = DramaDetailData(
       synopsis: displaySynopsis,
@@ -97,9 +111,15 @@ _ParseResult _parseDramasIsolate(String json) {
       synopsis_ko: synopsis_ko.isNotEmpty ? synopsis_ko : null,
       synopsis_en: synopsis_en.isNotEmpty ? synopsis_en : null,
       synopsis_ja: synopsis_ja.isNotEmpty ? synopsis_ja : null,
-      imageUrl_ko: imgKo.isNotEmpty ? imgKo : (imgDefault.isNotEmpty ? imgDefault : null),
-      imageUrl_en: imgEn.isNotEmpty ? imgEn : (imgDefault.isNotEmpty ? imgDefault : null),
-      imageUrl_ja: imgJa.isNotEmpty ? imgJa : (imgDefault.isNotEmpty ? imgDefault : null),
+      imageUrl_ko: imgKo.isNotEmpty
+          ? imgKo
+          : (imgDefault.isNotEmpty ? imgDefault : null),
+      imageUrl_en: imgEn.isNotEmpty
+          ? imgEn
+          : (imgDefault.isNotEmpty ? imgDefault : null),
+      imageUrl_ja: imgJa.isNotEmpty
+          ? imgJa
+          : (imgDefault.isNotEmpty ? imgDefault : null),
       cast_ko: null,
       cast_en: null,
       releaseDate: releaseDate,
@@ -111,7 +131,14 @@ _ParseResult _parseDramasIsolate(String json) {
 
 DateTime? _parseReleaseDateIsolate(Map<String, dynamic> map) {
   // 소스별 필드 우선 (Vigloo > Dramabox > ReelShort), 없으면 레거시
-  final raw = map['release_date_vigloo'] ?? map['release_date_dramabox'] ?? map['release_date_reelshort'] ?? map['release_date'] ?? map['released_at'] ?? map['releaseDate'] ?? map['year'];
+  final raw =
+      map['release_date_vigloo'] ??
+      map['release_date_dramabox'] ??
+      map['release_date_reelshort'] ??
+      map['release_date'] ??
+      map['released_at'] ??
+      map['releaseDate'] ??
+      map['year'];
   if (raw == null) return null;
   if (raw is num) {
     final y = raw.toInt();
@@ -130,29 +157,45 @@ DateTime? _parseReleaseDateIsolate(Map<String, dynamic> map) {
 List<String>? _parseCastIsolate(dynamic value) {
   if (value == null) return null;
   if (value is List) {
-    return value.map((e) => e.toString().trim()).where((s) => s.isNotEmpty).toList();
+    return value
+        .map((e) => e.toString().trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
   }
   if (value is String) {
     return value.isEmpty
         ? <String>[]
-        : value.split(',').map((e) => e.trim()).where((s) => s.isNotEmpty).toList();
+        : value
+              .split(',')
+              .map((e) => e.trim())
+              .where((s) => s.isNotEmpty)
+              .toList();
   }
   return null;
 }
 
 List<DramaEpisode> _parseEpisodesIsolate(dynamic value) {
   if (value == null) {
-    return List.generate(12, (i) => DramaEpisode(number: i + 1, title: '${i + 1}화', duration: '45분'));
+    return List.generate(
+      12,
+      (i) => DramaEpisode(number: i + 1, title: '${i + 1}화', duration: '45분'),
+    );
   }
   if (value is num) {
     final n = value.toInt();
     if (n <= 0) return [];
-    return List.generate(n, (i) => DramaEpisode(number: i + 1, title: '${i + 1}화', duration: '45분'));
+    return List.generate(
+      n,
+      (i) => DramaEpisode(number: i + 1, title: '${i + 1}화', duration: '45분'),
+    );
   }
   if (value is String) {
     final n = int.tryParse(value.trim());
     if (n != null && n > 0) {
-      return List.generate(n, (i) => DramaEpisode(number: i + 1, title: '${i + 1}화', duration: '45분'));
+      return List.generate(
+        n,
+        (i) => DramaEpisode(number: i + 1, title: '${i + 1}화', duration: '45분'),
+      );
     }
   }
   if (value is List) {
@@ -163,10 +206,17 @@ List<DramaEpisode> _parseEpisodesIsolate(dynamic value) {
         final title = v['title']?.toString() ?? '${epNum}화';
         return DramaEpisode(number: epNum, title: title, duration: '45분');
       }
-      return DramaEpisode(number: e.key + 1, title: '${e.key + 1}화', duration: '45분');
+      return DramaEpisode(
+        number: e.key + 1,
+        title: '${e.key + 1}화',
+        duration: '45분',
+      );
     }).toList();
   }
-  return List.generate(12, (i) => DramaEpisode(number: i + 1, title: '${i + 1}화', duration: '45분'));
+  return List.generate(
+    12,
+    (i) => DramaEpisode(number: i + 1, title: '${i + 1}화', duration: '45분'),
+  );
 }
 
 /// JSON에서 로드한 드라마별 상세 데이터 + 언어별 제목·장르·시놉시스·이미지 URL
@@ -185,12 +235,12 @@ class DramaDetailData {
     this.synopsis_ko,
     this.synopsis_en,
     this.synopsis_ja,
-  this.imageUrl_ko,
-  this.imageUrl_en,
-  this.imageUrl_ja,
-  this.cast_ko,
-  this.cast_en,
-  this.releaseDate,
+    this.imageUrl_ko,
+    this.imageUrl_en,
+    this.imageUrl_ja,
+    this.cast_ko,
+    this.cast_en,
+    this.releaseDate,
   });
   final String synopsis;
   final String genre;
@@ -205,12 +255,14 @@ class DramaDetailData {
   final String? synopsis_ko;
   final String? synopsis_en;
   final String? synopsis_ja;
+
   /// 국가별 썸네일 이미지 URL
   final String? imageUrl_ko;
   final String? imageUrl_en;
   final String? imageUrl_ja;
   final List<String>? cast_ko;
   final List<String>? cast_en;
+
   /// 공개/출시일 (최신순 정렬용). JSON에 release_date, released_at, year 등 있으면 파싱.
   final DateTime? releaseDate;
 }
@@ -226,8 +278,10 @@ class DramaListService {
 
   static const String _assetPath = 'assets/data/dramas.json';
 
-  final ValueNotifier<List<DramaItem>> listNotifier = ValueNotifier<List<DramaItem>>([]);
-  final ValueNotifier<Map<String, DramaDetailData>> extraNotifier = ValueNotifier<Map<String, DramaDetailData>>({});
+  final ValueNotifier<List<DramaItem>> listNotifier =
+      ValueNotifier<List<DramaItem>>([]);
+  final ValueNotifier<Map<String, DramaDetailData>> extraNotifier =
+      ValueNotifier<Map<String, DramaDetailData>>({});
 
   List<DramaItem> get list => listNotifier.value;
   Map<String, DramaDetailData> get extraById => extraNotifier.value;
@@ -246,7 +300,9 @@ class DramaListService {
       listNotifier.value = result.items;
       extraNotifier.value = result.extra;
       _loaded = true;
-      debugPrint('DramaListService: ${result.items.length}편 로드됨');
+      if (kDebugMode) {
+        debugPrint('DramaListService: ${result.items.length}편 로드됨');
+      }
     } catch (e, st) {
       debugPrint('DramaListService loadFromAsset error: $e');
       debugPrint('$st');
@@ -265,9 +321,12 @@ class DramaListService {
     final extra = extraNotifier.value[id];
     if (extra == null) return '';
     final c = country?.toLowerCase();
-    if (c == 'kr') return extra.title_ko ?? extra.title_en ?? extra.title_ja ?? '';
-    if (c == 'jp') return extra.title_ja ?? extra.title_en ?? extra.title_ko ?? '';
-    if (c != null) return extra.title_en ?? extra.title_ko ?? extra.title_ja ?? '';
+    if (c == 'kr')
+      return extra.title_ko ?? extra.title_en ?? extra.title_ja ?? '';
+    if (c == 'jp')
+      return extra.title_ja ?? extra.title_en ?? extra.title_ko ?? '';
+    if (c != null)
+      return extra.title_en ?? extra.title_ko ?? extra.title_ja ?? '';
     // country 미로드: 한국어 우선
     return extra.title_ko ?? extra.title_en ?? extra.title_ja ?? '';
   }
@@ -277,9 +336,12 @@ class DramaListService {
     final extra = extraNotifier.value[id];
     if (extra == null) return '';
     final c = country?.toLowerCase();
-    if (c == 'kr') return extra.genre_ko ?? extra.genre_en ?? extra.genre_ja ?? extra.genre;
-    if (c == 'jp') return extra.genre_ja ?? extra.genre_en ?? extra.genre_ko ?? extra.genre;
-    if (c != null) return extra.genre_en ?? extra.genre_ko ?? extra.genre_ja ?? extra.genre;
+    if (c == 'kr')
+      return extra.genre_ko ?? extra.genre_en ?? extra.genre_ja ?? extra.genre;
+    if (c == 'jp')
+      return extra.genre_ja ?? extra.genre_en ?? extra.genre_ko ?? extra.genre;
+    if (c != null)
+      return extra.genre_en ?? extra.genre_ko ?? extra.genre_ja ?? extra.genre;
     return extra.genre_ko ?? extra.genre_en ?? extra.genre_ja ?? extra.genre;
   }
 
@@ -319,10 +381,25 @@ class DramaListService {
     final extra = extraNotifier.value[id];
     if (extra == null) return '';
     final c = country?.toLowerCase();
-    if (c == 'kr') return extra.synopsis_ko ?? extra.synopsis_en ?? extra.synopsis_ja ?? extra.synopsis;
-    if (c == 'jp') return extra.synopsis_ja ?? extra.synopsis_en ?? extra.synopsis_ko ?? extra.synopsis;
-    if (c != null) return extra.synopsis_en ?? extra.synopsis_ko ?? extra.synopsis_ja ?? extra.synopsis;
-    return extra.synopsis_ko ?? extra.synopsis_en ?? extra.synopsis_ja ?? extra.synopsis;
+    if (c == 'kr')
+      return extra.synopsis_ko ??
+          extra.synopsis_en ??
+          extra.synopsis_ja ??
+          extra.synopsis;
+    if (c == 'jp')
+      return extra.synopsis_ja ??
+          extra.synopsis_en ??
+          extra.synopsis_ko ??
+          extra.synopsis;
+    if (c != null)
+      return extra.synopsis_en ??
+          extra.synopsis_ko ??
+          extra.synopsis_ja ??
+          extra.synopsis;
+    return extra.synopsis_ko ??
+        extra.synopsis_en ??
+        extra.synopsis_ja ??
+        extra.synopsis;
   }
 
   /// 가입 국가에 따라 표시할 썸네일 이미지 URL.
@@ -331,9 +408,12 @@ class DramaListService {
     final extra = extraNotifier.value[id];
     if (extra == null) return null;
     final c = country?.toLowerCase();
-    if (c == 'kr') return extra.imageUrl_ko ?? extra.imageUrl_en ?? extra.imageUrl_ja;
-    if (c == 'jp') return extra.imageUrl_ja ?? extra.imageUrl_en ?? extra.imageUrl_ko;
-    if (c != null) return extra.imageUrl_en ?? extra.imageUrl_ko ?? extra.imageUrl_ja;
+    if (c == 'kr')
+      return extra.imageUrl_ko ?? extra.imageUrl_en ?? extra.imageUrl_ja;
+    if (c == 'jp')
+      return extra.imageUrl_ja ?? extra.imageUrl_en ?? extra.imageUrl_ko;
+    if (c != null)
+      return extra.imageUrl_en ?? extra.imageUrl_ko ?? extra.imageUrl_ja;
     // country 미로드: 한국어 우선
     return extra.imageUrl_ko ?? extra.imageUrl_en ?? extra.imageUrl_ja;
   }
@@ -362,32 +442,91 @@ class DramaListService {
     return title;
   }
 
+  static void _addGenreTokens(Set<String> target, String? raw) {
+    if (raw == null) return;
+    final s = raw.trim();
+    if (s.isEmpty) return;
+    for (final part in s.split(RegExp(r'[·,]'))) {
+      final t = part.trim().toLowerCase();
+      if (t.isNotEmpty) target.add(t);
+    }
+  }
+
+  /// 현재 작품의 장르 토큰: 상세 [genreDisplay] + JSON의 언어별 장르(교차 언어 매칭).
+  Set<String> _similarGenreTagsForDrama(String excludeId, String genreDisplay) {
+    final tags = <String>{};
+    _addGenreTokens(tags, genreDisplay);
+    final ex = getExtra(excludeId);
+    if (ex != null) {
+      _addGenreTokens(tags, ex.genre_ko);
+      _addGenreTokens(tags, ex.genre_en);
+      _addGenreTokens(tags, ex.genre_ja);
+      _addGenreTokens(tags, ex.genre);
+    }
+    return tags;
+  }
+
+  /// 비슷한 작품이 하나도 없을 때: 같은 국가 피드에서 최신순으로 채움.
+  List<DramaItem> _similarRecentFallback(
+    String excludeId,
+    String? country,
+    int limit,
+  ) {
+    final sorted = getListForCountrySortedByReleaseDate(country);
+    final out = <DramaItem>[];
+    for (final item in sorted) {
+      if (item.id == excludeId) continue;
+      out.add(item);
+      if (out.length >= limit) break;
+    }
+    return out;
+  }
+
+  /// 후보 작품의 표시 부제 + JSON 장르 토큰 중 [needle]과 겹치는지.
+  bool _dramaSharesGenreToken(
+    DramaItem item,
+    String? country,
+    Set<String> needle,
+  ) {
+    if (needle.isEmpty) return false;
+    final other = <String>{};
+    _addGenreTokens(other, getDisplaySubtitle(item.id, country));
+    final ox = getExtra(item.id);
+    if (ox != null) {
+      _addGenreTokens(other, ox.genre_ko);
+      _addGenreTokens(other, ox.genre_en);
+      _addGenreTokens(other, ox.genre_ja);
+      _addGenreTokens(other, ox.genre);
+    }
+    return other.any(needle.contains);
+  }
+
   /// 같은 장르(부제)를 가진 드라마 목록. [excludeId] 제외, 최대 [limit]개.
-  /// [genreDisplay]는 getDisplaySubtitle으로 얻은 장르 문자열(예: "로맨스·반전·사이다").
-  /// [maxScan]: 후보를 너무 많이 돌면 탭 지연이 커져 상한(기본 700)으로 자름.
+  /// [genreDisplay]는 상세의 장르 문자열(예: "로맨스·반전·사이다").
+  /// 토큰이 겹치는 작품이 없으면(희귀 장르 등) 같은 국가 피드 **최신순**으로 채움.
   List<DramaItem> getSimilarByGenre(
     String excludeId,
     String genreDisplay,
     String? country, {
     int limit = 8,
-    int maxScan = 700,
   }) {
-    if (genreDisplay.trim().isEmpty) return [];
-    final tags = genreDisplay.split(RegExp(r'[·,]')).map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
-    if (tags.isEmpty) return [];
     final candidates = getListForCountry(country);
+    final tags = _similarGenreTagsForDrama(excludeId, genreDisplay);
+    if (tags.isEmpty) {
+      return _similarRecentFallback(excludeId, country, limit);
+    }
     final result = <DramaItem>[];
-    var scanned = 0;
     for (final item in candidates) {
       if (item.id == excludeId) continue;
       if (result.length >= limit) break;
-      if (scanned >= maxScan) break;
-      scanned++;
-      final otherGenre = getDisplaySubtitle(item.id, country);
-      final otherTags = otherGenre.split(RegExp(r'[·,]')).map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty);
-      if (otherTags.any((t) => tags.contains(t))) result.add(item);
+      if (_dramaSharesGenreToken(item, country, tags)) {
+        result.add(item);
+      }
     }
-    return result;
+    if (result.isNotEmpty) {
+      return result;
+    }
+    return _similarRecentFallback(excludeId, country, limit);
   }
 
   /// 시놉시스 아래 장르·태그 토큰(예: "Twist", "반전")과 동일한 토큰이 부제에 포함된 작품만.
@@ -426,13 +565,26 @@ class DramaListService {
         : (extra?.genre ?? item.subtitle);
     final displaySynopsis = getDisplaySynopsis(item.id, country);
     final fallbackSynopsis = '${item.title}의 줄거리입니다.';
-    final episodes = extra?.episodes ?? List.generate(12, (i) => DramaEpisode(number: i + 1, title: '에피소드 ${i + 1}', duration: '45분'));
+    final episodes =
+        extra?.episodes ??
+        List.generate(
+          12,
+          (i) => DramaEpisode(
+            number: i + 1,
+            title: '에피소드 ${i + 1}',
+            duration: '45분',
+          ),
+        );
     final cast = extra?.cast ?? const [];
     return DramaDetail(
       item: item,
-      synopsis: displaySynopsis.isNotEmpty ? displaySynopsis : (extra?.synopsis ?? fallbackSynopsis),
+      synopsis: displaySynopsis.isNotEmpty
+          ? displaySynopsis
+          : (extra?.synopsis ?? fallbackSynopsis),
       year: '2024',
-      genre: displayGenre.isNotEmpty ? displayGenre : (extra?.genre ?? item.subtitle),
+      genre: displayGenre.isNotEmpty
+          ? displayGenre
+          : (extra?.genre ?? item.subtitle),
       averageRating: 0,
       ratingCount: 0,
       reviews: const [],

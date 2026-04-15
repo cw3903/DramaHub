@@ -30,6 +30,7 @@ class QuestionBoardTab extends StatefulWidget {
     this.feedScrollController,
     this.feedLoadingMore = false,
     this.feedHasMore = true,
+    this.feedAuthorAvatarSize,
   });
 
   final List<Post> posts;
@@ -47,6 +48,7 @@ class QuestionBoardTab extends StatefulWidget {
   final ScrollController? feedScrollController;
   final bool feedLoadingMore;
   final bool feedHasMore;
+  final double? feedAuthorAvatarSize;
 
   @override
   State<QuestionBoardTab> createState() => _QuestionBoardTabState();
@@ -182,12 +184,17 @@ class _QuestionBoardTabState extends State<QuestionBoardTab> {
         physics: widget.shrinkWrap ? const NeverScrollableScrollPhysics() : const AlwaysScrollableScrollPhysics(),
         padding: EdgeInsets.fromLTRB(24, 48, 24, bottom),
         children: [
-          const SizedBox(height: 8),
-          Icon(LucideIcons.message_circle, size: 56, color: cs.onSurface.withOpacity(0.18)),
-          const SizedBox(height: 20),
-          Text('아직 질문이 없어요', textAlign: TextAlign.center, style: GoogleFonts.notoSansKr(fontSize: 16, fontWeight: FontWeight.w600, color: cs.onSurface)),
-          const SizedBox(height: 8),
-          Text('첫 번째 질문을 남겨보세요!', textAlign: TextAlign.center, style: GoogleFonts.notoSansKr(fontSize: 13, color: cs.onSurface.withOpacity(0.45), height: 1.5)),
+          const SizedBox(height: 24),
+          Center(
+            child: SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: cs.primary,
+              ),
+            ),
+          ),
         ],
       ));
     }
@@ -213,6 +220,7 @@ class _QuestionBoardTabState extends State<QuestionBoardTab> {
               tabName: tabName,
               onTap: widget.onPostTap != null ? () => widget.onPostTap!(post) : null,
               onUserBlocked: widget.onUserBlocked,
+              authorAvatarSize: widget.feedAuthorAvatarSize,
             ),
           );
         }
@@ -300,23 +308,17 @@ class _QuestionBoardTabState extends State<QuestionBoardTab> {
           physics: widget.shrinkWrap ? const NeverScrollableScrollPhysics() : const AlwaysScrollableScrollPhysics(),
           padding: EdgeInsets.fromLTRB(24, 48, 24, bottom),
           children: [
-            const SizedBox(height: 8),
-            Icon(LucideIcons.message_circle,
-                size: 56, color: cs.onSurface.withOpacity(0.18)),
-            const SizedBox(height: 20),
-            Text('아직 질문이 없어요',
-                textAlign: TextAlign.center,
-                style: GoogleFonts.notoSansKr(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: cs.onSurface)),
-            const SizedBox(height: 8),
-            Text('첫 번째 질문을 남겨보세요!',
-                textAlign: TextAlign.center,
-                style: GoogleFonts.notoSansKr(
-                    fontSize: 13,
-                    color: cs.onSurface.withOpacity(0.45),
-                    height: 1.5)),
+            const SizedBox(height: 24),
+            Center(
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: cs.primary,
+                ),
+              ),
+            ),
           ],
         );
       return widget.enablePullToRefresh
@@ -358,6 +360,7 @@ class _QuestionBoardTabState extends State<QuestionBoardTab> {
             tabName: tabName,
             onTap: widget.onPostTap != null ? () => widget.onPostTap!(post) : null,
             onUserBlocked: widget.onUserBlocked,
+            authorAvatarSize: widget.feedAuthorAvatarSize,
             ),
           );
         }

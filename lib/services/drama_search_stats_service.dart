@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 enum SearchStatsPeriod {
   /// 지난 24시간 (현재 시각 기준)
   day,
+
   /// 지난 7일 (현재 시각 기준)
   week,
   month,
@@ -61,9 +62,13 @@ class DramaSearchStatsService {
       final ref = _firestore.collection(_collection).doc(docId);
       await ref.update({'clicks.$dramaId': FieldValue.increment(1)});
     } catch (e) {
-      if (e.toString().contains('NOT_FOUND') || e.toString().contains('no document')) {
+      if (e.toString().contains('NOT_FOUND') ||
+          e.toString().contains('no document')) {
         final ref = _firestore.collection(_collection).doc(docId);
-        await ref.set({'clicks': {dramaId: 1}, 'searches': {}}, SetOptions(merge: true));
+        await ref.set({
+          'clicks': {dramaId: 1},
+          'searches': {},
+        }, SetOptions(merge: true));
       } else {
         debugPrint('DramaSearchStatsService incrementClick ERROR: $e');
       }
@@ -77,7 +82,6 @@ class DramaSearchStatsService {
     await Future.wait(
       _writeDocIds(now).map((docId) => _incrementClickOneDoc(docId, dramaId)),
     );
-    debugPrint('DramaSearchStatsService incrementClick: $dramaId');
   }
 
   Future<void> _incrementSearchOneDoc(String docId, List<String> ids) async {
@@ -89,13 +93,17 @@ class DramaSearchStatsService {
       }
       await ref.update(updates);
     } catch (e) {
-      if (e.toString().contains('NOT_FOUND') || e.toString().contains('no document')) {
+      if (e.toString().contains('NOT_FOUND') ||
+          e.toString().contains('no document')) {
         final ref = _firestore.collection(_collection).doc(docId);
         final searches = <String, dynamic>{};
         for (final id in ids) {
           searches[id] = 1;
         }
-        await ref.set({'clicks': {}, 'searches': searches}, SetOptions(merge: true));
+        await ref.set({
+          'clicks': {},
+          'searches': searches,
+        }, SetOptions(merge: true));
       } else {
         debugPrint('DramaSearchStatsService incrementSearch ERROR: $e');
       }
@@ -111,19 +119,28 @@ class DramaSearchStatsService {
     await Future.wait(
       _writeDocIds(now).map((docId) => _incrementSearchOneDoc(docId, ids)),
     );
-    debugPrint('DramaSearchStatsService incrementSearch: ${ids.length} dramas');
   }
 
   /// 한 문서에서 클릭/검색 맵 파싱 후 scores에 합산
-  void _mergeDocInto(Map<String, int> clicks, Map<String, int> searches, Map<String, dynamic>? data) {
+  void _mergeDocInto(
+    Map<String, int> clicks,
+    Map<String, int> searches,
+    Map<String, dynamic>? data,
+  ) {
     if (data == null) return;
-    final c = data['clicks'] is Map ? data['clicks'] as Map<String, dynamic> : <String, dynamic>{};
-    final s = data['searches'] is Map ? data['searches'] as Map<String, dynamic> : <String, dynamic>{};
+    final c = data['clicks'] is Map
+        ? data['clicks'] as Map<String, dynamic>
+        : <String, dynamic>{};
+    final s = data['searches'] is Map
+        ? data['searches'] as Map<String, dynamic>
+        : <String, dynamic>{};
     for (final e in c.entries) {
-      if (e.value is num) clicks[e.key] = (clicks[e.key] ?? 0) + (e.value as num).toInt();
+      if (e.value is num)
+        clicks[e.key] = (clicks[e.key] ?? 0) + (e.value as num).toInt();
     }
     for (final e in s.entries) {
-      if (e.value is num) searches[e.key] = (searches[e.key] ?? 0) + (e.value as num).toInt();
+      if (e.value is num)
+        searches[e.key] = (searches[e.key] ?? 0) + (e.value as num).toInt();
     }
   }
 
@@ -135,7 +152,9 @@ class DramaSearchStatsService {
   }) async {
     try {
       final now = DateTime.now();
-      final getOpt = fromServer ? const GetOptions(source: Source.server) : null;
+      final getOpt = fromServer
+          ? const GetOptions(source: Source.server)
+          : null;
 
       if (period == SearchStatsPeriod.day) {
         final ids = _last24HourDocIds(now);
@@ -152,7 +171,8 @@ class DramaSearchStatsService {
         for (final id in allIds) {
           scores[id] = (searches[id] ?? 0) * 1 + (clicks[id] ?? 0) * 2;
         }
-        final sorted = scores.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+        final sorted = scores.entries.toList()
+          ..sort((a, b) => b.value.compareTo(a.value));
         return sorted.take(limit).map((e) => e.key).toList();
       }
 
@@ -171,19 +191,26 @@ class DramaSearchStatsService {
         for (final id in allIds) {
           scores[id] = (searches[id] ?? 0) * 1 + (clicks[id] ?? 0) * 2;
         }
-        final sorted = scores.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+        final sorted = scores.entries.toList()
+          ..sort((a, b) => b.value.compareTo(a.value));
         return sorted.take(limit).map((e) => e.key).toList();
       }
 
       // month / year: 1문서
-      final docId = period == SearchStatsPeriod.month ? _monthKey(now) : _yearKey(now);
+      final docId = period == SearchStatsPeriod.month
+          ? _monthKey(now)
+          : _yearKey(now);
       final ref = _firestore.collection(_collection).doc(docId);
       final snap = getOpt != null ? await ref.get(getOpt) : await ref.get();
       final data = snap.data();
       if (data == null) return [];
 
-      final clicks = data['clicks'] is Map ? data['clicks'] as Map<String, dynamic> : <String, dynamic>{};
-      final searches = data['searches'] is Map ? data['searches'] as Map<String, dynamic> : <String, dynamic>{};
+      final clicks = data['clicks'] is Map
+          ? data['clicks'] as Map<String, dynamic>
+          : <String, dynamic>{};
+      final searches = data['searches'] is Map
+          ? data['searches'] as Map<String, dynamic>
+          : <String, dynamic>{};
       final allIds = <String>{...clicks.keys, ...searches.keys};
       final scores = <String, int>{};
       for (final id in allIds) {
@@ -191,7 +218,8 @@ class DramaSearchStatsService {
         final s = (searches[id] is num) ? (searches[id] as num).toInt() : 0;
         scores[id] = s * 1 + c * 2;
       }
-      final sorted = scores.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+      final sorted = scores.entries.toList()
+        ..sort((a, b) => b.value.compareTo(a.value));
       return sorted.take(limit).map((e) => e.key).toList();
     } catch (e) {
       debugPrint('DramaSearchStatsService getTopDramaIds ERROR: $e');

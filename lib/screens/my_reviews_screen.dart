@@ -1,5 +1,6 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../models/drama.dart';
@@ -8,15 +9,15 @@ import '../services/auth_service.dart';
 import '../services/drama_list_service.dart';
 import '../services/user_profile_service.dart';
 import '../utils/format_utils.dart';
-import '../widgets/app_bar_back_icon_button.dart';
 import '../widgets/country_scope.dart';
+import '../widgets/lists_style_subpage_app_bar.dart';
 import '../widgets/optimized_network_image.dart';
 import 'drama_detail_page.dart';
 
 /// 프로필 내 리뷰 목록 기본 — Letterboxd 스타일 녹색 별(레거시).
 /// 즐겨찾기 작품 상세 등에서는 [filledColor]·[interStarGap]·[size]로 앱 공통 노랑 별로 바꿀 수 있음.
-const Color _kMyReviewsListStarGreen = Color(0xFF00C46C);
-const Color _kMyReviewsListStarYellow = Color(0xFFFFC107);
+const Color _kMyReviewsListStarGreen = Color(0xFFFFB020);
+const Color _kMyReviewsListStarYellow = Color(0xFFFFB020);
 
 String? _posterUrlForMyReview(MyReviewItem item, String? country) {
   final id = item.dramaId.trim();
@@ -103,8 +104,10 @@ class _MyReviewsScreenState extends State<MyReviewsScreen> {
   @override
   void initState() {
     super.initState();
-    ReviewService.instance.refresh();
-    DramaListService.instance.loadFromAsset();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ReviewService.instance.refresh();
+      DramaListService.instance.loadFromAsset();
+    });
   }
 
   void _openSortSheet(BuildContext context, dynamic s) {
@@ -182,38 +185,42 @@ class _MyReviewsScreenState extends State<MyReviewsScreen> {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
 
-    return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
-      appBar: AppBar(
-        toolbarHeight: kToolbarHeight,
-        centerTitle: true,
-        title: Text(
-          s.get('tabReviews'),
-          style: GoogleFonts.notoSansKr(
-            fontWeight: FontWeight.w700,
-            fontSize: 16,
-            letterSpacing: 0.12,
-          ),
-        ),
+    final headerBg = listsStyleSubpageHeaderBackground(theme);
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: listsStyleSubpageSystemOverlay(theme, headerBg),
+      child: Scaffold(
         backgroundColor: theme.scaffoldBackgroundColor,
-        elevation: 0,
-        leading: AppBarBackIconButton(
-          onPressed: () => Navigator.pop(context),
-        ),
-        actions: [
-          IconButton(
-            icon: Icon(LucideIcons.sliders_horizontal, color: cs.onSurface),
-            tooltip: s.get('myReviewsSortTitle'),
-            onPressed: () => _openSortSheet(context, s),
+        appBar: PreferredSize(
+          preferredSize: ListsStyleSubpageHeaderBar.preferredSizeOf(context),
+          child: ListsStyleSubpageHeaderBar(
+            title: s.get('tabReviews'),
+            onBack: () => popListsStyleSubpage(context),
+            trailing: Tooltip(
+              message: s.get('myReviewsSortTitle'),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: () => _openSortSheet(context, s),
+                  child: Padding(
+                    padding: const EdgeInsets.all(6),
+                    child: Icon(
+                      LucideIcons.sliders_horizontal,
+                      size: 18,
+                      color: cs.onSurfaceVariant.withValues(alpha: 0.78),
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ),
-        ],
-      ),
-      body: ListenableBuilder(
-        listenable: Listenable.merge([
-          ReviewService.instance.listNotifier,
-          DramaListService.instance.extraNotifier,
-        ]),
-        builder: (context, _) {
+        ),
+        body: ListenableBuilder(
+          listenable: Listenable.merge([
+            ReviewService.instance.listNotifier,
+            DramaListService.instance.extraNotifier,
+          ]),
+          builder: (context, _) {
           final raw = ReviewService.instance.listNotifier.value;
           if (raw.isEmpty) {
             return Center(
@@ -279,6 +286,7 @@ class _MyReviewsScreenState extends State<MyReviewsScreen> {
             },
           );
         },
+        ),
       ),
     );
   }
@@ -442,6 +450,7 @@ DramaDetail _detailFromReview(BuildContext context, MyReviewItem item) {
     likeCount: 0,
     replies: const [],
     writtenAt: item.writtenAt,
+    authorUid: AuthService.instance.currentUser.value?.uid,
   );
   final reviews = [myReview];
   final episodes = [
@@ -642,7 +651,7 @@ class LetterboxdMyReviewTile extends StatelessWidget {
                 rating: r,
                 size: starSize ?? 16,
                 interStarGap: starInterGap ?? 0,
-                filledColor: starFilledColor ?? const Color(0xFFFFC107),
+                filledColor: starFilledColor ?? const Color(0xFFFFB020),
                 glyphOverlap: 3,
               );
 

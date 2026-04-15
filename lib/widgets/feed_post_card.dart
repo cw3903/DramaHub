@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:collection';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -20,7 +21,7 @@ import '../screens/post_detail_page.dart';
 import '../screens/write_post_page.dart';
 import '../screens/message_thread_screen.dart';
 import '../screens/user_posts_screen.dart';
-import '../screens/user_comments_screen.dart';
+import '../widgets/user_profile_nav.dart';
 import '../screens/full_screen_video_page.dart';
 import '../services/message_service.dart';
 import '../services/home_tab_visibility.dart';
@@ -29,6 +30,9 @@ import 'package:cached_network_image/cached_network_image.dart';
 
 /// 피드 하단 메타(댓글·조회수) 색 - 투표박스 0일 때와 동일
 const _feedMetaGray = Color(0xFFADADAD);
+
+/// 톡·에스크: 하트–숫자, 댓글아이콘–숫자 간격 동일
+const double talkAskIconCountGap = 4;
 
 /// 피드 영상 캐시: 탭 시 consume으로 재사용. preload는 피드에서 호출하지 않음(동영상 글 많을 때 무거워짐 방지).
 class VideoPreloadCache {
@@ -89,6 +93,8 @@ class FeedPostCard extends StatefulWidget {
     this.tabName,
     this.onTap,
     this.onUserBlocked,
+    /// null이면 톡/에스크 33·그 외 38. 글 상세 DramaFeed 등에서 통일할 때 지정.
+    this.authorAvatarSize,
   });
 
   final Post post;
@@ -97,8 +103,12 @@ class FeedPostCard extends StatefulWidget {
   final void Function(Post)? onPostDeleted;
   final String? tabName;
   final VoidCallback? onTap;
+
   /// 차단 시 피드 갱신용
   final VoidCallback? onUserBlocked;
+
+  /// 상단 작성자 원형 아바타 직경
+  final double? authorAvatarSize;
 
   @override
   State<FeedPostCard> createState() => _FeedPostCardState();
@@ -109,11 +119,26 @@ class _FeedPostCardState extends State<FeedPostCard> {
   late int _displayCount;
   bool _votePending = false;
 
+  // 톡·에스크 하트: 디바운스 타이머 (연속 탭 시 UI는 즉시, 네트워크는 한 번만)
+  Timer? _talkAskDebounce;
+  int _pendingVoteTarget = 0; // 디바운스 시간 내 최종 목표 voteState
+
+  bool get _isTalkOrAsk {
+    final b = postDisplayType(widget.post);
+    return b == 'talk' || b == 'ask';
+  }
+
   @override
   void initState() {
     super.initState();
-    _displayCount = widget.post.votes;
+    _displayCount = _isTalkOrAsk ? widget.post.likeCount : widget.post.votes;
     _syncVoteStateFromPost();
+  }
+
+  @override
+  void dispose() {
+    _talkAskDebounce?.cancel();
+    super.dispose();
   }
 
   @override
@@ -125,7 +150,7 @@ class _FeedPostCardState extends State<FeedPostCard> {
             oldWidget.post.votes != widget.post.votes ||
             oldWidget.post.likeCount != widget.post.likeCount ||
             oldWidget.post.dislikeCount != widget.post.dislikeCount)) {
-      _displayCount = widget.post.votes;
+      _displayCount = _isTalkOrAsk ? widget.post.likeCount : widget.post.votes;
       _syncVoteStateFromPost();
     }
   }
@@ -134,15 +159,62 @@ class _FeedPostCardState extends State<FeedPostCard> {
     final uid = AuthService.instance.currentUser.value?.uid;
     final liked = uid != null && widget.post.likedBy.contains(uid);
     final disliked = uid != null && widget.post.dislikedBy.contains(uid);
-    final newState = liked ? 1 : disliked ? -1 : 0;
+    final newState = liked
+        ? 1
+        : disliked
+        ? -1
+        : 0;
     if (_voteState != newState) setState(() => _voteState = newState);
   }
 
   Future<void> _onUpTap() async {
     if (!AuthService.instance.isLoggedIn.value) {
-      await Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginPage()));
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginPage()),
+      );
       return;
     }
+
+    // 톡·에스크: UI 즉시 반전 + 디바운스로 네트워크 한 번만 호출
+    if (_isTalkOrAsk) {
+      HapticFeedback.lightImpact();
+      final nowLiked = _voteState != 1;
+      setState(() {
+        if (nowLiked) {
+          _voteState = 1;
+          _displayCount += 1;
+        } else {
+          _voteState = 0;
+          _displayCount -= 1;
+        }
+      });
+      _pendingVoteTarget = _voteState;
+      _talkAskDebounce?.cancel();
+      final snapState = _voteState;
+      final snapCount = _displayCount;
+      final prevVoteForNet =
+          nowLiked ? 0 : 1; // 디바운스 시점 직전 상태 (서버 반영 기준)
+      _talkAskDebounce = Timer(const Duration(milliseconds: 350), () async {
+        if (!mounted) return;
+        final result = await PostService.instance.togglePostLike(
+          widget.post.id,
+          currentVoteState: prevVoteForNet,
+          postAuthorUid: widget.post.authorUid,
+          postTitle: widget.post.title,
+        );
+        if (!mounted) return;
+        if (result == null) {
+          setState(() {
+            _voteState = prevVoteForNet;
+            _displayCount = snapCount + (nowLiked ? -1 : 1);
+          });
+        }
+      });
+      return;
+    }
+
+    // 일반 탭 (리뷰 등): 기존 _votePending 방식 유지
     if (_votePending) return;
     HapticFeedback.lightImpact();
     final prevState = _voteState;
@@ -151,28 +223,37 @@ class _FeedPostCardState extends State<FeedPostCard> {
     setState(() {
       _votePending = true;
       if (nowLiked) {
-        _displayCount += (prevState == -1 ? 2 : 1);
+        _displayCount += prevState == -1 ? 2 : 1;
         _voteState = 1;
       } else {
         _voteState = 0;
         _displayCount -= 1;
       }
     });
-    PostService.instance.togglePostLike(
-      widget.post.id,
-      currentVoteState: prevState,
-      postAuthorUid: widget.post.authorUid,
-      postTitle: widget.post.title,
-    ).then((result) {
-      if (!mounted) return;
-      if (result == null) setState(() { _voteState = prevState; _displayCount = prevCount; });
-      if (mounted) setState(() => _votePending = false);
-    });
+    PostService.instance
+        .togglePostLike(
+          widget.post.id,
+          currentVoteState: prevState,
+          postAuthorUid: widget.post.authorUid,
+          postTitle: widget.post.title,
+        )
+        .then((result) {
+          if (!mounted) return;
+          if (result == null)
+            setState(() {
+              _voteState = prevState;
+              _displayCount = prevCount;
+            });
+          if (mounted) setState(() => _votePending = false);
+        });
   }
 
   Future<void> _onDownTap() async {
     if (!AuthService.instance.isLoggedIn.value) {
-      await Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginPage()));
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginPage()),
+      );
       return;
     }
     if (_votePending) return;
@@ -192,12 +273,20 @@ class _FeedPostCardState extends State<FeedPostCard> {
     });
     PostService.instance.togglePostDislike(widget.post.id).then((result) {
       if (!mounted) return;
-      if (result == null) setState(() { _voteState = prevState; _displayCount = prevCount; });
+      if (result == null)
+        setState(() {
+          _voteState = prevState;
+          _displayCount = prevCount;
+        });
       if (mounted) setState(() => _votePending = false);
     });
   }
 
-  Future<void> _showAuthorMenu(BuildContext context, String author, TapDownDetails details) async {
+  Future<void> _showAuthorMenu(
+    BuildContext context,
+    String author,
+    TapDownDetails details,
+  ) async {
     if (author.isEmpty) return;
     final s = CountryScope.of(context).strings;
     final displayName = author.startsWith('u/') ? author.substring(2) : author;
@@ -213,49 +302,80 @@ class _FeedPostCardState extends State<FeedPostCard> {
         PopupMenuItem(
           value: 'message',
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(LucideIcons.mail, size: 16, color: Colors.blue),
-            const SizedBox(width: 6),
-            Text(s.get('sendMessageToUser'), style: GoogleFonts.notoSansKr(fontSize: 13)),
-          ]),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(LucideIcons.mail, size: 16, color: Colors.blue),
+              const SizedBox(width: 6),
+              Text(
+                s.get('sendMessageToUser'),
+                style: GoogleFonts.notoSansKr(fontSize: 13),
+              ),
+            ],
+          ),
         ),
         PopupMenuItem(
           value: 'posts',
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(LucideIcons.file_text, size: 16, color: Colors.green),
-            const SizedBox(width: 6),
-            Text(s.get('viewUserPosts'), style: GoogleFonts.notoSansKr(fontSize: 13)),
-          ]),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(LucideIcons.file_text, size: 16, color: Colors.green),
+              const SizedBox(width: 6),
+              Text(
+                s.get('viewUserPosts'),
+                style: GoogleFonts.notoSansKr(fontSize: 13),
+              ),
+            ],
+          ),
         ),
         PopupMenuItem(
           value: 'comments',
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(LucideIcons.message_circle, size: 16, color: Colors.green),
-            const SizedBox(width: 6),
-            Text(s.get('viewUserComments'), style: GoogleFonts.notoSansKr(fontSize: 13)),
-          ]),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(LucideIcons.message_circle, size: 16, color: Colors.green),
+              const SizedBox(width: 6),
+              Text(
+                s.get('viewUserComments'),
+                style: GoogleFonts.notoSansKr(fontSize: 13),
+              ),
+            ],
+          ),
         ),
       ],
     );
     if (!mounted || result == null) return;
     if (result == 'message') {
-      final conv = await MessageService.instance.startConversation(author, displayName);
+      final conv = await MessageService.instance.startConversation(
+        author,
+        displayName,
+      );
       if (mounted) {
-        Navigator.push(context, MaterialPageRoute(
-          builder: (_) => MessageThreadScreen(conversationId: conv.id, otherUserName: displayName),
-        ));
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => MessageThreadScreen(
+              conversationId: conv.id,
+              otherUserName: displayName,
+            ),
+          ),
+        );
       }
     } else if (result == 'posts') {
-      Navigator.push(context, MaterialPageRoute(
-        builder: (_) => UserPostsScreen(authorName: author),
-      ));
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => UserPostsScreen(authorName: author)),
+      );
     } else if (result == 'comments') {
-      final baseName = author.startsWith('u/') ? author.substring(2) : author;
-      Navigator.push(context, MaterialPageRoute(
-        builder: (_) => UserCommentsScreen(authorName: baseName),
-      ));
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) =>
+              UserPostsScreen(authorName: author, initialSegment: 1),
+        ),
+      );
     }
   }
 
@@ -263,7 +383,9 @@ class _FeedPostCardState extends State<FeedPostCard> {
     final post = widget.post;
     final cs = Theme.of(context).colorScheme;
     final s = CountryScope.of(context).strings;
-    final isMyPost = widget.currentUserAuthor != null && post.author == widget.currentUserAuthor;
+    final isMyPost =
+        widget.currentUserAuthor != null &&
+        post.author == widget.currentUserAuthor;
     final canModerateDelete = isAppModerator() && !isMyPost;
 
     final selected = await showModalBottomSheet<String>(
@@ -287,30 +409,48 @@ class _FeedPostCardState extends State<FeedPostCard> {
             ),
             if (isMyPost) ...[
               ListTile(
-                leading: Icon(LucideIcons.pencil, color: Theme.of(context).colorScheme.onSurface),
-                title: Text(s.get('edit'), style: GoogleFonts.notoSansKr(fontSize: 15)),
+                leading: Icon(
+                  LucideIcons.pencil,
+                  color: Theme.of(context).colorScheme.onSurface,
+                ),
+                title: Text(
+                  s.get('edit'),
+                  style: GoogleFonts.notoSansKr(fontSize: 15),
+                ),
                 onTap: () => Navigator.pop(context, 'edit'),
               ),
               ListTile(
                 leading: Icon(LucideIcons.trash_2, color: cs.error),
-                title: Text(s.get('delete'), style: GoogleFonts.notoSansKr(fontSize: 15, color: cs.error)),
+                title: Text(
+                  s.get('delete'),
+                  style: GoogleFonts.notoSansKr(fontSize: 15, color: cs.error),
+                ),
                 onTap: () => Navigator.pop(context, 'delete'),
               ),
             ] else if (canModerateDelete) ...[
               ListTile(
                 leading: Icon(LucideIcons.trash_2, color: cs.error),
-                title: Text(s.get('delete'), style: GoogleFonts.notoSansKr(fontSize: 15, color: cs.error)),
+                title: Text(
+                  s.get('delete'),
+                  style: GoogleFonts.notoSansKr(fontSize: 15, color: cs.error),
+                ),
                 onTap: () => Navigator.pop(context, 'delete'),
               ),
             ] else ...[
               ListTile(
                 leading: Icon(LucideIcons.flag, color: cs.error),
-                title: Text(s.get('report'), style: GoogleFonts.notoSansKr(fontSize: 15, color: cs.error)),
+                title: Text(
+                  s.get('report'),
+                  style: GoogleFonts.notoSansKr(fontSize: 15, color: cs.error),
+                ),
                 onTap: () => Navigator.pop(context, 'report'),
               ),
               ListTile(
                 leading: Icon(LucideIcons.ban, color: cs.onSurface),
-                title: Text(s.get('block'), style: GoogleFonts.notoSansKr(fontSize: 15)),
+                title: Text(
+                  s.get('block'),
+                  style: GoogleFonts.notoSansKr(fontSize: 15),
+                ),
                 onTap: () => Navigator.pop(context, 'block'),
               ),
             ],
@@ -340,12 +480,23 @@ class _FeedPostCardState extends State<FeedPostCard> {
         context: context,
         builder: (_) => AlertDialog(
           title: Text(s.get('delete'), style: GoogleFonts.notoSansKr()),
-          content: Text(s.get('deletePostConfirm'), style: GoogleFonts.notoSansKr()),
+          content: Text(
+            s.get('deletePostConfirm'),
+            style: GoogleFonts.notoSansKr(),
+          ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr())),
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr()),
+            ),
             TextButton(
               onPressed: () => Navigator.pop(context, true),
-              child: Text(s.get('delete'), style: GoogleFonts.notoSansKr(color: Theme.of(context).colorScheme.error)),
+              child: Text(
+                s.get('delete'),
+                style: GoogleFonts.notoSansKr(
+                  color: Theme.of(context).colorScheme.error,
+                ),
+              ),
             ),
           ],
         ),
@@ -358,20 +509,40 @@ class _FeedPostCardState extends State<FeedPostCard> {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (_) => AlertDialog(
-          title: Text(s.get('reportPostTitle'), style: GoogleFonts.notoSansKr()),
-          content: Text(s.get('reportPostMessage'), style: GoogleFonts.notoSansKr()),
+          title: Text(
+            s.get('reportPostTitle'),
+            style: GoogleFonts.notoSansKr(),
+          ),
+          content: Text(
+            s.get('reportPostMessage'),
+            style: GoogleFonts.notoSansKr(),
+          ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr())),
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr()),
+            ),
             TextButton(
               onPressed: () => Navigator.pop(context, true),
-              child: Text(s.get('report'), style: GoogleFonts.notoSansKr(color: Theme.of(context).colorScheme.error)),
+              child: Text(
+                s.get('report'),
+                style: GoogleFonts.notoSansKr(
+                  color: Theme.of(context).colorScheme.error,
+                ),
+              ),
             ),
           ],
         ),
       );
       if (confirmed == true && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(s.get('reportSubmitted'), style: GoogleFonts.notoSansKr()), behavior: SnackBarBehavior.floating),
+          SnackBar(
+            content: Text(
+              s.get('reportSubmitted'),
+              style: GoogleFonts.notoSansKr(),
+            ),
+            behavior: SnackBarBehavior.floating,
+          ),
         );
       }
     } else if (selected == 'block') {
@@ -379,10 +550,19 @@ class _FeedPostCardState extends State<FeedPostCard> {
         context: context,
         builder: (_) => AlertDialog(
           title: Text(s.get('blockPostTitle'), style: GoogleFonts.notoSansKr()),
-          content: Text(s.get('blockPostMessage'), style: GoogleFonts.notoSansKr()),
+          content: Text(
+            s.get('blockPostMessage'),
+            style: GoogleFonts.notoSansKr(),
+          ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr())),
-            TextButton(onPressed: () => Navigator.pop(context, true), child: Text(s.get('block'), style: GoogleFonts.notoSansKr())),
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(s.get('cancel'), style: GoogleFonts.notoSansKr()),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(s.get('block'), style: GoogleFonts.notoSansKr()),
+            ),
           ],
         ),
       );
@@ -390,7 +570,13 @@ class _FeedPostCardState extends State<FeedPostCard> {
         await BlockService.instance.blockPost(post.id);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(s.get('blockPostDone'), style: GoogleFonts.notoSansKr()), behavior: SnackBarBehavior.floating),
+            SnackBar(
+              content: Text(
+                s.get('blockPostDone'),
+                style: GoogleFonts.notoSansKr(),
+              ),
+              behavior: SnackBarBehavior.floating,
+            ),
           );
           widget.onUserBlocked?.call();
         }
@@ -405,231 +591,414 @@ class _FeedPostCardState extends State<FeedPostCard> {
     final cs = theme.colorScheme;
     final boardKind = postDisplayType(post);
     final compactTalkAskBar = boardKind == 'talk' || boardKind == 'ask';
+    final talkAskFeedTitleStyle = GoogleFonts.notoSansKr(
+      fontSize: 17,
+      fontWeight: FontWeight.w700,
+      color: cs.onSurface,
+      height: 1.42,
+      letterSpacing: -0.25,
+    );
+    final talkAskMetaColor = cs.onSurface.withValues(alpha: 0.56);
+    final talkAskAuthorNameStyle = GoogleFonts.notoSansKr(
+      fontSize: 13,
+      color: talkAskMetaColor,
+      fontWeight: FontWeight.w600,
+    );
     final baseCardColor = theme.cardTheme.color ?? cs.surface;
+
     /// 톡·에스크 탭 카드만 배경을 한 톤 더 짙게(리뷰/인기 등과 구분).
     final cardFillColor = (boardKind == 'talk' || boardKind == 'ask')
         ? Color.lerp(
-              baseCardColor,
-              Colors.black,
-              theme.brightness == Brightness.dark ? 0.11 : 0.05,
-            ) ??
-            baseCardColor
+                baseCardColor,
+                Colors.black,
+                theme.brightness == Brightness.dark ? 0.18 : 0.17,
+              ) ??
+              baseCardColor
         : baseCardColor;
 
-    return RepaintBoundary(
-      child: GestureDetector(
-      onTap: widget.onTap ?? () async {
-        final updated = await Navigator.push<Post>(
-          context,
-          MaterialPageRoute(
-            builder: (_) => PostDetailPage(
-              post: post,
-              onPostDeleted: widget.onPostDeleted,
-              tabName: widget.tabName,
-            ),
-          ),
-        );
-        if (updated != null) widget.onPostUpdated?.call(updated);
-      },
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: cardFillColor,
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: cs.shadow.withOpacity(0.16),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // 상단: 작성자
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _AuthorAvatar(
-                    photoUrl: post.authorPhotoUrl,
-                    author: post.author,
-                    colorIndex: post.authorAvatarColorIndex,
-                    size: 38,
+    /// 톡·에스크 카드: 닉 상단·시간 하단을 프로필 원과 맞춤 (기존 38보다 약간 작게)
+    final talkAskAvatarSize = 33.0;
+    final defaultOtherAvatar = 38.0;
+    final headerAvatarSize = widget.authorAvatarSize ??
+        (compactTalkAskBar ? talkAskAvatarSize : defaultOtherAvatar);
+    final authorUid = post.authorUid?.trim();
+    final authorNicknameRow = authorUid != null && authorUid.isNotEmpty
+        ? GestureDetector(
+            onTap: () => openUserProfileFromAuthorUid(context, authorUid),
+            behavior: HitTestBehavior.opaque,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: Text(
+                    post.author.startsWith('u/')
+                        ? post.author.substring(2)
+                        : post.author,
+                    style: compactTalkAskBar
+                        ? talkAskAuthorNameStyle
+                        : GoogleFonts.notoSansKr(
+                            fontSize: 13,
+                            color: cs.onSurface,
+                            fontWeight: FontWeight.w700,
+                          ),
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        GestureDetector(
-                          onTapDown: (details) => _showAuthorMenu(context, post.author, details),
-                          behavior: HitTestBehavior.opaque,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Flexible(
-                                child: Text(
-                                  post.author.startsWith('u/') ? post.author.substring(2) : post.author,
-                                  style: GoogleFonts.notoSansKr(
-                                    fontSize: 13,
-                                    color: cs.onSurface,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              if (widget.currentUserAuthor != null && post.author == widget.currentUserAuthor) ...[
-                                const SizedBox(width: 6),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: cs.secondary,
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: Text(
-                                    CountryScope.of(context).strings.get('myPostBadge'),
-                                    style: GoogleFonts.notoSansKr(fontSize: 10, fontWeight: FontWeight.w700, color: cs.onSecondary),
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          post.timeAgo,
-                          style: GoogleFonts.notoSansKr(
-                            fontSize: 11,
-                            color: AppColors.mediumGrey.withOpacity(0.7),
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
+                ),
+                if (widget.currentUserAuthor != null &&
+                    post.author == widget.currentUserAuthor) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: cs.secondary,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      CountryScope.of(context).strings.get('myPostBadge'),
+                      style: GoogleFonts.notoSansKr(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: cs.onSecondary,
+                      ),
                     ),
                   ),
                 ],
-              ),
-              const SizedBox(height: 10),
-              // 제목
-              Text(
-                post.title,
-                style: GoogleFonts.notoSansKr(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  color: cs.onSurface,
-                  height: 1.45,
-                  letterSpacing: -0.3,
-                ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              // 사진/동영상이 있으면 제목 다음에 미디어, 그 다음 본문
-              // 영상 (피드에서 보이면 자동재생, 뮤트)
-              if (post.hasVideo && post.videoUrl != null && post.videoUrl!.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(16),
-                  child: FeedVideoPlayer(
-                    videoUrl: post.videoUrl!,
-                    thumbnailUrl: post.videoThumbnailUrl,
-                    isGif: post.isGif ?? false,
-                  ),
-                ),
-              ]
-              // 이미지
-              else if (post.hasImage && post.imageUrls.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                FeedImageCarousel(
-                  imageUrls: post.imageUrls,
-                  imageDimensions: post.imageDimensions,
-                ),
-              ] else if (post.hasImage) ...[
-                const SizedBox(height: 10),
-                AspectRatio(
-                  aspectRatio: 1 / 1.15,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: cs.surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Center(
-                      child: Icon(LucideIcons.image, size: 56, color: cs.onSurfaceVariant.withOpacity(0.5)),
-                    ),
-                  ),
-                ),
               ],
-              // 본문 미리보기 (사진/동영상 다음)
-              if ((post.body?.trim() ?? '').isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Text(
-                  post.body!.trim(),
-                  style: GoogleFonts.notoSansKr(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w400,
-                    color: cs.onSurfaceVariant,
-                    height: 1.5,
+            ),
+          )
+        : GestureDetector(
+            onTapDown: (details) =>
+                _showAuthorMenu(context, post.author, details),
+            behavior: HitTestBehavior.opaque,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: Text(
+                    post.author.startsWith('u/')
+                        ? post.author.substring(2)
+                        : post.author,
+                    style: compactTalkAskBar
+                        ? talkAskAuthorNameStyle
+                        : GoogleFonts.notoSansKr(
+                            fontSize: 13,
+                            color: cs.onSurface,
+                            fontWeight: FontWeight.w700,
+                          ),
+                    overflow: TextOverflow.ellipsis,
                   ),
+                ),
+                if (widget.currentUserAuthor != null &&
+                    post.author == widget.currentUserAuthor) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: cs.secondary,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      CountryScope.of(context).strings.get('myPostBadge'),
+                      style: GoogleFonts.notoSansKr(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: cs.onSecondary,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          );
+    final timeText = Text(
+      post.timeAgo,
+      style: GoogleFonts.notoSansKr(
+        fontSize: 11,
+        color: compactTalkAskBar
+            ? talkAskMetaColor
+            : AppColors.mediumGrey.withOpacity(0.7),
+        fontWeight: FontWeight.w600,
+      ),
+    );
+
+    return RepaintBoundary(
+      child: GestureDetector(
+        onTap:
+            widget.onTap ??
+            () {
+              // async/await 제거: 탭 직후 isolate가 push 완료까지 블로킹되지 않음
+              Navigator.push<PostDetailResult>(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => PostDetailPage(
+                    post: post,
+                    onPostDeleted: widget.onPostDeleted,
+                    tabName: widget.tabName,
+                  ),
+                ),
+              ).then((result) {
+                final updated = result?.updatedPost;
+                if (updated != null && mounted) {
+                  widget.onPostUpdated?.call(updated);
+                }
+              });
+            },
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: cardFillColor,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: cs.shadow.withOpacity(0.16),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              18,
+              16,
+              18,
+              compactTalkAskBar ? 9 : 16,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 상단: 작성자 (톡·에스크: IntrinsicHeight로 배지·닉 높이 초과 시 오버플로 방지)
+                compactTalkAskBar
+                    ? IntrinsicHeight(
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Align(
+                              alignment: Alignment.topLeft,
+                              child: _AuthorAvatar(
+                                photoUrl: post.authorPhotoUrl,
+                                author: post.author,
+                                authorUid: post.authorUid,
+                                colorIndex: post.authorAvatarColorIndex,
+                                size: headerAvatarSize,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  authorNicknameRow,
+                                  timeText,
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    : Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _AuthorAvatar(
+                            photoUrl: post.authorPhotoUrl,
+                            author: post.author,
+                            authorUid: post.authorUid,
+                            colorIndex: post.authorAvatarColorIndex,
+                            size: headerAvatarSize,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                authorNicknameRow,
+                                const SizedBox(height: 2),
+                                timeText,
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                const SizedBox(height: 10),
+                // 제목
+                Text(
+                  post.title,
+                  style: compactTalkAskBar
+                      ? talkAskFeedTitleStyle
+                      : GoogleFonts.notoSansKr(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                          color: cs.onSurface,
+                          height: 1.45,
+                          letterSpacing: -0.3,
+                        ),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
-              ],
-              const SizedBox(height: 12),
-              // 하단 액션바
-              Padding(
-                padding: const EdgeInsets.only(left: 0),
-                child: Row(
-                  children: [
-                    // 투표박스
-                    Transform.translate(
-                      offset: const Offset(-10, 0),
-                      child: _VoteBox(
-                        voteState: _voteState,
-                        count: _displayCount,
-                        onUp: _onUpTap,
-                        onDown: _onDownTap,
-                        primaryColor: cs.primary,
-                        compact: compactTalkAskBar,
+                // 사진/동영상이 있으면 제목 다음에 미디어, 그 다음 본문
+                // 영상 (피드에서 보이면 자동재생, 뮤트)
+                if (post.hasVideo &&
+                    post.videoUrl != null &&
+                    post.videoUrl!.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: FeedVideoPlayer(
+                      videoUrl: post.videoUrl!,
+                      thumbnailUrl: post.videoThumbnailUrl,
+                      isGif: post.isGif ?? false,
+                    ),
+                  ),
+                ]
+                // 이미지
+                else if (post.hasImage && post.imageUrls.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  FeedImageCarousel(
+                    imageUrls: post.imageUrls,
+                    imageDimensions: post.imageDimensions,
+                  ),
+                ] else if (post.hasImage) ...[
+                  const SizedBox(height: 10),
+                  AspectRatio(
+                    aspectRatio: 1 / 1.15,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: cs.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Center(
+                        child: Icon(
+                          LucideIcons.image,
+                          size: 56,
+                          color: cs.onSurfaceVariant.withOpacity(0.5),
+                        ),
                       ),
                     ),
+                  ),
+                ],
+                // 본문 미리보기 (사진/동영상 다음)
+                if ((post.body?.trim() ?? '').isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    post.body!.trim(),
+                    style: GoogleFonts.notoSansKr(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w400,
+                      color: cs.onSurfaceVariant,
+                      height: 1.5,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+                SizedBox(height: compactTalkAskBar ? 7 : 12),
+                // 하단 액션바 (톡·에스크는 본문과 동일 패딩 기준 — 음수 translate 금지)
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    // 투표 / 톡·에스크 하트
+                    Transform.translate(
+                      offset: Offset(compactTalkAskBar ? 0 : -10, 0),
+                      child: compactTalkAskBar
+                          ? TalkAskHeartVote(
+                              voteState: _voteState,
+                              count: _displayCount,
+                              onTap: _onUpTap,
+                            )
+                          : _VoteBox(
+                              voteState: _voteState,
+                              count: _displayCount,
+                              onUp: _onUpTap,
+                              onDown: _onDownTap,
+                              primaryColor: cs.primary,
+                              compact: false,
+                            ),
+                    ),
+                    if (compactTalkAskBar) const SizedBox(width: 6),
                     // 댓글 (+ TALK/ASK는 조회수 숨김)
                     Transform.translate(
-                      offset: const Offset(-10, 0),
+                      offset: Offset(compactTalkAskBar ? 0 : -10, 0),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                LucideIcons.message_circle,
-                                size: compactTalkAskBar ? 15 : 18,
-                                color: _feedMetaGray,
-                              ),
-                              SizedBox(width: compactTalkAskBar ? 3 : 4),
-                              Text(
-                                formatCompactCount(post.comments),
-                                style: GoogleFonts.notoSansKr(
-                                  color: _feedMetaGray,
-                                  fontSize: compactTalkAskBar ? 12 : 13,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
+                          Padding(
+                            padding: EdgeInsets.symmetric(
+                              vertical: compactTalkAskBar ? 8 : 0,
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                if (compactTalkAskBar)
+                                  SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: Center(
+                                      child: Icon(
+                                        LucideIcons.message_circle,
+                                        size: 16,
+                                        color: _feedMetaGray,
+                                      ),
+                                    ),
+                                  )
+                                else
+                                  Icon(
+                                    LucideIcons.message_circle,
+                                    size: 18,
+                                    color: _feedMetaGray,
+                                  ),
+                                if (compactTalkAskBar && post.comments > 0) ...[
+                                  SizedBox(width: talkAskIconCountGap),
+                                  Text(
+                                    formatCompactCount(post.comments),
+                                    style: GoogleFonts.notoSansKr(
+                                      color: _feedMetaGray,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                      height: 1.0,
+                                    ),
+                                  ),
+                                ] else if (!compactTalkAskBar) ...[
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    formatCompactCount(post.comments),
+                                    style: GoogleFonts.notoSansKr(
+                                      color: _feedMetaGray,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
                           ),
                           if (!compactTalkAskBar) ...[
                             const SizedBox(width: 10),
                             Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(LucideIcons.eye, size: 18, color: _feedMetaGray),
+                                Icon(
+                                  LucideIcons.eye,
+                                  size: 18,
+                                  color: _feedMetaGray,
+                                ),
                                 const SizedBox(width: 4),
                                 Text(
                                   formatCompactCount(post.views),
-                                  style: GoogleFonts.notoSansKr(color: _feedMetaGray, fontSize: 13, fontWeight: FontWeight.w500),
+                                  style: GoogleFonts.notoSansKr(
+                                    color: _feedMetaGray,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                  ),
                                 ),
                               ],
                             ),
@@ -639,12 +1008,11 @@ class _FeedPostCardState extends State<FeedPostCard> {
                     ),
                   ],
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
-    ),
     );
   }
 }
@@ -654,12 +1022,14 @@ class _AuthorAvatar extends StatelessWidget {
   const _AuthorAvatar({
     required this.photoUrl,
     required this.author,
+    this.authorUid,
     this.colorIndex,
     this.size = 22,
   });
 
   final String? photoUrl;
   final String author;
+  final String? authorUid;
   final int? colorIndex;
   final double size;
 
@@ -672,16 +1042,25 @@ class _AuthorAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final uid = authorUid?.trim();
+    Widget child;
     if (photoUrl != null && photoUrl!.isNotEmpty) {
-      return ClipOval(
+      child = ClipOval(
         child: OptimizedNetworkImage.avatar(
           imageUrl: photoUrl!,
           size: size,
           errorWidget: _buildDefault(),
         ),
       );
+    } else {
+      child = _buildDefault();
     }
-    return _buildDefault();
+    if (uid == null || uid.isEmpty) return child;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => openUserProfileFromAuthorUid(context, uid),
+      child: child,
+    );
   }
 
   Widget _buildDefault() {
@@ -704,6 +1083,75 @@ class _AuthorAvatar extends StatelessWidget {
   }
 }
 
+/// 톡·에스크: 싫어요 UI 없이 하트 + 좋아요 수만 (토글은 [togglePostLike]).
+/// Ink 스플래시 없음 — 탭 시 primary 색 번쩍임 방지.
+class TalkAskHeartVote extends StatelessWidget {
+  const TalkAskHeartVote({
+    super.key,
+    required this.voteState,
+    required this.count,
+    required this.onTap,
+    this.compact = true,
+  });
+
+  final int voteState;
+  final int count;
+  final VoidCallback onTap;
+
+  /// true: 피드 카드, false: 글 상세 등 여유 있는 레이아웃
+  final bool compact;
+
+  static const _metaGray = Color(0xFFADADAD);
+
+  @override
+  Widget build(BuildContext context) {
+    final liked = voteState == 1;
+    final icon = liked ? Icons.favorite : Icons.favorite_border;
+    final iconColor = liked ? Colors.redAccent : _metaGray;
+    final textColor = liked ? Colors.redAccent : _metaGray;
+    final iconSize = compact ? 16.0 : 18.0;
+    final fontSize = compact ? 12.0 : 13.0;
+    final iconBox = compact ? 20.0 : 24.0;
+    // 피드(compact): 좌만 0 — 하트·댓글 행과 세로 패딩 통일(대칭)
+    final pad = compact
+        ? const EdgeInsets.fromLTRB(0, 8, 14, 8)
+        : const EdgeInsets.fromLTRB(12, 12, 16, 12);
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Padding(
+        padding: pad,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: iconBox,
+              height: iconBox,
+              child: Center(
+                child: Icon(icon, size: iconSize, color: iconColor),
+              ),
+            ),
+            if (count > 0) ...[
+              SizedBox(width: talkAskIconCountGap),
+              Text(
+                formatCompactCount(count),
+                style: GoogleFonts.notoSansKr(
+                  fontSize: fontSize,
+                  fontWeight: FontWeight.w600,
+                  color: textColor,
+                  height: 1.0,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// 투표박스 위젯 (↑ 숫자 ↓ 가로 배치)
 class _VoteBox extends StatelessWidget {
   const _VoteBox({
@@ -720,6 +1168,7 @@ class _VoteBox extends StatelessWidget {
   final VoidCallback onUp;
   final VoidCallback onDown;
   final Color primaryColor;
+
   /// TALK/ASK 피드: 화살표·숫자만 약간 축소
   final bool compact;
 
@@ -733,8 +1182,8 @@ class _VoteBox extends StatelessWidget {
     final countColor = voteState == 1
         ? primaryColor
         : voteState == -1
-            ? dislikeActiveColor
-            : baseColor;
+        ? dislikeActiveColor
+        : baseColor;
     final iconSize = compact ? 22.0 : 26.0;
     final countFontSize = compact ? 12.0 : 13.0;
     final padV = compact ? 5.0 : 7.0;
@@ -742,39 +1191,47 @@ class _VoteBox extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            InkWell(
-              onTap: onUp,
-              splashColor: primaryColor.withOpacity(0.2),
-              highlightColor: primaryColor.withOpacity(0.1),
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(0, padV, 1, padV),
-                child: Icon(Icons.arrow_drop_up_rounded, size: iconSize, color: upColor),
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          InkWell(
+            onTap: onUp,
+            splashColor: primaryColor.withOpacity(0.2),
+            highlightColor: primaryColor.withOpacity(0.1),
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(0, padV, 1, padV),
+              child: Icon(
+                Icons.arrow_drop_up_rounded,
+                size: iconSize,
+                color: upColor,
               ),
             ),
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: 0, vertical: padV),
-              child: Text(
-                formatCompactCount(count),
-                style: GoogleFonts.notoSansKr(
-                  fontSize: countFontSize,
-                  fontWeight: FontWeight.w700,
-                  color: countColor,
-                ),
+          ),
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: 0, vertical: padV),
+            child: Text(
+              formatCompactCount(count),
+              style: GoogleFonts.notoSansKr(
+                fontSize: countFontSize,
+                fontWeight: FontWeight.w700,
+                color: countColor,
               ),
             ),
-            InkWell(
-              onTap: onDown,
-              splashColor: dislikeActiveColor.withOpacity(0.2),
-              highlightColor: dislikeActiveColor.withOpacity(0.1),
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(1, padV, 8, padV),
-                child: Icon(Icons.arrow_drop_down_rounded, size: iconSize, color: downColor),
+          ),
+          InkWell(
+            onTap: onDown,
+            splashColor: dislikeActiveColor.withOpacity(0.2),
+            highlightColor: dislikeActiveColor.withOpacity(0.1),
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(1, padV, 8, padV),
+              child: Icon(
+                Icons.arrow_drop_down_rounded,
+                size: iconSize,
+                color: downColor,
               ),
             ),
-          ],
-        ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -791,6 +1248,7 @@ class FeedImageCarousel extends StatefulWidget {
   final List<List<int>>? imageDimensions;
 
   static const double _defaultRatio = 1 / 1.15;
+
   /// 세로 최대 1:1.4 캡 (피드 동영상과 동일)
   static const double _minAspectRatio = 1 / _feedMaxHeightPerWidth;
 
@@ -847,7 +1305,11 @@ class _FeedImageCarouselState extends State<FeedImageCarousel> {
                 return Container(
                   color: cs2.surfaceContainerHighest,
                   child: Center(
-                    child: Icon(LucideIcons.image_off, size: 56, color: cs2.onSurfaceVariant.withOpacity(0.5)),
+                    child: Icon(
+                      LucideIcons.image_off,
+                      size: 56,
+                      color: cs2.onSurfaceVariant.withOpacity(0.5),
+                    ),
                   ),
                 );
               },
@@ -874,7 +1336,11 @@ class _FeedImageCarouselState extends State<FeedImageCarousel> {
                   errorWidget: Container(
                     color: AppColors.lightGrey,
                     child: Center(
-                      child: Icon(LucideIcons.image_off, size: 56, color: AppColors.mediumGrey.withOpacity(0.5)),
+                      child: Icon(
+                        LucideIcons.image_off,
+                        size: 56,
+                        color: AppColors.mediumGrey.withOpacity(0.5),
+                      ),
                     ),
                   ),
                 );
@@ -885,10 +1351,17 @@ class _FeedImageCarouselState extends State<FeedImageCarousel> {
               right: 10,
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(8)),
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(8),
+                ),
                 child: Text(
                   '${_currentPage + 1}/${widget.imageUrls.length}',
-                  style: GoogleFonts.notoSansKr(fontSize: 9, fontWeight: FontWeight.w500, color: Colors.white),
+                  style: GoogleFonts.notoSansKr(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.white,
+                  ),
                 ),
               ),
             ),
@@ -898,8 +1371,14 @@ class _FeedImageCarouselState extends State<FeedImageCarousel> {
               bottom: 10,
               child: Center(
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(12)),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: List.generate(widget.imageUrls.length, (i) {
@@ -909,7 +1388,9 @@ class _FeedImageCarouselState extends State<FeedImageCarousel> {
                         width: isActive ? 8 : 6,
                         height: 6,
                         decoration: BoxDecoration(
-                          color: isActive ? Colors.white : Colors.white.withOpacity(0.4),
+                          color: isActive
+                              ? Colors.white
+                              : Colors.white.withOpacity(0.4),
                           shape: BoxShape.circle,
                         ),
                       );
@@ -932,7 +1413,11 @@ class _LevelBadge extends StatelessWidget {
   static Color _levelColor(int level) {
     if (level >= 30) return const Color(0xFFD4AF37);
     if (level == 1) return const Color(0xFF9E9E9E);
-    return Color.lerp(const Color(0xFF9E9E9E), const Color(0xFF26A69A), (level - 1) / 28)!;
+    return Color.lerp(
+      const Color(0xFF9E9E9E),
+      const Color(0xFF26A69A),
+      (level - 1) / 28,
+    )!;
   }
 
   @override
@@ -950,7 +1435,14 @@ class _LevelBadge extends StatelessWidget {
       child: Center(
         child: Transform.translate(
           offset: const Offset(0, -0.5),
-          child: Text('$level', style: GoogleFonts.notoSansKr(fontSize: 8, fontWeight: FontWeight.w600, color: color)),
+          child: Text(
+            '$level',
+            style: GoogleFonts.notoSansKr(
+              fontSize: 8,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
+          ),
         ),
       ),
     );
@@ -1000,7 +1492,9 @@ class _FeedVideoPlayerState extends State<FeedVideoPlayer> {
 
   @override
   void dispose() {
-    HomeTabVisibility.isHomeMainTabSelected.removeListener(_onHomeMainTabChanged);
+    HomeTabVisibility.isHomeMainTabSelected.removeListener(
+      _onHomeMainTabChanged,
+    );
     VideoPreloadCache.instance.cancel(widget.videoUrl);
     _controller?.removeListener(_onPlayerUpdate);
     _controller?.pause();
@@ -1026,7 +1520,9 @@ class _FeedVideoPlayerState extends State<FeedVideoPlayer> {
       _controller = cached;
     } else {
       cached?.dispose();
-      _controller = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl));
+      _controller = VideoPlayerController.networkUrl(
+        Uri.parse(widget.videoUrl),
+      );
       await _controller!.initialize();
     }
     if (!mounted) {
@@ -1044,7 +1540,9 @@ class _FeedVideoPlayerState extends State<FeedVideoPlayer> {
   void _onPlayerUpdate() {
     if (!mounted) return;
     final now = DateTime.now();
-    if (_lastSetStateAt != null && now.difference(_lastSetStateAt!).inMilliseconds < 400) return;
+    if (_lastSetStateAt != null &&
+        now.difference(_lastSetStateAt!).inMilliseconds < 400)
+      return;
     _lastSetStateAt = now;
     setState(() {});
   }
@@ -1071,34 +1569,55 @@ class _FeedVideoPlayerState extends State<FeedVideoPlayer> {
                 FittedBox(
                   fit: BoxFit.fitHeight,
                   child: SizedBox(
-                    width: ctrl.value.size.width > 0 ? ctrl.value.size.width : 16,
-                    height: ctrl.value.size.height > 0 ? ctrl.value.size.height : 9,
+                    width: ctrl.value.size.width > 0
+                        ? ctrl.value.size.width
+                        : 16,
+                    height: ctrl.value.size.height > 0
+                        ? ctrl.value.size.height
+                        : 9,
                     child: VideoPlayer(ctrl),
                   ),
                 )
-              else if (widget.thumbnailUrl != null && widget.thumbnailUrl!.isNotEmpty)
+              else if (widget.thumbnailUrl != null &&
+                  widget.thumbnailUrl!.isNotEmpty)
                 CachedNetworkImage(
                   imageUrl: widget.thumbnailUrl!,
                   fit: BoxFit.fitHeight,
                   width: double.infinity,
                   height: double.infinity,
-                  errorWidget: (_, __, ___) =>
-                      Icon(LucideIcons.video, size: 48, color: AppColors.mediumGrey.withOpacity(0.5)),
+                  errorWidget: (_, __, ___) => Icon(
+                    LucideIcons.video,
+                    size: 48,
+                    color: AppColors.mediumGrey.withOpacity(0.5),
+                  ),
                 )
               else
-                Icon(LucideIcons.video, size: 48, color: AppColors.mediumGrey.withOpacity(0.5)),
+                Icon(
+                  LucideIcons.video,
+                  size: 48,
+                  color: AppColors.mediumGrey.withOpacity(0.5),
+                ),
 
               // 로딩 중
               if (_loading)
-                const Center(child: SizedBox(
-                  width: 36,
-                  height: 36,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70),
-                )),
+                const Center(
+                  child: SizedBox(
+                    width: 36,
+                    height: 36,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white70,
+                    ),
+                  ),
+                ),
 
               // 재생 버튼 (로딩 아닐 때, 재생 중이 아닐 때, 배경 없음)
               if (!_loading && !isPlaying)
-                const Icon(Icons.play_arrow_rounded, size: 48, color: Colors.white),
+                const Icon(
+                  Icons.play_arrow_rounded,
+                  size: 48,
+                  color: Colors.white,
+                ),
 
               // 음소거 + 전체화면 (재생 중)
               if (isPlaying)

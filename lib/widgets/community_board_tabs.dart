@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
@@ -25,10 +26,7 @@ const int _postsPerPage = 20;
 /// 리뷰 인라인 댓글 렌더링용 flatten 엔트리(depth 보존)
 /// depth 0: 루트 댓글, depth 1+: 대댓글
 class _InlineReviewCommentEntry {
-  const _InlineReviewCommentEntry({
-    required this.comment,
-    required this.depth,
-  });
+  const _InlineReviewCommentEntry({required this.comment, required this.depth});
 
   final PostComment comment;
   final int depth;
@@ -206,6 +204,15 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
   }
 
   @override
+  void didUpdateWidget(PopularPostsTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 부모가 widget.posts 리스트를 제자리(in-place) 수정한 경우 identical() 체크가
+    // 캐시를 재구성하지 않아 stale 데이터가 반환되는 버그를 방지.
+    // 위젯이 갱신될 때마다 무효화해 항상 최신 목록으로 재구성한다.
+    _postsCacheSource = null;
+  }
+
+  @override
   void dispose() {
     _debounce?.cancel();
     for (final c in _inlineCommentControllers.values) {
@@ -227,8 +234,7 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
   }
 
   /// 낙관적 재정의 우선, 그 다음 캐시된 맵, 없으면 [p] 그대로.
-  Post _latestPost(Post p) =>
-      _localOverrides[p.id] ?? _postsById[p.id] ?? p;
+  Post _latestPost(Post p) => _localOverrides[p.id] ?? _postsById[p.id] ?? p;
 
   Future<void> _refreshPostForComments(String postId) async {
     final locale = CountryScope.maybeOf(context)?.country;
@@ -297,7 +303,9 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
     // 가장 최근 낙관 상태를 다시 참조해 서버로 전송.
     final latest = _localOverrides[p.id] ?? optimistic;
     final latestLiked = latest.likedBy.contains(uid);
-    final latestVote = latestLiked ? 1 : (latest.dislikedBy.contains(uid) ? -1 : 0);
+    final latestVote = latestLiked
+        ? 1
+        : (latest.dislikedBy.contains(uid) ? -1 : 0);
 
     final ok = await PostService.instance.togglePostLike(
       p.id,
@@ -394,6 +402,8 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
       authorPhotoUrl: UserProfileService.instance.profileImageUrlNotifier.value,
       authorAvatarColorIndex:
           UserProfileService.instance.avatarColorNotifier.value,
+      createdAtDate: DateTime.now(),
+      authorUid: AuthService.instance.currentUser.value?.uid,
     );
     final err = await PostService.instance.addComment(id, p, newComment);
     if (!mounted) return;
@@ -407,12 +417,59 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
       );
       return;
     }
+
+    // 낙관적 업데이트: 서버 응답 전에 즉시 댓글 반영
+    final optimisticComments = (p.commentsList.length + 1 > p.comments)
+        ? p.commentsList.length + 1
+        : p.comments + 1;
+    final optimisticPost = p.copyWith(
+      commentsList: [...p.commentsList, newComment],
+      comments: optimisticComments,
+    );
+    _localOverrides[id] = optimisticPost;
     setState(() => _inlineCommentSubmitting.remove(id));
+    widget.onPostUpdated?.call(optimisticPost);
+
     ctrl.clear();
     if (successPopContext != null && successPopContext.mounted) {
       Navigator.of(successPopContext).pop();
     }
-    await _refreshPostForComments(id);
+
+    // 백그라운드에서 서버 동기화 (UI 블로킹 없음)
+    unawaited(_reconcileAfterComment(id, newComment.id));
+  }
+
+  Future<void> _reconcileAfterComment(
+    String postId,
+    String newCommentId,
+  ) async {
+    final locale = CountryScope.maybeOf(context)?.country;
+
+    // 최대 3번 재시도 (0s → 2s → 4s)
+    for (final delay in [Duration.zero, const Duration(seconds: 2), const Duration(seconds: 4)]) {
+      if (delay != Duration.zero) {
+        await Future.delayed(delay);
+      }
+      if (!mounted) return;
+      final fresh = await PostService.instance.getPost(postId, locale);
+      if (!mounted) return;
+      if (fresh == null) continue;
+      final serverHasComment =
+          PostService.findCommentById(fresh.commentsList, newCommentId) != null;
+      if (serverHasComment) {
+        // 서버에 반영됐으면 로컬 오버라이드 제거.
+        // _postsCacheSource도 null로 초기화해 _postsById가 최신 widget.posts로
+        // 재구성되도록 강제한 뒤 부모에 전파.
+        setState(() {
+          _localOverrides.remove(postId);
+          _postsCacheSource = null;
+        });
+        widget.onPostUpdated?.call(fresh);
+        return;
+      }
+      // 아직 전파 안 됐으면 다음 재시도 대기
+    }
+    // 모든 재시도 실패 → 낙관적 상태 유지 (댓글이 화면에서 사라지지 않음)
   }
 
   DramaItem? _findDramaItemForPost(Post post, String? locale) {
@@ -504,77 +561,122 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
     }
   }
 
-  Widget _buildFlatCommentRow(_InlineReviewCommentEntry entry, ColorScheme cs) {
+  Widget _buildInlineCommentAvatar(PostComment c, double size) {
+    final rawUrl = c.authorPhotoUrl?.trim();
+    final colorIdx = c.authorAvatarColorIndex ?? c.author.hashCode;
+    Widget fallback() {
+      return Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          color: UserProfileService.bgColorFromIndex(colorIdx),
+          shape: BoxShape.circle,
+        ),
+        child: Center(
+          child: Icon(
+            Icons.person,
+            size: size * 0.56,
+            color: UserProfileService.iconColorFromIndex(colorIdx),
+          ),
+        ),
+      );
+    }
+
+    if (rawUrl != null && rawUrl.isNotEmpty) {
+      return ClipOval(
+        child: OptimizedNetworkImage.avatar(
+          imageUrl: rawUrl,
+          size: size,
+          errorWidget: fallback(),
+        ),
+      );
+    }
+    return fallback();
+  }
+
+  Widget _buildFlatCommentRow(
+    _InlineReviewCommentEntry entry,
+    ColorScheme cs, {
+    required bool showLeadingReplyIcon,
+  }) {
     final c = entry.comment;
-    final isReply = entry.depth > 0;
-    // 인라인 리뷰 카드 기준: 썸네일 우측 끝(x≈68) 라인과 리플라이 아이콘 끝을 맞춤.
-    // 리스트 좌우 패딩(12)을 감안해 leading 폭을 56으로 두고 아이콘을 우측 정렬.
-    const replyLeadingW = 56.0;
-    final extraIndent = (entry.depth - 1).clamp(0, 8) * 10.0;
+    // 닉네임 시작선을 리뷰 카드 본문 시작선과 맞추기 위한 좌측 오프셋.
+    const alignToHeartStartFromSectionLeft = 32.0;
+    final depthNudge = entry.depth.clamp(0, 8) * 8.0;
+    const avatarSize = 22.0;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Padding(
-        padding: EdgeInsets.only(left: extraIndent),
-        child: Row(
+        padding: EdgeInsets.only(
+          left: alignToHeartStartFromSectionLeft + depthNudge,
+        ),
+        child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (isReply)
-              SizedBox(
-                width: replyLeadingW,
-                child: Align(
-                  alignment: Alignment.topRight,
-                  child: Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Icon(
-                      LucideIcons.reply,
-                      size: 13,
-                      color: cs.onSurfaceVariant.withValues(alpha: 0.86),
+            const SizedBox(height: 12),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 20,
+                      child: showLeadingReplyIcon
+                          ? Transform.rotate(
+                              angle: math.pi,
+                              child: Icon(
+                                LucideIcons.reply,
+                                size: 14,
+                                color: cs.onSurfaceVariant.withValues(alpha: 0.78),
+                              ),
+                            )
+                          : null,
                     ),
-                  ),
+                    const SizedBox(width: 6),
+                    _buildInlineCommentAvatar(c, avatarSize),
+                  ],
                 ),
-              )
-            else
-              const SizedBox(width: 0),
-            if (isReply) const SizedBox(width: 8),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: Text(
-                          c.author.startsWith('u/')
-                              ? c.author.substring(2)
-                              : c.author,
-                          style: GoogleFonts.notoSansKr(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                            color: cs.onSurface,
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              c.author.startsWith('u/')
+                                  ? c.author.substring(2)
+                                  : c.author,
+                              style: GoogleFonts.notoSansKr(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: cs.onSurfaceVariant.withValues(
+                                  alpha: 0.62,
+                                ),
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
-                        ),
+                        ],
                       ),
+                      const SizedBox(height: 4),
                       Text(
-                        c.displayTimeAgo,
+                        c.text,
                         style: GoogleFonts.notoSansKr(
-                          fontSize: 11,
+                          fontSize: 13,
+                          height: 1.4,
                           color: cs.onSurfaceVariant,
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    c.text,
-                    style: GoogleFonts.notoSansKr(
-                      fontSize: 13,
-                      height: 1.4,
-                      color: cs.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ],
         ),
@@ -607,7 +709,17 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
               padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: flat.map((c) => _buildFlatCommentRow(c, cs)).toList(),
+                children: flat
+                    .asMap()
+                    .entries
+                    .map(
+                      (e) => _buildFlatCommentRow(
+                        e.value,
+                        cs,
+                        showLeadingReplyIcon: e.key == 0,
+                      ),
+                    )
+                    .toList(),
               ),
             ),
           _ReviewFeedInlineComposer(
@@ -626,64 +738,66 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
     final uid = AuthService.instance.currentUser.value?.uid;
     final liked = uid != null && p.likedBy.contains(uid);
     const iconSize = 13.0;
-    return Padding(
-      padding: const EdgeInsets.only(top: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.start,
-        children: [
-          reviewInlineActionHitTarget(
-              onTap: () => _inlineToggleLike(post),
-              visual: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      liked ? Icons.favorite : Icons.favorite_border,
-                      size: iconSize,
-                      color: liked ? Colors.redAccent : cs.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      formatCompactCount(p.likeCount),
-                      style: GoogleFonts.notoSansKr(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                        color: cs.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        reviewInlineActionHitTarget(
+          onTap: () => _inlineToggleLike(post),
+          visual: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Icon(
+                  liked ? Icons.favorite : Icons.favorite_border,
+                  size: iconSize,
+                  color: liked ? Colors.redAccent : cs.onSurfaceVariant,
                 ),
-              ),
-            ),
-            const SizedBox(width: 4),
-            reviewInlineActionHitTarget(
-              onTap: () => _openReviewCommentOverlay(post),
-              visual: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      LucideIcons.message_circle,
-                      size: iconSize,
-                      color: cs.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      formatCompactCount(p.comments),
-                      style: GoogleFonts.notoSansKr(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                        color: cs.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
+                const SizedBox(width: 4),
+                Text(
+                  formatCompactCount(p.likeCount),
+                  style: GoogleFonts.notoSansKr(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    height: 1.0,
+                    color: cs.onSurfaceVariant,
+                  ),
                 ),
-              ),
+              ],
             ),
-        ],
-      ),
+          ),
+        ),
+        const SizedBox(width: 4),
+        reviewInlineActionHitTarget(
+          onTap: () => _openReviewCommentOverlay(post),
+          visual: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Icon(
+                  LucideIcons.message_circle,
+                  size: iconSize,
+                  color: cs.onSurfaceVariant,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  formatCompactCount(p.comments),
+                  style: GoogleFonts.notoSansKr(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    height: 1.0,
+                    color: cs.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1135,33 +1249,15 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
               : const AlwaysScrollableScrollPhysics(),
           padding: EdgeInsets.fromLTRB(24, 48, 24, _listBottomPadding(context)),
           children: [
-            const SizedBox(height: 8),
-            Icon(
-              widget.useReviewLayout
-                  ? LucideIcons.star
-                  : LucideIcons.trending_up,
-              size: 64,
-              color: cs.onSurfaceVariant.withOpacity(0.4),
-            ),
             const SizedBox(height: 24),
-            Text(
-              s.get('postSoon'),
-              textAlign: TextAlign.center,
-              style: GoogleFonts.notoSansKr(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-                color: cs.onSurface,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              widget.useReviewLayout
-                  ? s.get('reviewsTabEmpty')
-                  : s.get('trendTabHint'),
-              textAlign: TextAlign.center,
-              style: GoogleFonts.notoSansKr(
-                fontSize: 13,
-                color: cs.onSurfaceVariant,
+            Center(
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: cs.primary,
+                ),
               ),
             ),
           ],
@@ -1190,9 +1286,7 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
           if (useLb && isTypedReview(post)) {
             final inline = widget.reviewLetterboxdInlineFeed;
             return RepaintBoundary(
-              key: ValueKey(
-                'lb_${post.id}',
-              ),
+              key: ValueKey('lb_${post.id}'),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -1397,33 +1491,15 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
               : const AlwaysScrollableScrollPhysics(),
           padding: EdgeInsets.fromLTRB(24, 48, 24, _listBottomPadding(context)),
           children: [
-            const SizedBox(height: 8),
-            Icon(
-              widget.useReviewLayout
-                  ? LucideIcons.star
-                  : LucideIcons.trending_up,
-              size: 64,
-              color: cs.onSurfaceVariant.withOpacity(0.4),
-            ),
             const SizedBox(height: 24),
-            Text(
-              s.get('postSoon'),
-              textAlign: TextAlign.center,
-              style: GoogleFonts.notoSansKr(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-                color: cs.onSurface,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              widget.useReviewLayout
-                  ? s.get('reviewsTabEmpty')
-                  : s.get('trendTabHint'),
-              textAlign: TextAlign.center,
-              style: GoogleFonts.notoSansKr(
-                fontSize: 13,
-                color: cs.onSurfaceVariant,
+            Center(
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: cs.primary,
+                ),
               ),
             ),
           ],
@@ -1470,9 +1546,7 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
           if (useLb && isTypedReview(post)) {
             final inline = widget.reviewLetterboxdInlineFeed;
             return RepaintBoundary(
-              key: ValueKey(
-                'lb_${post.id}',
-              ),
+              key: ValueKey('lb_${post.id}'),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -1641,12 +1715,13 @@ class _ReviewFeedInlineComposer extends StatelessWidget {
                     ),
                   )
                 : _defaultAvatar(colorIdx, avatarSize);
-            final canSend =
-                !isSubmitting && controller.text.trim().isNotEmpty;
-            final sendBg =
-                canSend ? _sendBlue : cs.onSurface.withValues(alpha: 0.22);
-            final sendIconColor =
-                canSend ? Colors.white : cs.onSurface.withValues(alpha: 0.38);
+            final canSend = !isSubmitting && controller.text.trim().isNotEmpty;
+            final sendBg = canSend
+                ? _sendBlue
+                : cs.onSurface.withValues(alpha: 0.22);
+            final sendIconColor = canSend
+                ? Colors.white
+                : cs.onSurface.withValues(alpha: 0.38);
             return Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
@@ -1658,22 +1733,14 @@ class _ReviewFeedInlineComposer extends StatelessWidget {
                     autofocus: autofocus,
                     minLines: 1,
                     maxLines: 6,
-                    style: GoogleFonts.notoSansKr(
-                      fontSize: 14,
-                      height: 1.32,
-                    ),
+                    style: GoogleFonts.notoSansKr(fontSize: 14, height: 1.32),
                     decoration: InputDecoration(
                       filled: true,
                       fillColor: theme.brightness == Brightness.dark
                           ? cs.surfaceContainerHigh
                           : cs.surface,
                       isDense: true,
-                      contentPadding: const EdgeInsets.fromLTRB(
-                        14,
-                        8,
-                        4,
-                        8,
-                      ),
+                      contentPadding: const EdgeInsets.fromLTRB(14, 8, 4, 8),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(22),
                         borderSide: BorderSide(
@@ -1872,17 +1939,22 @@ class _ReviewCommentComposerOverlayState
                                 child: OptimizedNetworkImage.avatar(
                                   imageUrl: url,
                                   size: avatarSize,
-                                  errorWidget:
-                                      _defaultAvatar(colorIdx, avatarSize),
+                                  errorWidget: _defaultAvatar(
+                                    colorIdx,
+                                    avatarSize,
+                                  ),
                                 ),
                               )
                             : _defaultAvatar(colorIdx, avatarSize);
                         final canSend =
-                            !_sending && widget.controller.text.trim().isNotEmpty;
-                        final sendBg =
-                            canSend ? _sendBlue : cs.onSurface.withValues(alpha: 0.22);
-                        final sendIconColor =
-                            canSend ? Colors.white : cs.onSurface.withValues(alpha: 0.38);
+                            !_sending &&
+                            widget.controller.text.trim().isNotEmpty;
+                        final sendBg = canSend
+                            ? _sendBlue
+                            : cs.onSurface.withValues(alpha: 0.22);
+                        final sendIconColor = canSend
+                            ? Colors.white
+                            : cs.onSurface.withValues(alpha: 0.38);
                         return Row(
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [

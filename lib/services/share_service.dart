@@ -1,8 +1,7 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'auth_service.dart';
+import 'locale_service.dart';
 
 /// 공유 대상 (국가별 인기 앱 표시용)
 enum ShareTarget {
@@ -65,45 +64,14 @@ class ShareService {
     );
   }
 
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  DocumentReference<Map<String, dynamic>> get _userDoc {
-    final uid = AuthService.instance.currentUser.value?.uid;
-    if (uid == null) return _firestore.collection('_').doc('_');
-    return _firestore.collection('users').doc(uid);
-  }
-
-  /// 설정된 공유용 국가 코드 (null이면 앱 기본 사용). 로그인 시 Firestore 동기화.
+  /// 앱 표시 언어(us/kr/jp/cn)와 동일한 코드 — 공유 문구·제목에 사용.
   Future<String?> getPreferredShareCountry() async {
-    final uid = AuthService.instance.currentUser.value?.uid;
-    if (uid != null) {
-      try {
-        final doc = await _userDoc.get();
-        if (doc.exists && doc.data() != null) {
-          final c = doc.data()!['preferredShareCountry'] as String?;
-          if (c != null) return c;
-        }
-      } catch (_) {}
-    }
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_prefShareCountry);
+    await LocaleService.instance.load();
+    final c = LocaleService.instance.locale;
+    return LocaleService.supportedLocales.contains(c) ? c : 'us';
   }
 
-  Future<void> setPreferredShareCountry(String? country) async {
-    final prefs = await SharedPreferences.getInstance();
-    if (country == null) {
-      await prefs.remove(_prefShareCountry);
-    } else {
-      await prefs.setString(_prefShareCountry, country);
-    }
-    final uid = AuthService.instance.currentUser.value?.uid;
-    if (uid != null) {
-      try {
-        await _userDoc.set({'preferredShareCountry': country}, SetOptions(merge: true));
-      } catch (_) {}
-    }
-  }
-
-  /// 로그아웃 시 호출 (로컬 공유 설정 삭제)
+  /// 로그아웃 시 호출 (구버전 로컬 공유 국가 프리퍼런스 제거)
   Future<void> clearForLogout() async {
     try {
       final prefs = await SharedPreferences.getInstance();

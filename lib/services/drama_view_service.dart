@@ -71,18 +71,25 @@ class DramaViewService {
       if (i > 0) await Future.delayed(delays[i]);
       try {
         final ref = _firestore.collection(_collection).doc(dramaId);
-        await ref.set({'count': FieldValue.increment(1)}, SetOptions(merge: true));
+        await ref.set({
+          'count': FieldValue.increment(1),
+        }, SetOptions(merge: true));
         final dayRef = _firestore
             .collection(_dailyCollection)
             .doc(_dayKey(DateTime.now()));
         try {
           await dayRef.update({'views.$dramaId': FieldValue.increment(1)});
         } catch (e) {
-          if (e.toString().contains('NOT_FOUND') || e.toString().contains('no document')) {
-            await dayRef.set({'views': {dramaId: 1}}, SetOptions(merge: true));
+          if (e.toString().contains('NOT_FOUND') ||
+              e.toString().contains('no document')) {
+            await dayRef.set({
+              'views': {dramaId: 1},
+            }, SetOptions(merge: true));
           }
         }
-        debugPrint('DramaViewService increment OK: $dramaId (attempt ${i + 1})');
+        debugPrint(
+          'DramaViewService increment OK: $dramaId (attempt ${i + 1})',
+        );
         return;
       } catch (e) {
         debugPrint('DramaViewService increment FAIL attempt ${i + 1}: $e');
@@ -122,9 +129,6 @@ class DramaViewService {
     for (final e in _localAdds.entries) {
       final current = map[e.key] ?? 0;
       if (e.value > current) map[e.key] = e.value;
-    }
-    if (map.isEmpty) {
-      debugPrint('DramaViewService: getAllViewCounts 결과 0개 — Firestore drama_views 컬렉션이 비어있거나 쓰기 규칙 미배포 가능성');
     }
     return map;
   }

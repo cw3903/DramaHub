@@ -1,3 +1,5 @@
+import 'dart:async' show unawaited;
+import 'dart:io' show Directory, File;
 import 'dart:math' show min;
 
 import 'package:flutter/cupertino.dart';
@@ -5,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image_cropper/image_cropper.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../models/custom_drama_list.dart';
 import '../models/drama.dart';
@@ -15,25 +19,34 @@ import '../services/drama_list_service.dart';
 import '../services/user_profile_service.dart';
 import '../widgets/country_scope.dart';
 import '../widgets/optimized_network_image.dart';
-import 'custom_drama_list_detail_screen.dart';
+import 'custom_list_navigation.dart';
 import 'drama_search_screen.dart';
+import '../widgets/lists_style_subpage_app_bar.dart';
 
-/// [CustomDramaListDetailScreen] 앱바와 동일 슬롯·높이·`<` 스타일.
-const double _kListsAppBarToolbarHeight = 46;
-const double _kListsAppBarSideSlotWidth = 108;
-
-String _listsOwnerDisplayName() {
-  final n = UserProfileService.instance.nicknameNotifier.value?.trim();
-  if (n != null && n.isNotEmpty) return n;
-  final d = AuthService.instance.currentUser.value?.displayName?.trim();
-  if (d != null && d.isNotEmpty) {
-    if (d.contains('@')) return d.split('@').first;
-    return d;
-  }
-  return '';
+Future<File> _listCoverWriteTempFile(Uint8List bytes) async {
+  final name = 'list_cover_${DateTime.now().microsecondsSinceEpoch}.jpg';
+  final f = File('${Directory.systemTemp.path}/$name');
+  await f.writeAsBytes(bytes);
+  return f;
 }
 
-/// Letterboxd 스타일 Lists — 상단 닉네임 + 가운데 Lists + 필터, 카드마다 제목·편수·포스터(무간격)·설명
+/// 리스트 표지 — 가로:세로 = 3:2 (상세 페이지·갤러리 크롭과 동일).
+class _ListCoverCropAspectPreset implements CropAspectRatioPresetData {
+  const _ListCoverCropAspectPreset();
+  @override
+  (int, int)? get data => (3, 2);
+  @override
+  String get name => 'list_cover_3x2';
+}
+
+/// 작성 화면 표지 슬롯 크기(가로형 3:2).
+abstract final class _ListCoverSlot {
+  static const double shortSide = 56;
+  static double get longSide => shortSide * 3 / 2;
+  static double get aspectRatio => 3 / 2;
+}
+
+/// Letterboxd 스타일 Lists — 상단 Lists + 필터, 카드마다 제목·편수·포스터(무간격)·설명
 class ListsScreen extends StatefulWidget {
   const ListsScreen({super.key});
 
@@ -53,7 +66,7 @@ class _ListsScreenState extends State<ListsScreen> {
   Future<void> _openCreateList(BuildContext context, dynamic s) async {
     final created = await Navigator.push<bool>(
       context,
-      CupertinoPageRoute<bool>(builder: (_) => const _CreateDramaListScreen()),
+      CupertinoPageRoute<bool>(builder: (_) => const DramaListEditorScreen()),
     );
     if (!context.mounted) return;
     if (created == true) {
@@ -70,21 +83,10 @@ class _ListsScreenState extends State<ListsScreen> {
     final s = CountryScope.of(context).strings;
     final isDark = theme.brightness == Brightness.dark;
     final bodyBg = theme.scaffoldBackgroundColor;
-    final pageBg =
-        isDark ? const Color(0xFF14181C) : theme.scaffoldBackgroundColor;
-    final headerBarBg = isDark ? Colors.black : pageBg;
-    final barFg = isDark ? Colors.white : cs.onSurface;
-    final leadingMuted = isDark
-        ? Colors.white.withValues(alpha: 0.52)
-        : cs.onSurface.withValues(alpha: 0.55);
-    final name = _listsOwnerDisplayName();
-    final topInset = MediaQuery.of(context).padding.top;
-    final listAppBarOverlay = SystemUiOverlayStyle(
-      statusBarColor: headerBarBg,
-      statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
-      statusBarIconBrightness:
-          isDark ? Brightness.light : Brightness.dark,
-      systemStatusBarContrastEnforced: false,
+    final headerBarBg = listsStyleSubpageHeaderBackground(theme);
+    final listAppBarOverlay = listsStyleSubpageSystemOverlay(
+      theme,
+      headerBarBg,
     );
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
@@ -92,158 +94,40 @@ class _ListsScreenState extends State<ListsScreen> {
       child: Scaffold(
         backgroundColor: bodyBg,
         appBar: PreferredSize(
-        preferredSize: Size.fromHeight(topInset + _kListsAppBarToolbarHeight),
-        child: Material(
-          color: headerBarBg,
-          child: SafeArea(
-            bottom: false,
-            child: SizedBox(
-              height: _kListsAppBarToolbarHeight,
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  SizedBox(
-                    width: _kListsAppBarSideSlotWidth,
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Padding(
-                        padding: const EdgeInsets.only(left: 4),
-                        child: GestureDetector(
-                          onTap: () => Navigator.pop(context),
-                          behavior: HitTestBehavior.opaque,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.arrow_back_ios_new_rounded,
-                                size: 14,
-                                color: leadingMuted,
-                              ),
-                              if (name.isNotEmpty) ...[
-                                const SizedBox(width: 2),
-                                Flexible(
-                                  child: Text(
-                                    name,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: GoogleFonts.notoSansKr(
-                                      fontSize: 13,
-                                      height: 1.1,
-                                      fontWeight: FontWeight.w500,
-                                      color: leadingMuted,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    child: Center(
-                      child: Text(
-                        s.get('tabLists'),
-                        style: GoogleFonts.notoSansKr(
-                          fontSize: 15,
-                          height: 1.05,
-                          fontWeight: FontWeight.w700,
-                          color: barFg,
-                        ),
-                      ),
-                    ),
-                  ),
-                  SizedBox(
-                    width: _kListsAppBarSideSlotWidth,
-                    child: Align(
-                      alignment: Alignment.centerRight,
-                      child: Padding(
-                        padding: const EdgeInsets.only(right: 4),
-                        child: Material(
-                          color: Colors.transparent,
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(8),
-                            onTap: () => _openCreateList(context, s),
-                            child: Ink(
-                              width: 28,
-                              height: 28,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF2C3440),
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(
-                                  color: Colors.white.withValues(alpha: 0.18),
-                                  width: 1,
-                                ),
-                              ),
-                              child: Center(
-                                child: SizedBox(
-                                  width: 12,
-                                  height: 12,
-                                  child: Stack(
-                                    children: [
-                                      Align(
-                                        alignment: Alignment.center,
-                                        child: Container(
-                                          width: 10,
-                                          height: 1.7,
-                                          color: Colors.white.withValues(
-                                            alpha: 0.95,
-                                          ),
-                                        ),
-                                      ),
-                                      Align(
-                                        alignment: Alignment.center,
-                                        child: Container(
-                                          width: 1.7,
-                                          height: 10,
-                                          color: Colors.white.withValues(
-                                            alpha: 0.95,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+          preferredSize: ListsStyleSubpageHeaderBar.preferredSizeOf(context),
+          child: ListsStyleSubpageHeaderBar(
+            title: s.get('tabLists'),
+            onBack: () => popListsStyleSubpage(context),
+            trailing: ListsStyleSubpageHeaderAddButton(
+              onTap: () => _openCreateList(context, s),
             ),
           ),
         ),
-      ),
         body: AnimatedBuilder(
           animation: Listenable.merge([
-          CustomDramaListService.instance.listsNotifier,
-          DramaListService.instance.extraNotifier,
-          UserProfileService.instance.nicknameNotifier,
+            CustomDramaListService.instance.listsNotifier,
+            DramaListService.instance.extraNotifier,
+            UserProfileService.instance.nicknameNotifier,
           ]),
           builder: (context, _) {
-          final country =
-              CountryScope.maybeOf(context)?.country ??
-              UserProfileService.instance.signupCountryNotifier.value;
+            final country =
+                CountryScope.maybeOf(context)?.country ??
+                UserProfileService.instance.signupCountryNotifier.value;
 
-          return ListView(
-            padding: EdgeInsets.zero,
-            children: [
-              ..._buildCustomListCards(
-                context: context,
-                strings: s,
-                isDark: isDark,
-                colorScheme: cs,
-                country: country,
-              ),
-            ],
-          );
-        },
-      ),
+            return ListView(
+              padding: EdgeInsets.zero,
+              children: [
+                ..._buildCustomListCards(
+                  context: context,
+                  strings: s,
+                  isDark: isDark,
+                  colorScheme: cs,
+                  country: country,
+                ),
+              ],
+            );
+          },
+        ),
       ),
     );
   }
@@ -323,10 +207,7 @@ class _FlushPosterStrip extends StatelessWidget {
         child: Material(
           type: MaterialType.transparency,
           clipBehavior: Clip.antiAlias,
-          shape: RoundedRectangleBorder(
-            borderRadius: r,
-            side: stripSide,
-          ),
+          shape: RoundedRectangleBorder(borderRadius: r, side: stripSide),
           child: placeholder,
         ),
       );
@@ -566,9 +447,7 @@ class _CreateListDramaThumb extends StatelessWidget {
       child: Stack(
         clipBehavior: Clip.none,
         children: [
-          Positioned.fill(
-            child: ClipRect(child: image),
-          ),
+          Positioned.fill(child: ClipRect(child: image)),
           Positioned(
             top: 2,
             right: 2,
@@ -636,14 +515,7 @@ class _CustomDramaListCard extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: () {
-          Navigator.push<void>(
-            context,
-            CupertinoPageRoute<void>(
-              builder: (_) => CustomDramaListDetailScreen(list: data),
-            ),
-          );
-        },
+        onTap: () => openCustomDramaListDetail(context, data),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -711,23 +583,86 @@ class _CustomDramaListCard extends StatelessWidget {
   }
 }
 
-class _CreateDramaListScreen extends StatefulWidget {
-  const _CreateDramaListScreen();
+/// 리스트 생성·수정 공통 화면. [existingList]가 있으면 수정 모드.
+class DramaListEditorScreen extends StatefulWidget {
+  const DramaListEditorScreen({super.key, this.existingList});
+  final CustomDramaList? existingList;
+  bool get isEditMode => existingList != null;
 
   @override
-  State<_CreateDramaListScreen> createState() => _CreateDramaListScreenState();
+  State<DramaListEditorScreen> createState() => _DramaListEditorScreenState();
 }
 
-class _CreateDramaListScreenState extends State<_CreateDramaListScreen> {
+class _DramaListEditorScreenState extends State<DramaListEditorScreen> {
   static const int _kMaxDramas = 20;
   static const int _kMaxTitleLen = 100;
   static const int _kMaxDescriptionLen = 1000;
   final _titleController = TextEditingController();
   final _descriptionController = TextEditingController();
   final List<DramaItem> _selected = [];
-  /// 리스트 상단 표지. null = 표지 없음. 반드시 [_selected]에 포함된 id만 허용.
+
+  /// 서버에서 온 드라마 포스터 표지(수정 모드 로드용). UI에서는 더 이상 드라마로 표지를 고르지 않음.
   String? _coverDramaId;
+  /// 갤러리에서 고른 커스텀 표지(업로드 전 미리보기). 있으면 [_coverDramaId]보다 우선.
+  Uint8List? _customCoverBytes;
+  /// 서버에 이미 있는 커스텀 표지 URL(수정 모드 미리보기).
+  String? _existingCoverImageUrl;
+  final ImagePicker _coverImagePicker = ImagePicker();
   bool _saving = false;
+
+  /// true면 저장 시 표지 없음(갤러리 미리보기 바이트/URL은 유지될 수 있음).
+  bool _publishWithoutCover = true;
+
+  bool get _noCoverSelected => _publishWithoutCover;
+
+  bool get _galleryCoverActiveForPublish =>
+      !_publishWithoutCover &&
+      (_customCoverBytes != null ||
+          (_existingCoverImageUrl != null &&
+              _existingCoverImageUrl!.trim().isNotEmpty));
+
+  @override
+  void initState() {
+    super.initState();
+    final ex = widget.existingList;
+    if (ex != null) {
+      _titleController.text = ex.title;
+      _descriptionController.text = ex.description;
+      final countryGuess =
+          UserProfileService.instance.signupCountryNotifier.value;
+      for (final id in ex.dramaIds) {
+        _selected.add(_dramaItemFromId(id, countryGuess));
+      }
+      final cu = ex.coverImageUrl?.trim();
+      if (cu != null &&
+          cu.isNotEmpty &&
+          (cu.startsWith('http://') || cu.startsWith('https://'))) {
+        _existingCoverImageUrl = cu;
+        _publishWithoutCover = false;
+      } else {
+        final cdi = ex.coverDramaId?.trim();
+        if (cdi != null && cdi.isNotEmpty && ex.dramaIds.contains(cdi)) {
+          _coverDramaId = cdi;
+          _publishWithoutCover = false;
+        }
+      }
+    }
+  }
+
+  DramaItem _dramaItemFromId(String dramaId, String? country) {
+    for (final it in DramaListService.instance.listNotifier.value) {
+      if (it.id == dramaId) return it;
+    }
+    final title = DramaListService.instance.getDisplayTitle(dramaId, country);
+    final url = DramaListService.instance.getDisplayImageUrl(dramaId, country);
+    return DramaItem(
+      id: dramaId,
+      title: title.isNotEmpty ? title : dramaId,
+      subtitle: '',
+      views: '0',
+      imageUrl: url,
+    );
+  }
 
   @override
   void dispose() {
@@ -750,7 +685,7 @@ class _CreateDramaListScreenState extends State<_CreateDramaListScreen> {
     final remaining = _kMaxDramas - _selected.length;
     final exclude = _selected.map((e) => e.id).toSet();
     FocusManager.instance.primaryFocus?.unfocus();
-    await DramaListService.instance.loadFromAsset();
+    unawaited(DramaListService.instance.loadFromAsset());
     if (!mounted) return;
     final pickedList = await Navigator.push<List<DramaItem>>(
       context,
@@ -777,61 +712,176 @@ class _CreateDramaListScreenState extends State<_CreateDramaListScreen> {
     });
   }
 
-  Future<void> _create() async {
+  Future<Uint8List?> _cropListCoverFromPath(String sourcePath) async {
+    final s = CountryScope.of(context).strings;
+    final theme = Theme.of(context);
+    const cropPreset = _ListCoverCropAspectPreset();
+    final cropped = await ImageCropper().cropImage(
+      sourcePath: sourcePath,
+      aspectRatio: const CropAspectRatio(ratioX: 3, ratioY: 2),
+      compressFormat: ImageCompressFormat.jpg,
+      compressQuality: 90,
+      uiSettings: [
+        AndroidUiSettings(
+          toolbarTitle: s.get('listCreateCoverCropTitle'),
+          toolbarColor: theme.colorScheme.surface,
+          toolbarWidgetColor: theme.colorScheme.onSurface,
+          backgroundColor: theme.colorScheme.surface,
+          lockAspectRatio: true,
+          aspectRatioPresets: const [cropPreset],
+          initAspectRatio: cropPreset,
+          cropStyle: CropStyle.rectangle,
+          showCropGrid: true,
+          cropGridRowCount: 2,
+          cropGridColumnCount: 2,
+          cropFrameColor: Colors.white,
+          cropFrameStrokeWidth: 3,
+          cropGridColor: Colors.white.withValues(alpha: 0.45),
+          cropGridStrokeWidth: 1,
+          dimmedLayerColor: Colors.black.withValues(alpha: 0.62),
+        ),
+        IOSUiSettings(
+          title: s.get('listCreateCoverCropTitle'),
+          cropStyle: CropStyle.rectangle,
+          aspectRatioLockEnabled: true,
+          resetAspectRatioEnabled: false,
+          aspectRatioPickerButtonHidden: true,
+          aspectRatioPresets: const [cropPreset],
+        ),
+      ],
+    );
+    if (!mounted || cropped == null) return null;
+    return File(cropped.path).readAsBytes();
+  }
+
+  Future<void> _pickGalleryCover() async {
+    final s = CountryScope.of(context).strings;
+    FocusManager.instance.primaryFocus?.unfocus();
+    try {
+      final x = await _coverImagePicker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 4096,
+        maxHeight: 4096,
+        imageQuality: 95,
+      );
+      if (!mounted || x == null) return;
+
+      String? path = x.path;
+      if (path.isEmpty) {
+        final raw = await x.readAsBytes();
+        if (raw.isEmpty) return;
+        path = (await _listCoverWriteTempFile(Uint8List.fromList(raw))).path;
+      }
+
+      final croppedBytes = await _cropListCoverFromPath(path);
+      if (!mounted || croppedBytes == null) return;
+      setState(() {
+        _customCoverBytes = croppedBytes;
+        _coverDramaId = null;
+        _existingCoverImageUrl = null;
+        _publishWithoutCover = false;
+      });
+    } catch (e, st) {
+      debugPrint('_pickGalleryCover: $e\n$st');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(s.get('listCreateCoverGalleryPickFailed'))),
+      );
+    }
+  }
+
+  Future<void> _save() async {
     final title = _titleController.text.trim();
     final description = _descriptionController.text.trim();
+    final str = CountryScope.of(context).strings;
     if (AuthService.instance.currentUser.value?.uid == null) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            CountryScope.of(context).strings.get('listCreateLoginRequired'),
-          ),
-        ),
+        SnackBar(content: Text(str.get('listCreateLoginRequired'))),
       );
       return;
     }
     if (title.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            CountryScope.of(context).strings.get('listCreateErrorNeedTitle'),
-          ),
-        ),
+        SnackBar(content: Text(str.get('listCreateErrorNeedTitle'))),
       );
       return;
     }
     if (_selected.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            CountryScope.of(context).strings.get('listCreateErrorNeedDrama'),
-          ),
-        ),
+        SnackBar(content: Text(str.get('listCreateErrorNeedDrama'))),
       );
       return;
     }
     setState(() => _saving = true);
     try {
+      String? uploadedCoverUrl;
+      if (_customCoverBytes != null && !_publishWithoutCover) {
+        uploadedCoverUrl = await CustomDramaListService.instance
+            .uploadListCoverImage(_customCoverBytes!);
+        if (!mounted) return;
+        if (uploadedCoverUrl == null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(str.get('listCreateCoverUploadFailed'))),
+          );
+          return;
+        }
+      }
+
+      if (widget.isEditMode) {
+        final clearAll = _publishWithoutCover;
+        String? coverImageUrlArg;
+        String? coverDramaIdArg;
+        if (!clearAll) {
+          if (uploadedCoverUrl != null) {
+            coverImageUrlArg = uploadedCoverUrl;
+          } else if (_galleryCoverActiveForPublish &&
+              _existingCoverImageUrl != null &&
+              _existingCoverImageUrl!.trim().isNotEmpty &&
+              _coverDramaId == null) {
+            coverImageUrlArg = _existingCoverImageUrl!.trim();
+          } else if (_coverDramaId != null) {
+            coverDramaIdArg = _coverDramaId;
+          }
+        }
+        final ok = await CustomDramaListService.instance.updateList(
+          listId: widget.existingList!.id,
+          title: title,
+          description: description,
+          dramaIds: _selected.map((e) => e.id).toList(),
+          coverImageUrl: coverImageUrlArg,
+          coverDramaId: coverDramaIdArg,
+          clearAllCovers: clearAll,
+        );
+        if (!mounted) return;
+        if (!ok) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(str.get('listCreateErrorSaveFailed'))),
+          );
+          return;
+        }
+        Navigator.pop(context, true);
+        return;
+      }
+
       await CustomDramaListService.instance.createList(
         title: title,
         description: description,
         dramaIds: _selected.map((e) => e.id).toList(),
-        coverDramaId: _coverDramaId,
+        coverDramaId: uploadedCoverUrl != null || _publishWithoutCover
+            ? null
+            : _coverDramaId,
+        coverImageUrl: uploadedCoverUrl,
       );
       if (!mounted) return;
       Navigator.pop(context, true);
     } catch (e, st) {
-      debugPrint('createList failed: $e\n$st');
+      debugPrint('save list failed: $e\n$st');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            CountryScope.of(context).strings.get('listCreateErrorSaveFailed'),
-          ),
-        ),
+        SnackBar(content: Text(str.get('listCreateErrorSaveFailed'))),
       );
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -847,156 +897,180 @@ class _CreateDramaListScreenState extends State<_CreateDramaListScreen> {
     final country = CountryScope.maybeOf(context)?.country;
     void unfocusFields() => FocusManager.instance.primaryFocus?.unfocus();
 
-    return Scaffold(
-      appBar: AppBar(title: Text(s.get('listCreateTitle'))),
-      body: GestureDetector(
-        behavior: HitTestBehavior.translucent,
-        onTap: unfocusFields,
-        child: ListView(
-          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-          children: [
-            TextField(
-              controller: _titleController,
-              maxLength: _kMaxTitleLen,
-              onTapOutside: (_) => unfocusFields(),
-              decoration: InputDecoration(
-                labelText: s.get('listCreateFieldTitle'),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _descriptionController,
-              minLines: 3,
-              maxLines: 10,
-              maxLength: _kMaxDescriptionLen,
-              textAlignVertical: TextAlignVertical.top,
-              onTapOutside: (_) => unfocusFields(),
-              decoration: InputDecoration(
-                alignLabelWithHint: true,
-                labelText: s.get('listCreateFieldDescription'),
-                floatingLabelAlignment: FloatingLabelAlignment.start,
-                contentPadding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-              ),
-            ),
-          const SizedBox(height: 12),
-          Row(
+    final headerBg = listsStyleSubpageHeaderBackground(theme);
+    final listAppBarOverlay = listsStyleSubpageSystemOverlay(theme, headerBg);
+
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: listAppBarOverlay,
+      child: Scaffold(
+        backgroundColor: theme.scaffoldBackgroundColor,
+        appBar: PreferredSize(
+          preferredSize: ListsStyleSubpageHeaderBar.preferredSizeOf(context),
+          child: ListsStyleSubpageHeaderBar(
+            title: widget.isEditMode
+                ? s.get('listEditTitle')
+                : s.get('listCreateTitle'),
+            onBack: () => popListsStyleSubpage(context),
+          ),
+        ),
+        body: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTap: unfocusFields,
+          child: ListView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
             children: [
-              Text(
-                s
-                    .get('listCreateDramaCount')
-                    .replaceAll('{count}', '${_selected.length}')
-                    .replaceAll('{max}', '$_kMaxDramas'),
-                style: GoogleFonts.notoSansKr(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
+              TextField(
+                controller: _titleController,
+                maxLength: _kMaxTitleLen,
+                onTapOutside: (_) => unfocusFields(),
+                decoration: InputDecoration(
+                  labelText: s.get('listCreateFieldTitle'),
                 ),
               ),
-              const Spacer(),
-              TextButton.icon(
-                onPressed: _pickDrama,
-                icon: const Icon(Icons.add),
-                label: Text(s.get('listCreateAddDrama')),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _descriptionController,
+                minLines: 3,
+                maxLines: 10,
+                maxLength: _kMaxDescriptionLen,
+                textAlignVertical: TextAlignVertical.top,
+                onTapOutside: (_) => unfocusFields(),
+                decoration: InputDecoration(
+                  alignLabelWithHint: true,
+                  labelText: s.get('listCreateFieldDescription'),
+                  floatingLabelAlignment: FloatingLabelAlignment.start,
+                  contentPadding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Text(
+                    s
+                        .get('listCreateDramaCount')
+                        .replaceAll('{count}', '${_selected.length}')
+                        .replaceAll('{max}', '$_kMaxDramas'),
+                    style: GoogleFonts.notoSansKr(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: _pickDrama,
+                    icon: const Icon(Icons.add),
+                    label: Text(s.get('listCreateAddDrama')),
+                  ),
+                ],
+              ),
+              if (_selected.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8, bottom: 20),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: _CreateListAddDramaPlaceholder(
+                      onTap: _pickDrama,
+                      colorScheme: cs,
+                      isDark: isDark,
+                    ),
+                  ),
+                )
+              else
+                Padding(
+                  padding: const EdgeInsets.only(top: 4, bottom: 16),
+                  child: SizedBox(
+                    height: _CreateListDramaThumb.thumbHeight,
+                    child: ListView.builder(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: _selected.length,
+                      itemBuilder: (context, index) {
+                        final item = _selected[index];
+                        return _CreateListDramaThumb(
+                          item: item,
+                          country: country,
+                          isDark: isDark,
+                          colorScheme: cs,
+                          onRemove: () {
+                            setState(() {
+                              _selected.removeWhere((e) => e.id == item.id);
+                              if (_coverDramaId == item.id) {
+                                _coverDramaId = null;
+                              }
+                            });
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              if (_selected.isNotEmpty) ...[
+                const SizedBox(height: 18),
+                Text(
+                  s.get('listCreateCoverTitle'),
+                  style: GoogleFonts.notoSansKr(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  s.get('listCreateCoverHint'),
+                  style: GoogleFonts.notoSansKr(
+                    fontSize: 13,
+                    height: 1.4,
+                    color: cs.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  height: _ListCoverSlot.shortSide + 8,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    children: [
+                      _ListCoverNonePick(
+                        selected: _noCoverSelected,
+                        label: s.get('listCreateCoverNone'),
+                        colorScheme: cs,
+                        isDark: isDark,
+                        onTap: () => setState(() {
+                          _publishWithoutCover = true;
+                          _coverDramaId = null;
+                        }),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.only(left: 8),
+                        child: _ListCoverGallerySlot(
+                          bytes: _customCoverBytes,
+                          networkPreviewUrl: _existingCoverImageUrl,
+                          selected: _galleryCoverActiveForPublish,
+                          colorScheme: cs,
+                          isDark: isDark,
+                          onTap: _pickGalleryCover,
+                          onClearPreview: () => setState(() {
+                            _customCoverBytes = null;
+                            _existingCoverImageUrl = null;
+                            _publishWithoutCover = true;
+                          }),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              const SizedBox(height: 24),
+              FilledButton(
+                onPressed: _saving ? null : _save,
+                child: Text(
+                  _saving
+                      ? s.get('listCreateSubmitting')
+                      : (widget.isEditMode
+                          ? s.get('listEditSave')
+                          : s.get('listCreateSubmit')),
+                ),
               ),
             ],
           ),
-          if (_selected.isEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 8, bottom: 20),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: _CreateListAddDramaPlaceholder(
-                  onTap: _pickDrama,
-                  colorScheme: cs,
-                  isDark: isDark,
-                ),
-              ),
-            )
-          else
-            Padding(
-              padding: const EdgeInsets.only(top: 4, bottom: 16),
-              child: SizedBox(
-                height: _CreateListDramaThumb.thumbHeight,
-                child: ListView.builder(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: _selected.length,
-                  itemBuilder: (context, index) {
-                    final item = _selected[index];
-                    return _CreateListDramaThumb(
-                      item: item,
-                      country: country,
-                      isDark: isDark,
-                      colorScheme: cs,
-                      onRemove: () {
-                        setState(() {
-                          _selected.removeWhere((e) => e.id == item.id);
-                          if (_coverDramaId == item.id) {
-                            _coverDramaId = null;
-                          }
-                        });
-                      },
-                    );
-                  },
-                ),
-              ),
-            ),
-          if (_selected.isNotEmpty) ...[
-            const SizedBox(height: 18),
-            Text(
-              s.get('listCreateCoverTitle'),
-              style: GoogleFonts.notoSansKr(
-                fontSize: 15,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              s.get('listCreateCoverHint'),
-              style: GoogleFonts.notoSansKr(
-                fontSize: 13,
-                height: 1.4,
-                color: cs.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 10),
-            SizedBox(
-              height: 86,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                children: [
-                  _ListCoverNonePick(
-                    selected: _coverDramaId == null,
-                    label: s.get('listCreateCoverNone'),
-                    colorScheme: cs,
-                    isDark: isDark,
-                    onTap: () => setState(() => _coverDramaId = null),
-                  ),
-                  for (final d in _selected)
-                    Padding(
-                      padding: const EdgeInsets.only(left: 8),
-                      child: _ListCoverDramaPick(
-                        item: d,
-                        country: country,
-                        selected: _coverDramaId == d.id,
-                        colorScheme: cs,
-                        isDark: isDark,
-                        onTap: () => setState(() => _coverDramaId = d.id),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ],
-          const SizedBox(height: 24),
-          FilledButton(
-            onPressed: _saving ? null : _create,
-            child: Text(
-              _saving
-                  ? s.get('listCreateSubmitting')
-                  : s.get('listCreateSubmit'),
-            ),
-          ),
-        ],
         ),
       ),
     );
@@ -1034,22 +1108,28 @@ class _ListCoverNonePick extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(6),
-        child: Ink(
-          width: 56,
-          height: 80,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(6),
-            border: border,
-            color: isDark ? const Color(0xFF2C3440) : cs.surfaceContainerHighest,
-          ),
-          child: Center(
-            child: Text(
-              label,
-              textAlign: TextAlign.center,
-              style: GoogleFonts.notoSansKr(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: selected ? cs.primary : cs.onSurfaceVariant,
+        child: SizedBox(
+          width: _ListCoverSlot.longSide,
+          child: AspectRatio(
+            aspectRatio: _ListCoverSlot.aspectRatio,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(6),
+                border: border,
+                color: isDark
+                    ? const Color(0xFF2C3440)
+                    : cs.surfaceContainerHighest,
+              ),
+              child: Center(
+                child: Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.notoSansKr(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: selected ? cs.primary : cs.onSurfaceVariant,
+                  ),
+                ),
               ),
             ),
           ),
@@ -1059,31 +1139,64 @@ class _ListCoverNonePick extends StatelessWidget {
   }
 }
 
-class _ListCoverDramaPick extends StatelessWidget {
-  const _ListCoverDramaPick({
-    required this.item,
-    required this.country,
+/// List 작성 — 표지: None 오른쪽 갤러리 슬롯(회색 + / 선택 시 미리보기, 탭하면 다시 고름).
+class _ListCoverGallerySlot extends StatelessWidget {
+  const _ListCoverGallerySlot({
+    required this.bytes,
+    this.networkPreviewUrl,
     required this.selected,
     required this.colorScheme,
     required this.isDark,
     required this.onTap,
+    required this.onClearPreview,
   });
 
-  final DramaItem item;
-  final String? country;
+  final Uint8List? bytes;
+  /// 수정 모드: 서버에 올라간 커스텀 표지 URL 미리보기.
+  final String? networkPreviewUrl;
   final bool selected;
   final ColorScheme colorScheme;
   final bool isDark;
   final VoidCallback onTap;
+  final VoidCallback onClearPreview;
 
-  static const double _h = 80;
-  static const double _w = _h * 2 / 3;
+  static double get _w => _ListCoverSlot.longSide;
+
+  static Widget _networkOrAdd(ColorScheme cs, String? url) {
+    final u = url?.trim();
+    if (u != null &&
+        u.isNotEmpty &&
+        (u.startsWith('http://') || u.startsWith('https://'))) {
+      return Positioned.fill(
+        child: OptimizedNetworkImage(
+          imageUrl: u,
+          fit: BoxFit.cover,
+          memCacheWidth: 252,
+          memCacheHeight: 168,
+          errorWidget: Center(
+            child: Icon(
+              Icons.add,
+              size: 28,
+              color: cs.onSurfaceVariant.withValues(alpha: 0.55),
+            ),
+          ),
+        ),
+      );
+    }
+    return Positioned.fill(
+      child: Center(
+        child: Icon(
+          Icons.add,
+          size: 28,
+          color: cs.onSurfaceVariant.withValues(alpha: 0.55),
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final cs = colorScheme;
-    final url = DramaListService.instance.getDisplayImageUrl(item.id, country) ??
-        item.imageUrl;
     final border = selected
         ? Border.all(color: cs.primary, width: 2)
         : Border.all(
@@ -1092,53 +1205,73 @@ class _ListCoverDramaPick extends StatelessWidget {
                 : cs.outline.withValues(alpha: 0.35),
             width: 1,
           );
-    final placeholder = ColoredBox(
-      color: isDark ? const Color(0xFF2C3440) : cs.surfaceContainerHighest,
-      child: Icon(
-        LucideIcons.film,
-        size: 22,
-        color: cs.onSurfaceVariant.withValues(alpha: 0.35),
-      ),
-    );
-
+    final hasPreview =
+        bytes != null ||
+        (networkPreviewUrl != null &&
+            networkPreviewUrl!.trim().isNotEmpty &&
+            (networkPreviewUrl!.startsWith('http://') ||
+                networkPreviewUrl!.startsWith('https://')));
+    // 가로 ListView 안에서 비율 유지 (표지 3:2).
+    final slotAspect = _ListCoverSlot.aspectRatio;
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(6),
-        child: Ink(
+        child: SizedBox(
           width: _w,
-          height: _h,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(6),
-            border: border,
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                if (url != null && url.startsWith('http'))
-                  OptimizedNetworkImage(
-                    imageUrl: url,
-                    width: _w,
-                    height: _h,
-                    fit: BoxFit.cover,
-                    memCacheWidth: 160,
-                    memCacheHeight: 240,
-                    errorWidget: placeholder,
-                  )
-                else if (url != null && url.isNotEmpty)
-                  Image.asset(
-                    url,
-                    fit: BoxFit.cover,
-                    width: _w,
-                    height: _h,
-                    errorBuilder: (c, e, st) => placeholder,
-                  )
-                else
-                  placeholder,
-              ],
+          child: AspectRatio(
+            aspectRatio: slotAspect,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(6),
+                border: border,
+                color: isDark
+                    ? const Color(0xFF2C3440)
+                    : cs.surfaceContainerHighest,
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(5),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    if (bytes != null)
+                      Positioned.fill(
+                        child: Image.memory(
+                          bytes!,
+                          fit: BoxFit.cover,
+                          alignment: Alignment.center,
+                          gaplessPlayback: true,
+                          filterQuality: FilterQuality.medium,
+                        ),
+                      )
+                    else
+                      _networkOrAdd(cs, networkPreviewUrl),
+                    if (hasPreview)
+                      Positioned(
+                        top: 2,
+                        right: 2,
+                        child: Material(
+                          color: Colors.black.withValues(alpha: 0.55),
+                          shape: const CircleBorder(),
+                          clipBehavior: Clip.antiAlias,
+                          child: InkWell(
+                            onTap: onClearPreview,
+                            customBorder: const CircleBorder(),
+                            child: const Padding(
+                              padding: EdgeInsets.all(4),
+                              child: Icon(
+                                Icons.close,
+                                size: 14,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
             ),
           ),
         ),

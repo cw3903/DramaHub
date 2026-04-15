@@ -6,6 +6,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../models/post.dart';
 import 'country_scope.dart';
 import 'optimized_network_image.dart';
+import 'user_profile_nav.dart';
 
 /// 리뷰 피드 전용 카드 (썸네일 60×80, 제목·별점·2줄 미리보기, 하단 닉네임·시간)
 class FeedReviewPostCard extends StatelessWidget {
@@ -41,23 +42,48 @@ class FeedReviewPostCard extends StatelessWidget {
     );
   }
 
-  static Widget _starRow(double rating) {
+  static Widget _starRow(
+    double rating, {
+    double iconSize = 17,
+    /// 인덱스 i마다 왼쪽으로 i배만큼 이동(겹침으로 간격 축소, 레이아웃 폭은 유지).
+    double cumulativeShiftXPerIndex = 0,
+    double translateY = 0,
+  }) {
     final units = (rating.clamp(0.0, 5.0) * 2).round().clamp(0, 10);
     final fullCount = units ~/ 2;
     final hasHalf = units.isOdd;
     final starCount = fullCount + (hasHalf ? 1 : 0);
     if (starCount == 0) return const SizedBox.shrink();
-    const iconSize = 17.0;
-    return Row(
+    final Widget row = Row(
       mainAxisSize: MainAxisSize.min,
       children: List.generate(starCount, (i) {
         final isHalf = hasHalf && i == fullCount;
-        return isHalf
+        final Widget raw = isHalf
             ? _filledHalfStarOnly(iconSize, _starOrange)
             : Icon(Icons.star_rounded, size: iconSize, color: _starOrange);
+        if (cumulativeShiftXPerIndex == 0 && translateY == 0) return raw;
+        return Transform.translate(
+          offset: Offset(-cumulativeShiftXPerIndex * i, translateY),
+          child: raw,
+        );
       }),
     );
+    return row;
   }
+
+  /// 홈 탭 리뷰 피드 카드와 동일 — 17px, 0.5점 단위는 반쪽 클립(4.5 → 별4 + 반개).
+  static Widget homeFeedStyleStarRow(
+    double rating, {
+    double iconSize = 17,
+    double cumulativeShiftXPerIndex = 0,
+    double translateY = 0,
+  }) =>
+      _starRow(
+        rating,
+        iconSize: iconSize,
+        cumulativeShiftXPerIndex: cumulativeShiftXPerIndex,
+        translateY: translateY,
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -195,7 +221,7 @@ class FeedReviewPostCard extends StatelessWidget {
                           const SizedBox(height: 4),
                           Row(
                             children: [
-                              _starRow(r),
+                              homeFeedStyleStarRow(r),
                             ],
                           ),
                           const SizedBox(height: 6),
@@ -209,14 +235,23 @@ class FeedReviewPostCard extends StatelessWidget {
                 Row(
                   children: [
                     Expanded(
-                      child: Text(
-                        post.author,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: GoogleFonts.notoSansKr(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                          color: cs.onSurfaceVariant,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () {
+                          final u = post.authorUid?.trim();
+                          if (u != null && u.isNotEmpty) {
+                            openUserProfileFromAuthorUid(context, u);
+                          }
+                        },
+                        child: Text(
+                          post.author,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: GoogleFonts.notoSansKr(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: cs.onSurfaceVariant,
+                          ),
                         ),
                       ),
                     ),
