@@ -21,10 +21,12 @@ String _postFeedFilterToken(Post post) {
   return post.subreddit.trim().toLowerCase();
 }
 
-/// 리뷰 게시판: 별점만 있고 본문이 비어 있으면 목록에 넣지 않음.
+/// DramaFeed 리뷰 탭: 본문만 있고 별점 없으면 제외. 봤어요만·별만·본문+별 포함.
 bool reviewFeedPostHasWrittenBody(Post post) {
   final b = post.body?.replaceAll(RegExp(r'\s+'), ' ').trim() ?? '';
-  return b.isNotEmpty;
+  final r = post.rating ?? 0;
+  if (b.isNotEmpty && r <= 0) return false;
+  return true;
 }
 
 /// DramaFeed 탭 필터: review / trend / talk / ask

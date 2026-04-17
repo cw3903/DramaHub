@@ -370,6 +370,11 @@ class UserProfileService {
 
   /// 글 작성자 (u/ 접두사)
   Future<String> getAuthorForPost() async {
+    // 프로필이 이미 로드된 경우 Firestore 왕복 없이 즉시 반환
+    if (_loaded) {
+      final n = nicknameNotifier.value?.trim();
+      if (n != null && n.isNotEmpty) return 'u/$n';
+    }
     final base = await getAuthorBaseName();
     return 'u/$base';
   }

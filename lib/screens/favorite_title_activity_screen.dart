@@ -518,7 +518,8 @@ class _FavoriteTitleActivityScreenState
     final brightness = theme.brightness;
 
     final headerBg = listsStyleSubpageHeaderBackground(theme);
-    return AnnotatedRegion<SystemUiOverlayStyle>(
+    return ListsStyleSwipeBack(
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
       value: listsStyleSubpageSystemOverlay(theme, headerBg),
       child: Scaffold(
         backgroundColor: theme.scaffoldBackgroundColor,
@@ -632,7 +633,6 @@ class _FavoriteTitleActivityScreenState
                                 item: review,
                                 showDramaTitle: false,
                                 letterboxdActivityAuthorRow: true,
-                                activityAuthorNameFontSize: 12,
                                 onEdit: widget.readOnly
                                     ? null
                                     : () => _openWriteReviewForFavorite(
@@ -659,6 +659,7 @@ class _FavoriteTitleActivityScreenState
         },
         ),
       ),
+    ),
     );
   }
 }

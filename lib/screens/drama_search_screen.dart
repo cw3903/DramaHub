@@ -11,10 +11,18 @@ import '../models/drama.dart';
 import '../services/drama_list_service.dart';
 import '../services/drama_search_stats_service.dart';
 import '../services/review_service.dart';
+import '../services/user_profile_service.dart';
 import '../widgets/country_scope.dart';
 import '../widgets/drama_grid_card.dart';
+import '../widgets/optimized_network_image.dart';
 import '../widgets/lists_style_subpage_app_bar.dart';
 import 'drama_detail_page.dart';
+
+/// [WatchlistScreen] 본문 그리드와 동일 — 태그 검색(`genreTagFilter`) 본문 전용.
+const double _kTagSearchWatchlistGridAspect = 0.74;
+const double _kTagSearchWatchlistGridPadH = 15;
+const double _kTagSearchWatchlistGridGap = 7;
+const int _kTagSearchWatchlistMaxPosters = 4;
 
 /// 리뷰(드라마) 탭 검색창 탭 시 — 실제 드라마 목록(dramas.json) 기준 제목·장르 검색
 class DramaSearchScreen extends StatefulWidget {
@@ -23,6 +31,7 @@ class DramaSearchScreen extends StatefulWidget {
     this.pickMode = false,
     this.pickExcludeDramaIds,
     this.multiPickMax,
+    this.genreTagFilter,
   });
 
   /// true면 행 탭 시 [DramaItem]만 반환하고 상세로 이동하지 않음 (커뮤니티 리뷰용)
@@ -33,6 +42,9 @@ class DramaSearchScreen extends StatefulWidget {
 
   /// null이면 탭 시 1편 즉시 [Navigator.pop] · 지정 시 이 화면에서 최대 [multiPickMax]편까지 선택 후 앱바 완료로 [List] 반환.
   final int? multiPickMax;
+
+  /// 지정 시 검색·인기 목록 풀을 [DramaListService.getDramasMatchingGenreTag] 결과로만 제한(태그 목록에서 검색).
+  final String? genreTagFilter;
 
   @override
   State<DramaSearchScreen> createState() => _DramaSearchScreenState();
@@ -59,6 +71,9 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
   /// 뒤로가기·픽 완료·카드 선택 등 `maybePop`이 겹치면 네비게이터 히스토리가 비는 assert 방지.
   bool _navBusy = false;
 
+  /// 검색 그리드 상단 일부 id에 대해 전체 리뷰 평균 프리패치 (상세와 동일 소스).
+  String? _searchGridRatingPrefetchSig;
+
   Future<void> _popSelf<T extends Object?>([T? result]) async {
     if (!mounted || _navBusy) return;
     _navBusy = true;
@@ -79,6 +94,8 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
   List<DramaItem>? _memListRef;
   String? _memCountry;
   List<DramaItem>? _memAllList;
+  /// [_getAllListCached] — 전체 목록 vs 태그 부분집합 구분용
+  String? _memTagFilter;
   String? _memFilteredQLower;
   String? _memFilteredCountry;
   Object? _memFilteredSourceRef;
@@ -112,14 +129,19 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
 
   List<DramaItem> _getAllListCached(String? country) {
     final ref = DramaListService.instance.listNotifier.value;
+    final tag = widget.genreTagFilter?.trim();
     if (identical(_memListRef, ref) &&
         _memCountry == country &&
+        _memTagFilter == tag &&
         _memAllList != null) {
       return _memAllList!;
     }
     _memListRef = ref;
     _memCountry = country;
-    _memAllList = DramaListService.instance.getListForCountry(country);
+    _memTagFilter = tag;
+    _memAllList = (tag != null && tag.isNotEmpty)
+        ? DramaListService.instance.getDramasMatchingGenreTag(tag, country)
+        : DramaListService.instance.getListForCountry(country);
     _memFilteredQLower = null;
     _memFilteredCountry = null;
     _memPickKey = null;
@@ -320,15 +342,24 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
             setState(() => _submittedQuery = q);
             if (q.isNotEmpty) {
               final country = CountryScope.maybeOf(context)?.country;
-              final list = DramaListService.instance.getListForCountry(country);
+              final tag = widget.genreTagFilter?.trim();
+              final list = (tag != null && tag.isNotEmpty)
+                  ? DramaListService.instance.getDramasMatchingGenreTag(
+                      tag,
+                      country,
+                    )
+                  : DramaListService.instance.getListForCountry(country);
               final lower = q.toLowerCase();
+              final statCap = (widget.genreTagFilter?.trim().isNotEmpty == true)
+                  ? _kTagSearchWatchlistMaxPosters
+                  : 10;
               final ids = list
                   .where((item) {
                     final t = DramaListService.instance.getDisplayTitle(item.id, country).toLowerCase();
                     final sub = DramaListService.instance.getDisplaySubtitle(item.id, country).toLowerCase();
                     return t.contains(lower) || sub.contains(lower);
                   })
-                  .take(10)
+                  .take(statCap)
                   .map((e) => e.id)
                   .toList();
               DramaSearchStatsService.instance.incrementSearch(ids);
@@ -364,23 +395,54 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
           final allList = _getAllListCached(country);
           final q = _submittedQuery.toLowerCase();
           final filteredList = _filteredCached(allList, country, q);
-          if (_submittedQuery.isNotEmpty && filteredList.isEmpty) {
-            return Center(
-              child: Text(
-                s.get('searchNoResults').replaceAll('%s', _submittedQuery),
-                style: GoogleFonts.notoSansKr(fontSize: 15, color: cs.onSurfaceVariant),
-                textAlign: TextAlign.center,
-              ),
+          // 태그 목록에서 연 검색은 `genreTagFilter` 인자를 항상 넘김(빈 문자열일 수 있음).
+          // `trim().isNotEmpty`만 쓰면 인기 검색·기간 탭 UI로 떨어져 버림.
+          if (widget.genreTagFilter != null && !widget.pickMode) {
+            final theme = Theme.of(context);
+            if (_submittedQuery.isNotEmpty && filteredList.isEmpty) {
+              return Center(
+                child: Text(
+                  s.get('searchNoResults').replaceAll('%s', _submittedQuery),
+                  style: GoogleFonts.notoSansKr(
+                    fontSize: 15,
+                    color: cs.onSurfaceVariant,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              );
+            }
+            if (allList.isEmpty) {
+              return Center(
+                child: Text(
+                  s.get('tagDramaListEmpty'),
+                  style: GoogleFonts.notoSansKr(
+                    fontSize: 15,
+                    color: cs.onSurfaceVariant,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              );
+            }
+            final displayList = (_submittedQuery.isNotEmpty
+                    ? filteredList
+                    : allList)
+                .take(_kTagSearchWatchlistMaxPosters)
+                .toList();
+            return _buildTagGenreWatchlistGrid(
+              context,
+              displayList,
+              country,
+              theme.scaffoldBackgroundColor,
             );
           }
-          if (_submittedQuery.isEmpty && allList.isEmpty) {
+          if (_submittedQuery.isNotEmpty && filteredList.isEmpty) {
             // 워치리스트 등 pick 모드: 목록 로드 전 안내 문구 대신 빈 화면(곧 그리드 표시)
             if (widget.pickMode) {
               return const SizedBox.expand();
             }
             return Center(
               child: Text(
-                s.get('searchEnterQuery'),
+                s.get('searchNoResults').replaceAll('%s', _submittedQuery),
                 style: GoogleFonts.notoSansKr(fontSize: 15, color: cs.onSurfaceVariant),
                 textAlign: TextAlign.center,
               ),
@@ -523,6 +585,23 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
     );
   }
 
+  void _prefetchSearchGridRatings(List<DramaItem> displayList) {
+    final capped =
+        displayList.length > 60 ? displayList.sublist(0, 60) : displayList;
+    if (capped.isEmpty) return;
+    final sig =
+        '${displayList.length}\u001f${capped.map((e) => e.id).join('\u001f')}';
+    if (sig == _searchGridRatingPrefetchSig) return;
+    _searchGridRatingPrefetchSig = sig;
+    unawaited(
+      ReviewService.instance
+          .prefetchDramaRatingStats(capped.map((e) => e.id))
+          .then((_) {
+        if (mounted) setState(() {});
+      }),
+    );
+  }
+
   /// 드라마 탭 그리드와 동일 카드 — 검색 화면만 **4열**.
   Widget _buildDramaGrid(
     BuildContext navigatorContext,
@@ -535,6 +614,11 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
     bool titleOnly = false,
     double? gridChildAspectRatio,
   }) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _prefetchSearchGridRatings(displayList);
+    });
+
     final title = sectionTitle ?? s.get('popularSearch');
     final r = dramaGridScreenScale(navigatorContext);
     final gap = 8 * r;
@@ -580,9 +664,10 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
               final imageUrl = DramaListService.instance
                       .getDisplayImageUrl(item.id, country) ??
                   item.imageUrl;
-              final rating =
-                  ReviewService.instance.getByDramaId(item.id)?.rating ??
-                      item.rating;
+              final rating = ReviewService.instance.ratingForListCard(
+                item.id,
+                catalogRating: item.rating,
+              );
               return DramaGridCard(
                 displayTitle:
                     displayTitle.isNotEmpty ? displayTitle : item.title,
@@ -645,6 +730,173 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  bool _isFavoriteDrama(String dramaId) {
+    if (dramaId.trim().isEmpty) return false;
+    return UserProfileService.instance.favoritesNotifier.value
+        .any((e) => e.dramaId == dramaId);
+  }
+
+  /// 태그 검색: [WatchlistScreen]과 동일 4열·포스터만·최대 4편.
+  Widget _buildTagGenreWatchlistGrid(
+    BuildContext context,
+    List<DramaItem> displayList,
+    String? country,
+    Color gridBg,
+  ) {
+    return AnimatedBuilder(
+      animation: UserProfileService.instance.favoritesNotifier,
+      builder: (context, _) {
+        return ColoredBox(
+          color: gridBg,
+          child: GridView.builder(
+            shrinkWrap: true,
+            padding: const EdgeInsets.fromLTRB(
+              _kTagSearchWatchlistGridPadH,
+              10,
+              _kTagSearchWatchlistGridPadH,
+              28,
+            ),
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 4,
+              childAspectRatio: _kTagSearchWatchlistGridAspect,
+              crossAxisSpacing: _kTagSearchWatchlistGridGap,
+              mainAxisSpacing: _kTagSearchWatchlistGridGap,
+            ),
+            itemCount: displayList.length,
+            itemBuilder: (gridContext, index) {
+              final item = displayList[index];
+              final dramaId = item.id;
+              final imageUrl = DramaListService.instance
+                      .getDisplayImageUrl(dramaId, country) ??
+                  item.imageUrl;
+              return _TagSearchWatchlistPosterCell(
+                key: ValueKey(dramaId),
+                imageUrl: imageUrl,
+                showFavoriteStar: _isFavoriteDrama(dramaId),
+                onOpen: () async {
+                  unawaited(
+                    DramaSearchStatsService.instance.incrementClick(dramaId),
+                  );
+                  final detail =
+                      DramaListService.instance.buildDetailForItem(item, country);
+                  if (!mounted) return;
+                  await Navigator.push<void>(
+                    gridContext,
+                    CupertinoPageRoute<void>(
+                      builder: (_) => DramaDetailPage(detail: detail),
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// [WatchlistScreen] `_WatchlistPosterCell`과 동일 포스터만(제거 버튼 없음).
+class _TagSearchWatchlistPosterCell extends StatelessWidget {
+  const _TagSearchWatchlistPosterCell({
+    super.key,
+    required this.imageUrl,
+    required this.onOpen,
+    this.showFavoriteStar = false,
+  });
+
+  final String? imageUrl;
+  final VoidCallback onOpen;
+  final bool showFavoriteStar;
+
+  static const double _radius = 4.5;
+  static const double _borderWidth = 0.6;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final cs = theme.colorScheme;
+    final url = imageUrl;
+    final borderColor = isDark
+        ? const Color(0xFF4A5568)
+        : cs.outline.withValues(alpha: 0.38);
+
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(_radius),
+        border: Border.all(color: borderColor, width: _borderWidth),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          const ColoredBox(color: Color(0xFF1E252E)),
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: onOpen,
+              borderRadius: BorderRadius.circular(_radius),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (url != null &&
+                      (url.startsWith('http://') || url.startsWith('https://')))
+                    OptimizedNetworkImage(
+                      imageUrl: url,
+                      fit: BoxFit.cover,
+                      width: double.infinity,
+                      height: double.infinity,
+                    )
+                  else if (url != null && url.isNotEmpty)
+                    Image.asset(
+                      url,
+                      fit: BoxFit.cover,
+                      width: double.infinity,
+                      height: double.infinity,
+                      errorBuilder: (context, error, stackTrace) => Center(
+                        child: Icon(
+                          LucideIcons.tv,
+                          size: 20,
+                          color: Colors.white.withValues(alpha: 0.18),
+                        ),
+                      ),
+                    )
+                  else
+                    Center(
+                      child: Icon(
+                        LucideIcons.tv,
+                        size: 20,
+                        color: Colors.white.withValues(alpha: 0.18),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          if (showFavoriteStar)
+            Positioned(
+              top: 3,
+              left: 3,
+              child: Container(
+                padding: const EdgeInsets.all(1),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.45),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+                child: const Icon(
+                  Icons.star_rounded,
+                  size: 13,
+                  color: Color(0xFFFFB020),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

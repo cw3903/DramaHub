@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../constants/app_profile_avatar_size.dart';
 import '../models/post.dart';
 import '../services/auth_service.dart';
 import '../services/block_service.dart';
@@ -23,6 +24,7 @@ import '../screens/write_post_page.dart';
 import '../screens/message_thread_screen.dart';
 import '../screens/user_posts_screen.dart';
 import '../widgets/user_profile_nav.dart';
+import 'feed_inline_action_colors.dart';
 import '../screens/full_screen_video_page.dart';
 import '../services/message_service.dart';
 import '../services/home_tab_visibility.dart';
@@ -585,16 +587,12 @@ class _FeedPostCardState extends State<FeedPostCard> {
     final talkAskFeedTitleStyle = GoogleFonts.notoSansKr(
       fontSize: 17,
       fontWeight: FontWeight.w700,
-      color: cs.onSurface,
+      color: AppColors.homeBoardTitleForeground(cs),
       height: 1.42,
       letterSpacing: -0.25,
     );
-    final talkAskMetaColor = cs.onSurface.withValues(alpha: 0.56);
-    final talkAskAuthorNameStyle = GoogleFonts.notoSansKr(
-      fontSize: 13,
-      color: talkAskMetaColor,
-      fontWeight: FontWeight.w600,
-    );
+    /// 홈 리뷰 게시판 [FeedReviewPostCard] 닉네임과 동일.
+    final talkAskAuthorNameStyle = appUnifiedNicknameStyle(cs);
     final baseCardColor = theme.cardTheme.color ?? cs.surface;
 
     /// 톡·에스크 탭 카드만 배경을 한 톤 더 짙게(리뷰/인기 등과 구분).
@@ -607,11 +605,8 @@ class _FeedPostCardState extends State<FeedPostCard> {
               baseCardColor
         : baseCardColor;
 
-    /// 톡·에스크 카드: 닉 상단·시간 하단을 프로필 원과 맞춤 (기존 38보다 약간 작게)
-    final talkAskAvatarSize = 33.0;
-    final defaultOtherAvatar = 38.0;
-    final headerAvatarSize = widget.authorAvatarSize ??
-        (compactTalkAskBar ? talkAskAvatarSize : defaultOtherAvatar);
+    final headerAvatarSize =
+        widget.authorAvatarSize ?? kAppUnifiedProfileAvatarSize;
     final authorUid = post.authorUid?.trim();
     final myUid = AuthService.instance.currentUser.value?.uid.trim();
     final isMineByUid =
@@ -643,11 +638,7 @@ class _FeedPostCardState extends State<FeedPostCard> {
                     displayAuthor,
                     style: compactTalkAskBar
                         ? talkAskAuthorNameStyle
-                        : GoogleFonts.notoSansKr(
-                            fontSize: 13,
-                            color: cs.onSurface,
-                            fontWeight: FontWeight.w700,
-                          ),
+                        : appUnifiedNicknameStyle(cs),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -687,11 +678,7 @@ class _FeedPostCardState extends State<FeedPostCard> {
                     displayAuthor,
                     style: compactTalkAskBar
                         ? talkAskAuthorNameStyle
-                        : GoogleFonts.notoSansKr(
-                            fontSize: 13,
-                            color: cs.onSurface,
-                            fontWeight: FontWeight.w700,
-                          ),
+                        : appUnifiedNicknameStyle(cs),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -722,11 +709,11 @@ class _FeedPostCardState extends State<FeedPostCard> {
     final timeText = Text(
       post.timeAgo,
       style: GoogleFonts.notoSansKr(
-        fontSize: 11,
+        fontSize: compactTalkAskBar ? 10 : 11,
+        fontWeight: compactTalkAskBar ? FontWeight.w500 : FontWeight.w600,
         color: compactTalkAskBar
-            ? talkAskMetaColor
+            ? cs.onSurfaceVariant.withValues(alpha: 0.85)
             : AppColors.mediumGrey.withOpacity(0.7),
-        fontWeight: FontWeight.w600,
       ),
     );
 
@@ -794,7 +781,7 @@ class _FeedPostCardState extends State<FeedPostCard> {
                                 size: headerAvatarSize,
                               ),
                             ),
-                            const SizedBox(width: 10),
+                            const SizedBox(width: 6),
                             Expanded(
                               child: Column(
                                 mainAxisAlignment:
@@ -842,7 +829,7 @@ class _FeedPostCardState extends State<FeedPostCard> {
                       : GoogleFonts.notoSansKr(
                           fontSize: 20,
                           fontWeight: FontWeight.w700,
-                          color: cs.onSurface,
+                          color: AppColors.homeBoardTitleForeground(cs),
                           height: 1.45,
                           letterSpacing: -0.3,
                         ),
@@ -928,7 +915,7 @@ class _FeedPostCardState extends State<FeedPostCard> {
                               compact: false,
                             ),
                     ),
-                    if (compactTalkAskBar) const SizedBox(width: 6),
+                    if (compactTalkAskBar) const SizedBox(width: 4),
                     // 댓글 (+ TALK/ASK는 조회수 숨김)
                     Transform.translate(
                       offset: Offset(compactTalkAskBar ? 0 : -10, 0),
@@ -951,8 +938,10 @@ class _FeedPostCardState extends State<FeedPostCard> {
                                     child: Center(
                                       child: Icon(
                                         LucideIcons.message_circle,
-                                        size: 16,
-                                        color: _feedMetaGray,
+                                        size: 13,
+                                        color: feedInlineActionMutedForeground(
+                                          cs,
+                                        ),
                                       ),
                                     ),
                                   )
@@ -967,8 +956,8 @@ class _FeedPostCardState extends State<FeedPostCard> {
                                   Text(
                                     formatCompactCount(post.comments),
                                     style: GoogleFonts.notoSansKr(
-                                      color: _feedMetaGray,
-                                      fontSize: 12,
+                                      color: feedInlineActionMutedForeground(cs),
+                                      fontSize: 10,
                                       fontWeight: FontWeight.w600,
                                       height: 1.0,
                                     ),
@@ -1107,20 +1096,22 @@ class TalkAskHeartVote extends StatelessWidget {
   /// true: 피드 카드, false: 글 상세 등 여유 있는 레이아웃
   final bool compact;
 
-  static const _metaGray = Color(0xFFADADAD);
-
   @override
   Widget build(BuildContext context) {
     final liked = voteState == 1;
     final icon = liked ? Icons.favorite : Icons.favorite_border;
-    final iconColor = liked ? Colors.redAccent : _metaGray;
-    final textColor = liked ? Colors.redAccent : _metaGray;
-    final iconSize = compact ? 16.0 : 18.0;
-    final fontSize = compact ? 12.0 : 13.0;
+    final cs = Theme.of(context).colorScheme;
+    final actionFg = feedInlineActionMutedForeground(cs);
+    final iconColor = liked ? Colors.redAccent : actionFg;
+    final textColor = actionFg;
+    final iconSize = compact ? 13.0 : 18.0;
+    final fontSize = compact ? 10.0 : 13.0;
     final iconBox = compact ? 20.0 : 24.0;
     // 피드(compact): 좌만 0 — 하트·댓글 행과 세로 패딩 통일(대칭)
+    /// compact: 리뷰 인라인 액션바([PopularPostsTab._buildReviewInlineActionBar])와
+    /// 하트↔댓글 그룹 간격(4)에 맞춤 — 우측 여백 과다하면 간격이 벌어짐.
     final pad = compact
-        ? const EdgeInsets.fromLTRB(0, 8, 14, 8)
+        ? const EdgeInsets.fromLTRB(0, 8, 4, 8)
         : const EdgeInsets.fromLTRB(12, 12, 16, 12);
 
     return GestureDetector(
@@ -1139,18 +1130,16 @@ class TalkAskHeartVote extends StatelessWidget {
                 child: Icon(icon, size: iconSize, color: iconColor),
               ),
             ),
-            if (count > 0) ...[
-              SizedBox(width: talkAskIconCountGap),
-              Text(
-                formatCompactCount(count),
-                style: GoogleFonts.notoSansKr(
-                  fontSize: fontSize,
-                  fontWeight: FontWeight.w600,
-                  color: textColor,
-                  height: 1.0,
-                ),
+            SizedBox(width: talkAskIconCountGap),
+            Text(
+              formatCompactCount(count),
+              style: GoogleFonts.notoSansKr(
+                fontSize: fontSize,
+                fontWeight: FontWeight.w600,
+                color: textColor,
+                height: 1.0,
               ),
-            ],
+            ),
           ],
         ),
       ),
@@ -1247,31 +1236,11 @@ class FeedImageCarousel extends StatefulWidget {
   const FeedImageCarousel({
     super.key,
     required this.imageUrls,
-    this.imageDimensions,
+    this.imageDimensions, // 호환용, 표시는 항상 1:1 cover
   });
 
   final List<String> imageUrls;
   final List<List<int>>? imageDimensions;
-
-  static const double _defaultRatio = 1 / 1.15;
-
-  /// 세로 최대 1:1.4 캡 (피드 동영상과 동일)
-  static const double _minAspectRatio = 1 / _feedMaxHeightPerWidth;
-
-  double _aspectRatioFor(int index) {
-    double raw;
-    if (imageDimensions != null && index < imageDimensions!.length) {
-      final d = imageDimensions![index];
-      if (d.length >= 2 && d[0] > 0 && d[1] > 0) {
-        raw = d[0] / d[1];
-      } else {
-        raw = _defaultRatio;
-      }
-    } else {
-      raw = _defaultRatio;
-    }
-    return raw < _minAspectRatio ? _minAspectRatio : raw;
-  }
 
   @override
   State<FeedImageCarousel> createState() => _FeedImageCarouselState();
@@ -1297,29 +1266,16 @@ class _FeedImageCarouselState extends State<FeedImageCarousel> {
   Widget build(BuildContext context) {
     if (widget.imageUrls.isEmpty) return const SizedBox.shrink();
     if (widget.imageUrls.length == 1) {
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: AspectRatio(
-          aspectRatio: widget._aspectRatioFor(0),
-          child: OptimizedNetworkImage(
-            imageUrl: widget.imageUrls.first,
+      return SizedBox(
+        width: double.infinity,
+        height: 300, // 고정 높이로 테스트
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: Image.network(
+            widget.imageUrls.first,
             fit: BoxFit.cover,
-            borderRadius: BorderRadius.circular(16),
-            errorWidget: Builder(
-              builder: (context) {
-                final cs2 = Theme.of(context).colorScheme;
-                return Container(
-                  color: cs2.surfaceContainerHighest,
-                  child: Center(
-                    child: Icon(
-                      LucideIcons.image_off,
-                      size: 56,
-                      color: cs2.onSurfaceVariant.withOpacity(0.5),
-                    ),
-                  ),
-                );
-              },
-            ),
+            width: double.infinity,
+            height: 300,
           ),
         ),
       );
@@ -1327,7 +1283,7 @@ class _FeedImageCarouselState extends State<FeedImageCarousel> {
     return ClipRRect(
       borderRadius: BorderRadius.circular(16),
       child: AspectRatio(
-        aspectRatio: widget._aspectRatioFor(_currentPage),
+        aspectRatio: 1.0,
         child: Stack(
           children: [
             PageView.builder(
@@ -1335,75 +1291,13 @@ class _FeedImageCarouselState extends State<FeedImageCarousel> {
               itemCount: widget.imageUrls.length,
               onPageChanged: (i) => setState(() => _currentPage = i),
               itemBuilder: (context, index) {
-                return OptimizedNetworkImage(
-                  imageUrl: widget.imageUrls[index],
+                return Image.network(
+                  widget.imageUrls[index],
                   fit: BoxFit.cover,
-                  borderRadius: BorderRadius.circular(16),
-                  errorWidget: Container(
-                    color: AppColors.lightGrey,
-                    child: Center(
-                      child: Icon(
-                        LucideIcons.image_off,
-                        size: 56,
-                        color: AppColors.mediumGrey.withOpacity(0.5),
-                      ),
-                    ),
-                  ),
+                  width: double.infinity,
+                  height: double.infinity,
                 );
               },
-            ),
-            Positioned(
-              top: 10,
-              right: 10,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.black54,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  '${_currentPage + 1}/${widget.imageUrls.length}',
-                  style: GoogleFonts.notoSansKr(
-                    fontSize: 9,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-            ),
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 10,
-              child: Center(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.black54,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: List.generate(widget.imageUrls.length, (i) {
-                      final isActive = _currentPage == i;
-                      return Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 3),
-                        width: isActive ? 8 : 6,
-                        height: 6,
-                        decoration: BoxDecoration(
-                          color: isActive
-                              ? Colors.white
-                              : Colors.white.withOpacity(0.4),
-                          shape: BoxShape.circle,
-                        ),
-                      );
-                    }),
-                  ),
-                ),
-              ),
             ),
           ],
         ),
@@ -1454,9 +1348,6 @@ class _LevelBadge extends StatelessWidget {
     );
   }
 }
-
-/// 가로 1 기준 세로 최대 1.4. 피드에서도 숏폼과 동일하게 적용.
-const double _feedMaxHeightPerWidth = 1.4;
 
 /// 피드 내 영상: 기본은 썸네일+재생 버튼, 탭 시에만 영상 로드해 재생 (OOM 방지)
 class FeedVideoPlayer extends StatefulWidget {
@@ -1557,7 +1448,7 @@ class _FeedVideoPlayerState extends State<FeedVideoPlayer> {
   Widget build(BuildContext context) {
     final ctrl = _controller;
     final isPlaying = ctrl?.value.isPlaying ?? false;
-    // 1:1 프레임에 세로가 꽉 차도록 (fitHeight)
+    // 1:1 정사각 — 원본 비율 유지, 중앙 기준 cover 크롭
     const double aspectRatio = 1;
 
     return GestureDetector(
@@ -1567,42 +1458,45 @@ class _FeedVideoPlayerState extends State<FeedVideoPlayer> {
         child: Container(
           color: Colors.black,
           child: Stack(
+            clipBehavior: Clip.hardEdge,
             alignment: Alignment.center,
             fit: StackFit.expand,
             children: [
-              // 썸네일 or 영상: 1:1 비율에 맞게 세로 꽉 차도록
-              if (ctrl != null && ctrl.value.isInitialized)
-                FittedBox(
-                  fit: BoxFit.fitHeight,
-                  child: SizedBox(
-                    width: ctrl.value.size.width > 0
-                        ? ctrl.value.size.width
-                        : 16,
-                    height: ctrl.value.size.height > 0
-                        ? ctrl.value.size.height
-                        : 9,
-                    child: VideoPlayer(ctrl),
-                  ),
-                )
-              else if (widget.thumbnailUrl != null &&
-                  widget.thumbnailUrl!.isNotEmpty)
-                CachedNetworkImage(
-                  imageUrl: widget.thumbnailUrl!,
-                  fit: BoxFit.fitHeight,
-                  width: double.infinity,
-                  height: double.infinity,
-                  errorWidget: (_, __, ___) => Icon(
-                    LucideIcons.video,
-                    size: 48,
-                    color: AppColors.mediumGrey.withOpacity(0.5),
-                  ),
-                )
-              else
-                Icon(
-                  LucideIcons.video,
-                  size: 48,
-                  color: AppColors.mediumGrey.withOpacity(0.5),
-                ),
+              Positioned.fill(
+                child: ctrl != null && ctrl.value.isInitialized
+                    ? FittedBox(
+                        fit: BoxFit.cover,
+                        child: SizedBox(
+                          width: ctrl.value.size.width > 0
+                              ? ctrl.value.size.width
+                              : 16,
+                          height: ctrl.value.size.height > 0
+                              ? ctrl.value.size.height
+                              : 9,
+                          child: VideoPlayer(ctrl),
+                        ),
+                      )
+                    : widget.thumbnailUrl != null &&
+                            widget.thumbnailUrl!.isNotEmpty
+                        ? CachedNetworkImage(
+                            imageUrl: widget.thumbnailUrl!,
+                            fit: BoxFit.cover,
+                            width: double.infinity,
+                            height: double.infinity,
+                            errorWidget: (_, __, ___) => Icon(
+                              LucideIcons.video,
+                              size: 48,
+                              color: AppColors.mediumGrey.withOpacity(0.5),
+                            ),
+                          )
+                        : Center(
+                            child: Icon(
+                              LucideIcons.video,
+                              size: 48,
+                              color: AppColors.mediumGrey.withOpacity(0.5),
+                            ),
+                          ),
+              ),
 
               // 로딩 중
               if (_loading)

@@ -33,6 +33,13 @@
         { "fieldPath": "episodeNumber", "order": "ASCENDING" },
         { "fieldPath": "uid", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "watchlist",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "dramaId", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

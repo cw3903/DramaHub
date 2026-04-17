@@ -50,7 +50,7 @@ class CustomDramaListService {
       }
       final lists = snapshot.docs
           .map((d) => CustomDramaList.fromDoc(d.id, d.data()))
-          .where((e) => e.title.isNotEmpty)
+          .where((e) => e.title.trim().isNotEmpty && e.dramaIds.isNotEmpty)
           .toList();
       lists.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
       listsNotifier.value = lists;
@@ -103,7 +103,8 @@ class CustomDramaListService {
     if (cleanTitle.isEmpty || cleanIds.isEmpty) return;
 
     final rawImg = coverImageUrl?.trim();
-    final validImg = rawImg != null &&
+    final validImg =
+        rawImg != null &&
             rawImg.isNotEmpty &&
             (rawImg.startsWith('http://') || rawImg.startsWith('https://'))
         ? rawImg
@@ -112,8 +113,8 @@ class CustomDramaListService {
     final cover = coverDramaId?.trim();
     final validCover =
         cover != null && cover.isNotEmpty && cleanIds.contains(cover)
-            ? cover
-            : null;
+        ? cover
+        : null;
 
     final now = FieldValue.serverTimestamp();
     final ref = _listCol.doc();
@@ -147,17 +148,17 @@ class CustomDramaListService {
       likedBy: const [],
     );
     final cur = listsNotifier.value;
-    listsNotifier.value = [
-      inserted,
-      ...cur.where((e) => e.id != inserted.id),
-    ];
+    listsNotifier.value = [inserted, ...cur.where((e) => e.id != inserted.id)];
     // Firestore write + re-fetch run fully in background.
     unawaited(
-      ref.set(data).then((_) {
-        return loadIfNeeded(force: true);
-      }).catchError((Object e, StackTrace st) {
-        debugPrint('CustomDramaListService.createList: $e\n$st');
-      }),
+      ref
+          .set(data)
+          .then((_) {
+            return loadIfNeeded(force: true);
+          })
+          .catchError((Object e, StackTrace st) {
+            debugPrint('CustomDramaListService.createList: $e\n$st');
+          }),
     );
   }
 
@@ -167,8 +168,9 @@ class CustomDramaListService {
     if (uid == null || listId.trim().isEmpty) return false;
     try {
       await _listCol.doc(listId).delete();
-      listsNotifier.value =
-          listsNotifier.value.where((e) => e.id != listId).toList();
+      listsNotifier.value = listsNotifier.value
+          .where((e) => e.id != listId)
+          .toList();
       unawaited(
         loadIfNeeded(force: true).catchError((Object e, StackTrace st) {
           debugPrint('CustomDramaListService.deleteList refresh: $e\n$st');
@@ -204,7 +206,8 @@ class CustomDramaListService {
     if (cleanTitle.isEmpty || cleanIds.isEmpty) return false;
 
     final rawImg = coverImageUrl?.trim();
-    final validImg = rawImg != null &&
+    final validImg =
+        rawImg != null &&
             rawImg.isNotEmpty &&
             (rawImg.startsWith('http://') || rawImg.startsWith('https://'))
         ? rawImg
@@ -213,8 +216,8 @@ class CustomDramaListService {
     final cover = coverDramaId?.trim();
     final validCover =
         cover != null && cover.isNotEmpty && cleanIds.contains(cover)
-            ? cover
-            : null;
+        ? cover
+        : null;
 
     final update = <String, dynamic>{
       'title': cleanTitle,
@@ -249,9 +252,7 @@ class CustomDramaListService {
         coverDramaId: clearAllCovers
             ? null
             : (validImg != null ? null : (validCover ?? e.coverDramaId)),
-        coverImageUrl: clearAllCovers
-            ? null
-            : (validImg ?? e.coverImageUrl),
+        coverImageUrl: clearAllCovers ? null : (validImg ?? e.coverImageUrl),
         likeCount: e.likeCount,
         likedBy: e.likedBy,
       );
@@ -260,13 +261,17 @@ class CustomDramaListService {
 
     // Firestore write + re-fetch in background.
     unawaited(
-      _listCol.doc(listId).update(update).then((_) {
-        return loadIfNeeded(force: true);
-      }).catchError((Object e, StackTrace st) {
-        debugPrint('CustomDramaListService.updateList: $e\n$st');
-        // Rollback on failure.
-        listsNotifier.value = prev;
-      }),
+      _listCol
+          .doc(listId)
+          .update(update)
+          .then((_) {
+            return loadIfNeeded(force: true);
+          })
+          .catchError((Object e, StackTrace st) {
+            debugPrint('CustomDramaListService.updateList: $e\n$st');
+            // Rollback on failure.
+            listsNotifier.value = prev;
+          }),
     );
     return true;
   }
@@ -293,6 +298,7 @@ class CustomDramaListService {
       }
       return snap.docs
           .map((d) => CustomDramaList.fromDoc(d.id, d.data()))
+          .where((e) => e.title.trim().isNotEmpty && e.dramaIds.isNotEmpty)
           .toList();
     } catch (e, st) {
       debugPrint('CustomDramaListService.fetchListsForUid: $e\n$st');

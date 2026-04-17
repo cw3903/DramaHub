@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../constants/app_profile_avatar_size.dart';
 import '../services/auth_service.dart';
 import '../services/episode_rating_service.dart';
 import '../services/episode_review_service.dart';
@@ -287,14 +288,14 @@ class EpisodeReviewCard extends StatelessWidget {
     Widget avatar;
     if (item.authorPhotoUrl != null && item.authorPhotoUrl!.isNotEmpty) {
       avatar = CircleAvatar(
-        radius: 14,
+        radius: kAppUnifiedProfileAvatarSize / 2,
         backgroundColor: cs.surfaceContainerHighest,
         child: ClipOval(
           child: OptimizedNetworkImage(
             imageUrl: item.authorPhotoUrl!,
             fit: BoxFit.cover,
-            width: 28,
-            height: 28,
+            width: kAppUnifiedProfileAvatarSize,
+            height: kAppUnifiedProfileAvatarSize,
           ),
         ),
       );
@@ -303,9 +304,9 @@ class EpisodeReviewCard extends StatelessWidget {
       final bg = UserProfileService.bgColorFromIndex(colorIdx);
       final iconColor = UserProfileService.iconColorFromIndex(colorIdx);
       avatar = CircleAvatar(
-        radius: 14,
+        radius: kAppUnifiedProfileAvatarSize / 2,
         backgroundColor: bg,
-        child: Icon(Icons.person, size: 16, color: iconColor),
+        child: Icon(Icons.person, size: 15, color: iconColor),
       );
     }
     avatar = GestureDetector(
@@ -331,11 +332,7 @@ class EpisodeReviewCard extends StatelessWidget {
                         openUserProfileFromAuthorUid(context, item.uid),
                     child: Text(
                       item.authorName,
-                      style: GoogleFonts.notoSansKr(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: cs.onSurface,
-                      ),
+                      style: appUnifiedNicknameStyle(cs),
                     ),
                   ),
                   if (item.rating != null && item.rating! > 0) ...[

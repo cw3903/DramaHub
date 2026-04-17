@@ -48,6 +48,9 @@ class DramaGridCard extends StatelessWidget {
 
     /// 리스트 다중 픽 등 — 포스터 위 선택 표시
     this.pickMultiSelected = false,
+
+    /// true면 4열 등 좁은 셀용으로 제목·별·장르 줄 글자·간격을 약간 줄임.
+    this.denseTypography = false,
   });
 
   final String displayTitle;
@@ -58,6 +61,7 @@ class DramaGridCard extends StatelessWidget {
   final Widget posterPlaceholder;
   final bool titleOnly;
   final bool pickMultiSelected;
+  final bool denseTypography;
 
   @override
   Widget build(BuildContext context) {
@@ -66,10 +70,10 @@ class DramaGridCard extends StatelessWidget {
     final textColor = isDark ? cs.onSurface : const Color(0xFF333333);
     final greyColor = isDark ? cs.onSurfaceVariant : Colors.grey.shade500;
     final r = dramaGridScreenScale(context);
-    final titleFontSize = (12 * r).roundToDouble();
-    final metaFontSize = (9 * r).roundToDouble();
-    final starSize = 11 * r;
-    final genreColor = isDark ? cs.onSurfaceVariant : Colors.grey.shade600;
+    final titleFontSize = (denseTypography ? 11 * r : 12 * r).roundToDouble();
+    final metaFontSize = (denseTypography ? 8 * r : 9 * r).roundToDouble();
+    final starSize = denseTypography ? 10 * r : 11 * r;
+    final genreColor = cs.onSurfaceVariant;
     return RepaintBoundary(
       child: LayoutBuilder(
       builder: (context, constraints) {
@@ -94,8 +98,8 @@ class DramaGridCard extends StatelessWidget {
                           ? OptimizedNetworkImage(
                               imageUrl: imageUrl!,
                               fit: BoxFit.cover,
-                              memCacheWidth: 160,
-                              memCacheHeight: 224,
+                              memCacheWidth: denseTypography ? 140 : 160,
+                              memCacheHeight: denseTypography ? 196 : 224,
                               placeholder: posterPlaceholder,
                               errorWidget: posterPlaceholder,
                             )
@@ -121,7 +125,7 @@ class DramaGridCard extends StatelessWidget {
                   ),
                 ),
               ),
-              SizedBox(height: 1 * r),
+              SizedBox(height: denseTypography ? 0 : 1 * r),
               SizedBox(
                 height: titleFontSize * 2,
                 child: Text(
@@ -144,7 +148,7 @@ class DramaGridCard extends StatelessWidget {
                 ),
               ),
               if (!titleOnly) ...[
-                SizedBox(height: 0.5 * r),
+                SizedBox(height: denseTypography ? 0 : 0.5 * r),
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
@@ -165,7 +169,7 @@ class DramaGridCard extends StatelessWidget {
                       ),
                     ),
                     if (displaySubtitle.isNotEmpty) ...[
-                      SizedBox(width: 4 * r),
+                      SizedBox(width: denseTypography ? 3 * r : 4 * r),
                       Expanded(
                         child: Text(
                           displaySubtitle,

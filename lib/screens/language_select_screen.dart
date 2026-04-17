@@ -38,7 +38,8 @@ class LanguageSelectScreen extends StatelessWidget {
         : const Color(0xFFDBDBDB);
     final headerBg = listsStyleSubpageHeaderBackground(theme);
 
-    return AnnotatedRegion<SystemUiOverlayStyle>(
+    return ListsStyleSwipeBack(
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
       value: listsStyleSubpageSystemOverlay(theme, headerBg),
       child: Scaffold(
         backgroundColor: theme.scaffoldBackgroundColor,
@@ -128,6 +129,7 @@ class LanguageSelectScreen extends StatelessWidget {
           ),
         ),
       ),
+    ),
     );
   }
 }

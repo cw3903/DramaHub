@@ -13,6 +13,7 @@ import '../utils/format_utils.dart';
 import '../widgets/country_scope.dart';
 import '../widgets/lists_style_subpage_app_bar.dart';
 import '../widgets/optimized_network_image.dart';
+import '../theme/app_theme.dart';
 import '../widgets/review_arrow_tag_chip.dart';
 import 'drama_detail_page.dart';
 import 'post_detail_page.dart';
@@ -621,6 +622,8 @@ class _SearchResultTile extends StatelessWidget {
       fontSize: 13,
       color: cs.onSurfaceVariant,
     );
+    final nickBase = appUnifiedNicknameStyle(cs);
+    final timeMeta = appUnifiedNicknameMetaTimeStyle(cs);
     final baseSmall = GoogleFonts.notoSansKr(
       fontSize: 11,
       color: cs.onSurfaceVariant,
@@ -638,8 +641,8 @@ class _SearchResultTile extends StatelessWidget {
               // 닉네임 · 시간
               RichText(
                 text: TextSpan(children: [
-                  highlight(author, query, base: baseSmall),
-                  TextSpan(text: ' · ${post.timeAgo}', style: baseSmall),
+                  highlight(author, query, base: nickBase),
+                  TextSpan(text: ' · ${post.timeAgo}', style: timeMeta),
                 ]),
               ),
               const SizedBox(height: 4),

@@ -6,6 +6,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../models/drama.dart';
 import '../models/post.dart';
 import '../services/review_service.dart';
+import '../constants/app_profile_avatar_size.dart';
 import '../services/auth_service.dart';
 import '../services/drama_list_service.dart';
 import '../services/post_service.dart';
@@ -13,6 +14,7 @@ import '../services/user_profile_service.dart';
 import '../utils/format_utils.dart';
 import '../widgets/country_scope.dart';
 import '../widgets/feed_review_star_row.dart';
+import '../theme/app_theme.dart';
 import '../widgets/lists_style_subpage_app_bar.dart';
 import '../widgets/optimized_network_image.dart';
 import 'post_detail_page.dart';
@@ -42,6 +44,12 @@ class MyReviewsScreen extends StatefulWidget {
 
 class _MyReviewsScreenState extends State<MyReviewsScreen> {
   bool _newestFirst = true;
+
+  List<MyReviewItem> _visibleReviews(List<MyReviewItem> input) {
+    return input
+        .where((e) => e.rating > 0 || e.comment.trim().isNotEmpty)
+        .toList();
+  }
 
   @override
   void initState() {
@@ -128,7 +136,8 @@ class _MyReviewsScreenState extends State<MyReviewsScreen> {
     final cs = theme.colorScheme;
 
     final headerBg = listsStyleSubpageHeaderBackground(theme);
-    return AnnotatedRegion<SystemUiOverlayStyle>(
+    return ListsStyleSwipeBack(
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
       value: listsStyleSubpageSystemOverlay(theme, headerBg),
       child: Scaffold(
         backgroundColor: theme.scaffoldBackgroundColor,
@@ -163,7 +172,9 @@ class _MyReviewsScreenState extends State<MyReviewsScreen> {
             DramaListService.instance.extraNotifier,
           ]),
           builder: (context, _) {
-            final raw = ReviewService.instance.listNotifier.value;
+            final raw = _visibleReviews(
+              ReviewService.instance.listNotifier.value,
+            );
             if (raw.isEmpty) {
               return Center(
                 child: Padding(
@@ -233,6 +244,7 @@ class _MyReviewsScreenState extends State<MyReviewsScreen> {
           },
         ),
       ),
+    ),
     );
   }
 }
@@ -401,6 +413,7 @@ DramaDetail _detailFromReview(BuildContext context, MyReviewItem item) {
     replies: const [],
     writtenAt: item.writtenAt,
     authorUid: AuthService.instance.currentUser.value?.uid,
+    feedPostId: item.feedPostId,
   );
   final reviews = [myReview];
   final episodes = [
@@ -460,9 +473,6 @@ class LetterboxdMyReviewTile extends StatelessWidget {
     /// 지정 시 닉네임 옆에 Delete 버튼 표시 (letterboxdActivityAuthorRow일 때만).
     this.onDelete,
 
-    /// letterboxdActivityAuthorRow일 때 오른쪽 닉네임 글자 크기. null이면 15.
-    this.activityAuthorNameFontSize,
-
     /// 드라마 제목 색 (`onSurface` 알파). null이면 0.66 (프로필 리뷰 목록 등에서 더 밝게 지정 가능).
     this.dramaTitleOnSurfaceAlpha,
 
@@ -475,7 +485,6 @@ class LetterboxdMyReviewTile extends StatelessWidget {
   final bool letterboxdActivityAuthorRow;
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
-  final double? activityAuthorNameFontSize;
   final double? dramaTitleOnSurfaceAlpha;
   final double? reviewBodyFontSize;
 
@@ -494,7 +503,8 @@ class LetterboxdMyReviewTile extends StatelessWidget {
   }
 
   Future<void> _openReviewDetail(BuildContext context) async {
-    final locale = CountryScope.maybeOf(context)?.country ??
+    final locale =
+        CountryScope.maybeOf(context)?.country ??
         UserProfileService.instance.signupCountryNotifier.value ??
         'us';
     final s = CountryScope.of(context).strings;
@@ -505,10 +515,12 @@ class LetterboxdMyReviewTile extends StatelessWidget {
     final seedId = (feedPostId != null && feedPostId.isNotEmpty)
         ? feedPostId
         : (reviewId.isNotEmpty
-            ? reviewId
-            : 'local_review_${item.writtenAt.millisecondsSinceEpoch}');
+              ? reviewId
+              : 'local_review_${item.writtenAt.millisecondsSinceEpoch}');
     final displayTitle = _displayTitle(context).trim();
-    final fallbackTitle = displayTitle.isNotEmpty ? displayTitle : item.dramaTitle.trim();
+    final fallbackTitle = displayTitle.isNotEmpty
+        ? displayTitle
+        : item.dramaTitle.trim();
     final displayName = _reviewActivityDisplayName(item);
     final post = Post(
       id: seedId,
@@ -522,8 +534,10 @@ class LetterboxdMyReviewTile extends StatelessWidget {
       body: item.comment,
       authorUid: AuthService.instance.currentUser.value?.uid,
       authorPhotoUrl: UserProfileService.instance.profileImageUrlNotifier.value,
-      authorAvatarColorIndex: UserProfileService.instance.avatarColorNotifier.value,
-      country: UserProfileService.instance.signupCountryNotifier.value ?? locale,
+      authorAvatarColorIndex:
+          UserProfileService.instance.avatarColorNotifier.value,
+      country:
+          UserProfileService.instance.signupCountryNotifier.value ?? locale,
       category: 'free',
       type: 'review',
       dramaId: item.dramaId,
@@ -602,7 +616,7 @@ class LetterboxdMyReviewTile extends StatelessWidget {
               final letterColor = UserProfileService.iconColorFromIndex(
                 colorIdx,
               );
-              const avatarD = 40.0;
+              const avatarD = kAppUnifiedProfileAvatarSize;
 
               Widget avatar;
               final u = url;
@@ -617,7 +631,7 @@ class LetterboxdMyReviewTile extends StatelessWidget {
                       child: Text(
                         letter,
                         style: GoogleFonts.notoSansKr(
-                          fontSize: 16,
+                          fontSize: 13,
                           fontWeight: FontWeight.w700,
                           color: letterColor,
                         ),
@@ -632,7 +646,7 @@ class LetterboxdMyReviewTile extends StatelessWidget {
                   child: Text(
                     letter,
                     style: GoogleFonts.notoSansKr(
-                      fontSize: 16,
+                      fontSize: 13,
                       fontWeight: FontWeight.w700,
                       color: letterColor,
                     ),
@@ -640,12 +654,8 @@ class LetterboxdMyReviewTile extends StatelessWidget {
                 );
               }
 
-              final nameStyle = GoogleFonts.notoSansKr(
-                fontSize: activityAuthorNameFontSize ?? 15,
-                fontWeight: FontWeight.w700,
-                height: 1.15,
-                color: cs.onSurface.withValues(alpha: 0.60),
-              );
+              final nameStyle =
+                  appUnifiedNicknameStyle(cs).copyWith(height: 1.15);
               final starRow = FeedReviewRatingStars(
                 rating: r,
                 layoutThumbWidth: kFeedReviewRatingThumbWidth,

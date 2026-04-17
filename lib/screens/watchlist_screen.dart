@@ -102,7 +102,8 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
         UserProfileService.instance.nicknameNotifier,
       ]),
       builder: (context, _) {
-        return AnnotatedRegion<SystemUiOverlayStyle>(
+        return ListsStyleSwipeBack(
+          child: AnnotatedRegion<SystemUiOverlayStyle>(
           value: overlay,
           child: Scaffold(
             backgroundColor: theme.scaffoldBackgroundColor,
@@ -121,6 +122,7 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
               gridBackground: theme.scaffoldBackgroundColor,
             ),
           ),
+        ),
         );
       },
     );

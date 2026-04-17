@@ -9,6 +9,7 @@ class AppColors {
   static const Color darkGrey = Color(0xFF1A1A1A);
   static const Color mediumGrey = Color(0xFF6B6B6B);
   static const Color lightGrey = Color(0xFFF5F5F5);
+
   /// 게시판(인기글/자유/질문) 리스트 배경색. community_screen·BlindRefreshIndicator에서 공통 사용.
   static const Color communityBoardBackground = Color(0xFFF7F7F7);
   static const Color surface = Color(0xFFFFFFFF);
@@ -28,6 +29,29 @@ class AppColors {
     }
     return pageBg;
   }
+
+  /// 홈 탭 3게시판 — 리뷰 드라마 제목·톡/에스크 글 제목·자유 카드 글 제목 공통.
+  static Color homeBoardTitleForeground(ColorScheme cs) {
+    return Color.alphaBlend(cs.onSurface.withValues(alpha: 0.75), cs.surface);
+  }
+}
+
+/// 홈 탭 리뷰 게시판 [FeedReviewPostCard] 하단 작성자 표기와 동일 — 닉네임 앱 전역 통일.
+TextStyle appUnifiedNicknameStyle(ColorScheme cs) {
+  return GoogleFonts.notoSansKr(
+    fontSize: 12,
+    fontWeight: FontWeight.w500,
+    color: cs.onSurfaceVariant,
+  );
+}
+
+/// [FeedReviewPostCard] 하단 시간(`post.timeAgo`)과 동일 톤.
+TextStyle appUnifiedNicknameMetaTimeStyle(ColorScheme cs) {
+  return GoogleFonts.notoSansKr(
+    fontSize: 12,
+    fontWeight: FontWeight.w400,
+    color: cs.onSurfaceVariant.withValues(alpha: 0.85),
+  );
 }
 
 /// 모던 테마
@@ -97,9 +121,7 @@ ThemeData get redditTheme {
     cardTheme: CardThemeData(
       color: Colors.white,
       elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       margin: EdgeInsets.zero,
       clipBehavior: Clip.antiAlias,
     ),
@@ -136,27 +158,28 @@ ThemeData get redditDarkTheme {
     ),
     scaffoldBackgroundColor: AppColors.darkSurface,
     fontFamily: GoogleFonts.notoSansKr().fontFamily,
-    textTheme: GoogleFonts.notoSansKrTextTheme(ThemeData.dark().textTheme).copyWith(
-      titleLarge: GoogleFonts.notoSansKr(
-        fontSize: 18,
-        fontWeight: FontWeight.w600,
-        color: AppColors.darkOnSurface,
-      ),
-      bodyLarge: GoogleFonts.notoSansKr(
-        fontSize: 16,
-        fontWeight: FontWeight.w400,
-        color: AppColors.darkOnSurface,
-      ),
-      bodyMedium: GoogleFonts.notoSansKr(
-        fontSize: 14,
-        color: AppColors.darkOnSurfaceVariant,
-      ),
-      labelLarge: GoogleFonts.notoSansKr(
-        fontSize: 12,
-        fontWeight: FontWeight.w500,
-        color: AppColors.darkOnSurfaceVariant,
-      ),
-    ),
+    textTheme: GoogleFonts.notoSansKrTextTheme(ThemeData.dark().textTheme)
+        .copyWith(
+          titleLarge: GoogleFonts.notoSansKr(
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+            color: AppColors.darkOnSurface,
+          ),
+          bodyLarge: GoogleFonts.notoSansKr(
+            fontSize: 16,
+            fontWeight: FontWeight.w400,
+            color: AppColors.darkOnSurface,
+          ),
+          bodyMedium: GoogleFonts.notoSansKr(
+            fontSize: 14,
+            color: AppColors.darkOnSurfaceVariant,
+          ),
+          labelLarge: GoogleFonts.notoSansKr(
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+            color: AppColors.darkOnSurfaceVariant,
+          ),
+        ),
     appBarTheme: AppBarTheme(
       backgroundColor: AppColors.darkSurface,
       foregroundColor: AppColors.darkOnSurface,
@@ -188,9 +211,7 @@ ThemeData get redditDarkTheme {
     cardTheme: CardThemeData(
       color: AppColors.darkSurfaceVariant,
       elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       margin: EdgeInsets.zero,
       clipBehavior: Clip.antiAlias,
     ),

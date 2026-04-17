@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../constants/app_profile_avatar_size.dart';
 import '../models/post.dart';
+import '../theme/app_theme.dart';
 import '../screens/user_posts_screen.dart';
 import '../screens/write_post_page.dart';
 import '../config/app_moderators.dart';
@@ -17,7 +19,9 @@ import 'feed_review_star_row.dart';
 import 'optimized_network_image.dart';
 import 'app_delete_confirm_dialog.dart';
 import 'review_arrow_tag_chip.dart';
+import 'review_card_tap_highlight.dart';
 import 'user_profile_nav.dart';
+import 'drama_review_feed_tile.dart' show kDramaReviewFeedVerticalGap;
 
 /// 세로 히트만 넓히고 레이아웃 높이는 유지한다.
 class _ExpandVerticalHitTest extends SingleChildRenderObjectWidget {
@@ -141,7 +145,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
   /// 리스트 구분선 ~ 제목행까지 세로 패딩.
   static const double _gapDividerToTitleRow = 15;
 
-  /// 제목(헤더) 행 ↔ 별점 행. 별~썸네일보다 좁게 두어 시각적으로 균형 맞춤.
+  /// 제목(헤더) 행 ↔ 별점 행.
   static const double _gapTitleToStars = 3;
 
   /// 별점 행 ↔ 썸네일 행.
@@ -278,7 +282,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
     final titleStyle = GoogleFonts.notoSansKr(
       fontSize: 14,
       fontWeight: FontWeight.w700,
-      color: Color.alphaBlend(cs.onSurface.withValues(alpha: 0.78), cs.surface),
+      color: AppColors.homeBoardTitleForeground(cs),
       height: 1.0,
     );
 
@@ -287,7 +291,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
     final Widget dramaTitleWidget = dramaTap != null
         ? _TapBehindExpanded(
             onTap: dramaTap,
-            outsets: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+            outsets: const EdgeInsets.fromLTRB(8, 8, 8, 0),
             borderRadius: BorderRadius.circular(6),
             splashColor: _reviewTapSplash(cs),
             highlightColor: _reviewTapHighlight(cs),
@@ -355,11 +359,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.end,
-            style: GoogleFonts.notoSansKr(
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-              color: cs.onSurfaceVariant.withValues(alpha: 0.62),
-            ),
+            style: appUnifiedNicknameStyle(cs),
           ),
         ),
         const SizedBox(width: 4),
@@ -368,7 +368,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
           author: canonicalAuthor,
           authorUid: post.authorUid,
           colorIndex: post.authorAvatarColorIndex,
-          size: authorAvatarSize ?? 22,
+          size: authorAvatarSize ?? kAppUnifiedProfileAvatarSize,
         ),
       ],
     );
@@ -396,7 +396,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
                 );
               });
             },
-            outsets: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            outsets: const EdgeInsets.fromLTRB(10, 8, 10, 2),
             borderRadius: BorderRadius.circular(8),
             splashColor: _reviewTapSplash(cs),
             highlightColor: _reviewTapHighlight(cs),
@@ -511,11 +511,13 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
             Expanded(
               child: Align(
                 alignment: Alignment.centerLeft,
-                child: _NoHighlight(child: dramaTitleWidget),
+                child: dramaTap != null
+                    ? ReviewCardSuppressParentTap(child: dramaTitleWidget)
+                    : dramaTitleWidget,
               ),
             ),
             const SizedBox(width: 8),
-            _NoHighlight(child: authorRow),
+            ReviewCardSuppressParentTap(child: authorRow),
           ],
         ),
       ],
@@ -525,7 +527,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
     final Widget starRowWidget = ratingTap != null
         ? _TapBehindExpanded(
             onTap: ratingTap,
-            outsets: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+            outsets: const EdgeInsets.fromLTRB(6, 2, 6, 4),
             borderRadius: BorderRadius.circular(6),
             splashColor: _reviewTapSplash(cs),
             highlightColor: _reviewTapHighlight(cs),
@@ -535,7 +537,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
 
     final Widget ratingRow = Align(
       alignment: Alignment.centerLeft,
-      child: _NoHighlight(child: starRowWidget),
+      child: ReviewCardSuppressParentTap(child: starRowWidget),
     );
 
     final Widget rightColumnBody = thumbTrailingActions != null
@@ -549,15 +551,19 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
                 ),
                 Align(
                   alignment: Alignment.bottomLeft,
-                  child: SizedBox(
-                    height: _kLetterboxdCompactTagLineHeight,
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        _NoHighlight(child: thumbTrailingActions!),
+                  child: Padding(
+                    padding: const EdgeInsets.only(
+                      top: kDramaReviewFeedVerticalGap,
+                    ),
+                    child: SizedBox(
+                      height: _kLetterboxdCompactTagLineHeight,
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          thumbTrailingActions!,
                         if (ownerEditDeleteRow != null) ...[
                           const SizedBox(width: 6),
-                          _NoHighlight(
+                          ReviewCardSuppressParentTap(
                             child: Material(
                               type: MaterialType.transparency,
                               child: ownerEditDeleteRow,
@@ -575,7 +581,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
                                       i < post.tags.length;
                                       i++) ...[
                                     if (i > 0) const SizedBox(width: 6),
-                                    _NoHighlight(
+                                    ReviewCardSuppressParentTap(
                                       child: ReviewArrowTagChip(
                                         label: post.tags[i],
                                         compact: true,
@@ -596,6 +602,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
                     ),
                   ),
                 ),
+                ),
               ],
             ),
           )
@@ -609,7 +616,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
                       alignment: Alignment.centerRight,
                       child: Padding(
                         padding: const EdgeInsets.only(top: 6),
-                        child: _NoHighlight(
+                        child: ReviewCardSuppressParentTap(
                           child: Material(
                             type: MaterialType.transparency,
                             child: ownerEditDeleteRow,
@@ -639,7 +646,9 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _NoHighlight(child: thumbBlock),
+              dramaTap != null
+                  ? ReviewCardSuppressParentTap(child: thumbBlock)
+                  : thumbBlock,
               const SizedBox(width: 12),
               Expanded(child: rightColumnBody),
             ],
@@ -650,7 +659,7 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
 
     // 카드 대부분 탭 → 댓글 펼침. 제목·별·썸네일·하트·댓글은 각각 안쪽 InkWell이 먼저 소비.
     if (onReviewBodyTap != null) {
-      content = _TapHighlight(
+      content = ReviewCardTapHighlight(
         onTap: onReviewBodyTap!,
         pressColor: cs.onSurface.withValues(alpha: 0.12),
         child: content,
@@ -726,7 +735,7 @@ class _LetterboxdAuthorAvatar extends StatelessWidget {
     required this.author,
     this.authorUid,
     this.colorIndex,
-    this.size = 26,
+    this.size = kAppUnifiedProfileAvatarSize,
   });
 
   final String? photoUrl;
@@ -743,7 +752,10 @@ class _LetterboxdAuthorAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     final uid = authorUid?.trim();
+    final borderColor = cs.outline.withValues(alpha: 0.38);
+
     Widget child;
     if (photoUrl != null && photoUrl!.isNotEmpty) {
       child = ClipOval(
@@ -756,6 +768,29 @@ class _LetterboxdAuthorAvatar extends StatelessWidget {
     } else {
       child = _buildDefault(context);
     }
+
+    child = SizedBox(
+      width: size,
+      height: size,
+      child: Stack(
+        fit: StackFit.expand,
+        clipBehavior: Clip.none,
+        children: [
+          Positioned.fill(child: child),
+          Positioned.fill(
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: borderColor, width: 1),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
     if (uid == null || uid.isEmpty) return child;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -766,11 +801,14 @@ class _LetterboxdAuthorAvatar extends StatelessWidget {
 
   Widget _buildDefault(BuildContext context) {
     final idx = _resolvedIndex();
+    final cs = Theme.of(context).colorScheme;
+    final base = UserProfileService.bgColorFromIndex(idx);
+    final fill = Color.alphaBlend(cs.surface.withValues(alpha: 0.55), base);
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: UserProfileService.bgColorFromIndex(idx),
+        color: fill,
         shape: BoxShape.circle,
       ),
       child: Center(
@@ -778,109 +816,6 @@ class _LetterboxdAuthorAvatar extends StatelessWidget {
           Icons.person,
           size: size * 0.58,
           color: UserProfileService.iconColorFromIndex(idx),
-        ),
-      ),
-    );
-  }
-}
-
-// --------------- 탭 하이라이트 인프라 ---------------
-
-/// [_TapHighlight] 내부에서 특정 자식이 눌렸을 때 하이라이트를 억제하기 위한 스코프.
-class _SuppressScope extends InheritedWidget {
-  const _SuppressScope({required this.onPress, required super.child});
-  final VoidCallback onPress;
-
-  static _SuppressScope? maybeOf(BuildContext context) =>
-      context.getInheritedWidgetOfExactType<_SuppressScope>();
-
-  @override
-  bool updateShouldNotify(_SuppressScope old) => false;
-}
-
-/// 이 위젯으로 감싸면, 해당 자식을 눌러도 부모 [_TapHighlight]의 배경 하이라이트가 나타나지 않는다.
-class _NoHighlight extends StatelessWidget {
-  const _NoHighlight({required this.child});
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    final scope = _SuppressScope.maybeOf(context);
-    if (scope == null) return child;
-    // 내부 Listener가 먼저 발화(Flutter 이벤트 순서: 내부→외부)하므로
-    // onPointerDown 시 _suppressed 플래그가 외부 onPointerDown보다 먼저 세팅된다.
-    return Listener(
-      behavior: HitTestBehavior.translucent,
-      onPointerDown: (_) => scope.onPress(),
-      child: child,
-    );
-  }
-}
-
-/// 탭 시 배경색이 바뀌는 래퍼.
-/// [_NoHighlight]로 감싼 자식(제목·별점·썸네일·하트·댓글·수정·삭제·프로필 등)을
-/// 눌렀을 때는 색이 나타나지 않는다.
-class _TapHighlight extends StatefulWidget {
-  const _TapHighlight({
-    required this.onTap,
-    required this.pressColor,
-    required this.child,
-  });
-
-  final VoidCallback onTap;
-  final Color pressColor;
-  final Widget child;
-
-  @override
-  State<_TapHighlight> createState() => _TapHighlightState();
-}
-
-class _TapHighlightState extends State<_TapHighlight> {
-  bool _pressed = false;
-  bool _suppressed = false;
-  Offset? _downPosition;
-
-  void _suppress() => _suppressed = true;
-
-  @override
-  Widget build(BuildContext context) {
-    return _SuppressScope(
-      onPress: _suppress,
-      // GestureDetector를 쓰지 않아 내부 InkWell과 제스처 아레나 경쟁이 없다.
-      // Listener는 아레나에 참여하지 않으므로 내부 위젯 탭 인식을 방해하지 않는다.
-      child: Listener(
-        behavior: HitTestBehavior.translucent,
-        onPointerDown: (e) {
-          _downPosition = e.localPosition;
-          setState(() => _pressed = true);
-        },
-        onPointerUp: (e) {
-          final down = _downPosition;
-          final wasPressed = _pressed;
-          final wasSuppressed = _suppressed;
-          setState(() {
-            _pressed = false;
-            _suppressed = false;
-          });
-          _downPosition = null;
-          // 손가락이 거의 안 움직인 경우에만 탭으로 인정 (스크롤과 구분)
-          if (wasPressed && !wasSuppressed && down != null) {
-            final dist = (e.localPosition - down).distance;
-            if (dist < 18) widget.onTap();
-          }
-        },
-        onPointerCancel: (_) {
-          setState(() {
-            _pressed = false;
-            _suppressed = false;
-          });
-          _downPosition = null;
-        },
-        child: ColoredBox(
-          color: (_pressed && !_suppressed)
-              ? widget.pressColor
-              : Colors.transparent,
-          child: widget.child,
         ),
       ),
     );

@@ -1,13 +1,12 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
-import '../models/drama.dart';
+import '../constants/app_profile_avatar_size.dart';
 import '../models/post.dart';
 import '../services/auth_service.dart';
-import '../services/drama_list_service.dart';
 import '../services/post_service.dart';
 import '../services/user_profile_service.dart';
 import '../theme/app_theme.dart';
@@ -16,11 +15,18 @@ import '../widgets/country_scope.dart';
 import '../widgets/feed_post_card.dart';
 import '../widgets/feed_review_post_card.dart';
 import '../widgets/feed_review_letterboxd_tile.dart';
+import '../widgets/feed_inline_action_colors.dart';
+import '../widgets/review_card_tap_highlight.dart';
 import '../widgets/blind_refresh_indicator.dart';
 import '../widgets/optimized_network_image.dart';
 import '../screens/community_search_page.dart';
 import '../screens/drama_detail_page.dart';
+import '../screens/drama_watchers_screen.dart';
+import '../screens/drama_reviews_list_screen.dart';
 import '../screens/login_page.dart';
+import '../services/drama_list_service.dart';
+import '../models/drama.dart';
+import 'talk_ask_feed_list_row.dart';
 
 const int _postsPerPage = 20;
 
@@ -69,10 +75,11 @@ bool commentContainsQuery(PostComment c, String q) {
 }
 
 /// 레이아웃은 [visual]과 동일, 터치만 [outsets]만큼 확장. 스플래시/하이라이트 없음.
+/// [top] 확장은 금지(본문·별점 행으로 히트가 넘어가 하트만 먹는 현상 방지).
 Widget reviewInlineActionHitTarget({
   required VoidCallback onTap,
   required Widget visual,
-  EdgeInsets outsets = const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
+  EdgeInsets outsets = const EdgeInsets.fromLTRB(18, 0, 18, 8),
 }) {
   return Stack(
     clipBehavior: Clip.none,
@@ -190,6 +197,18 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
   /// 리뷰 본문 탭 시 아래에 댓글 목록 펼침(Letterboxd 인라인 피드).
   final Set<String> _expandedReviewComments = {};
   final Map<String, TextEditingController> _inlineCommentControllers = {};
+
+  /// 인라인 댓글 좋아요 상태: postId → commentId → (liked, count)
+  final Map<String, Map<String, ({bool liked, int count})>>
+  _inlineCommentLikeState = {};
+
+  /// 인라인 댓글 답글 대상: postId → commentId
+  final Map<String, String?> _inlineReplyingToCommentId = {};
+
+  /// 인라인 댓글 답글 대상 객체: postId → PostComment
+  final Map<String, PostComment?> _inlineReplyingToComment = {};
+  /// 인라인 댓글 답글 펼침 상태: postId → 펼친 parent comment ids
+  final Map<String, Set<String>> _inlineExpandedReplyThreads = {};
 
   @override
   void initState() {
@@ -328,6 +347,59 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
     }
   }
 
+  /// 인라인 댓글 좋아요 토글 (낙관적 업데이트)
+  Future<void> _toggleInlineCommentLike(Post post, PostComment comment) async {
+    if (!AuthService.instance.isLoggedIn.value) {
+      await Navigator.push<void>(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginPage()),
+      );
+      if (!mounted) return;
+      if (!AuthService.instance.isLoggedIn.value) return;
+    }
+    final postId = post.id;
+    final uid = AuthService.instance.currentUser.value?.uid ?? '';
+    final map = _inlineCommentLikeState.putIfAbsent(postId, () => {});
+    final cur = map[comment.id];
+    final wasLiked = cur?.liked ?? comment.likedBy.contains(uid);
+    final prevCount = cur?.count ?? comment.votes;
+    setState(() {
+      map[comment.id] = (
+        liked: !wasLiked,
+        count: wasLiked ? (prevCount - 1).clamp(0, 99999) : prevCount + 1,
+      );
+    });
+    final updated = await PostService.instance.toggleCommentLike(
+      postId,
+      comment.id,
+    );
+    if (!mounted) return;
+    if (updated != null) {
+      _localOverrides[postId] = updated;
+      final fresh = PostService.findCommentById(
+        updated.commentsList,
+        comment.id,
+      );
+      if (fresh != null && mounted) {
+        setState(() {
+          map[comment.id] = (
+            liked: fresh.likedBy.contains(uid),
+            count: fresh.votes,
+          );
+        });
+      }
+    }
+  }
+
+  /// 인라인 댓글 답글 시작
+  void _startInlineReply(Post post, PostComment comment) {
+    _inlineCommentControllers.putIfAbsent(post.id, TextEditingController.new);
+    setState(() {
+      _inlineReplyingToCommentId[post.id] = comment.id;
+      _inlineReplyingToComment[post.id] = comment;
+    });
+  }
+
   Future<void> _submitInlineComment(
     Post post, {
     BuildContext? successPopContext,
@@ -364,29 +436,81 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
       createdAtDate: DateTime.now(),
       authorUid: AuthService.instance.currentUser.value?.uid,
     );
-    final err = await PostService.instance.addComment(id, p, newComment);
-    if (!mounted) return;
-    if (err != null) {
-      setState(() => _inlineCommentSubmitting.remove(id));
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(err, style: GoogleFonts.notoSansKr()),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      return;
+
+    final parentId = _inlineReplyingToCommentId[id];
+    String? err;
+    List<PostComment> newComments;
+    int newCount;
+
+    if (parentId != null && parentId.isNotEmpty) {
+      err = await PostService.instance.addReply(id, parentId, newComment);
+      if (!mounted) return;
+      if (err != null) {
+        setState(() => _inlineCommentSubmitting.remove(id));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(err, style: GoogleFonts.notoSansKr()),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+      final parent = PostService.findCommentById(p.commentsList, parentId);
+      if (parent != null) {
+        final updated = PostComment(
+          id: parent.id,
+          author: parent.author,
+          timeAgo: parent.timeAgo,
+          text: parent.text,
+          votes: parent.votes,
+          replies: [...parent.replies, newComment],
+          likedBy: parent.likedBy,
+          dislikedBy: parent.dislikedBy,
+          authorPhotoUrl: parent.authorPhotoUrl,
+          authorAvatarColorIndex: parent.authorAvatarColorIndex,
+          createdAtDate: parent.createdAtDate,
+          imageUrl: parent.imageUrl,
+          authorUid: parent.authorUid,
+        );
+        newComments = PostService.replaceCommentById(
+          p.commentsList,
+          parentId,
+          updated,
+        );
+      } else {
+        newComments = p.commentsList;
+      }
+      newCount = p.comments + 1;
+    } else {
+      err = await PostService.instance.addComment(id, p, newComment);
+      if (!mounted) return;
+      if (err != null) {
+        setState(() => _inlineCommentSubmitting.remove(id));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(err, style: GoogleFonts.notoSansKr()),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+      newComments = [...p.commentsList, newComment];
+      newCount = (p.commentsList.length + 1 > p.comments)
+          ? p.commentsList.length + 1
+          : p.comments + 1;
     }
 
     // 낙관적 업데이트: 서버 응답 전에 즉시 댓글 반영
-    final optimisticComments = (p.commentsList.length + 1 > p.comments)
-        ? p.commentsList.length + 1
-        : p.comments + 1;
     final optimisticPost = p.copyWith(
-      commentsList: [...p.commentsList, newComment],
-      comments: optimisticComments,
+      commentsList: newComments,
+      comments: newCount,
     );
     _localOverrides[id] = optimisticPost;
-    setState(() => _inlineCommentSubmitting.remove(id));
+    setState(() {
+      _inlineCommentSubmitting.remove(id);
+      _inlineReplyingToCommentId.remove(id);
+      _inlineReplyingToComment.remove(id);
+    });
     widget.onPostUpdated?.call(optimisticPost);
 
     ctrl.clear();
@@ -405,7 +529,11 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
     final locale = CountryScope.maybeOf(context)?.country;
 
     // 최대 3번 재시도 (0s → 2s → 4s)
-    for (final delay in [Duration.zero, const Duration(seconds: 2), const Duration(seconds: 4)]) {
+    for (final delay in [
+      Duration.zero,
+      const Duration(seconds: 2),
+      const Duration(seconds: 4),
+    ]) {
       if (delay != Duration.zero) {
         await Future.delayed(delay);
       }
@@ -431,72 +559,7 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
     // 모든 재시도 실패 → 낙관적 상태 유지 (댓글이 화면에서 사라지지 않음)
   }
 
-  DramaItem? _findDramaItemForPost(Post post, String? locale) {
-    final rawId = post.dramaId?.trim();
-    if (rawId != null && rawId.isNotEmpty) {
-      for (final d in DramaListService.instance.listNotifier.value) {
-        if (d.id == rawId) return d;
-      }
-      final titleSource = post.dramaTitle?.trim().isNotEmpty == true
-          ? post.dramaTitle!
-          : post.title;
-      final resolved = DramaListService.instance.getDisplayTitle(rawId, locale);
-      return DramaItem(
-        id: rawId,
-        title: resolved.isNotEmpty ? resolved : titleSource,
-        subtitle: '',
-        views: '0',
-        rating: post.rating ?? 0,
-        imageUrl: (post.dramaThumbnail?.trim().isNotEmpty == true)
-            ? post.dramaThumbnail!.trim()
-            : null,
-      );
-    }
-    final titleGuess = post.dramaTitle?.trim().isNotEmpty == true
-        ? post.dramaTitle!
-        : post.title;
-    if (titleGuess.trim().isEmpty) return null;
-    final tg = titleGuess.trim();
-    for (final d in DramaListService.instance.listNotifier.value) {
-      final dt = DramaListService.instance.getDisplayTitle(d.id, locale);
-      if (dt == tg || d.title == tg) return d;
-    }
-    return null;
-  }
-
-  Future<void> _openDramaDetailForPost(
-    BuildContext context,
-    Post post, {
-    bool scrollToReviews = false,
-  }) async {
-    await DramaListService.instance.loadFromAsset();
-    if (!context.mounted) return;
-    final locale = CountryScope.maybeOf(context)?.country;
-    final item = _findDramaItemForPost(post, locale);
-    if (item == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('드라마 정보를 찾을 수 없어요', style: GoogleFonts.notoSansKr()),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      return;
-    }
-    final detail = DramaListService.instance.buildDetailForItem(item, locale);
-    if (!context.mounted) return;
-    await Navigator.of(context).push<void>(
-      CupertinoPageRoute<void>(
-        builder: (_) =>
-            DramaDetailPage(detail: detail, scrollToRatings: scrollToReviews),
-      ),
-    );
-  }
-
-  void _openCommunitySearchForTag(
-    BuildContext context,
-    Post post,
-    String raw,
-  ) {
+  void _openCommunitySearchForTag(BuildContext context, Post post, String raw) {
     final q = raw.trim();
     if (q.isEmpty) return;
     final dramaId = post.dramaId?.trim();
@@ -524,6 +587,71 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
     );
   }
 
+  /// 피드 리뷰 타일 — 제목·썸네일 탭 시 드라마 상세 페이지로 이동.
+  Future<void> _openDramaDetailFromPost(BuildContext context, Post post) async {
+    await DramaListService.instance.loadFromAsset();
+    if (!context.mounted) return;
+    final locale = CountryScope.maybeOf(context)?.country;
+    final dramaId = post.dramaId?.trim() ?? '';
+    DramaItem? fromList;
+    for (final e in DramaListService.instance.list) {
+      if (dramaId.isNotEmpty && e.id == dramaId) {
+        fromList = e;
+        break;
+      }
+    }
+    final item =
+        fromList ??
+        DramaItem(
+          id: dramaId.isNotEmpty ? dramaId : 'review_${post.id}',
+          title: (post.dramaTitle?.trim().isNotEmpty == true)
+              ? post.dramaTitle!.trim()
+              : post.title.trim(),
+          subtitle: '',
+          views: '0',
+          rating: post.rating ?? 0,
+          imageUrl: post.dramaThumbnail?.trim(),
+        );
+    final detail = DramaListService.instance.buildDetailForItem(item, locale);
+    if (!context.mounted) return;
+    await Navigator.push<void>(
+      context,
+      CupertinoPageRoute<void>(builder: (_) => DramaDetailPage(detail: detail)),
+    );
+  }
+
+  /// 피드 리뷰 타일 — 별점 탭 시 드라마 상세 > 리뷰 페이지로 이동.
+  Future<void> _openDramaWatchersFromPost(
+    BuildContext context,
+    Post post,
+  ) async {
+    await DramaListService.instance.loadFromAsset();
+    if (!context.mounted) return;
+    final locale = CountryScope.maybeOf(context)?.country;
+    final dramaId = post.dramaId?.trim() ?? '';
+    if (dramaId.isEmpty) {
+      await _openDramaDetailFromPost(context, post);
+      return;
+    }
+    final displayTitle = DramaListService.instance.getDisplayTitle(
+      dramaId,
+      locale,
+    );
+    final fallbackTitle = displayTitle.isNotEmpty
+        ? displayTitle
+        : (post.dramaTitle?.trim().isNotEmpty == true
+              ? post.dramaTitle!.trim()
+              : post.title.trim());
+    if (!context.mounted) return;
+    await Navigator.push<void>(
+      context,
+      CupertinoPageRoute<void>(
+        builder: (_) =>
+            DramaReviewsListScreen(dramaId: dramaId, dramaTitle: fallbackTitle),
+      ),
+    );
+  }
+
   void _toggleReviewBodyComments(Post post) {
     final id = post.id;
     final wasOpen = _expandedReviewComments.contains(id);
@@ -542,12 +670,18 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
   void _flattenCommentsInto(
     List<PostComment> roots,
     List<_InlineReviewCommentEntry> out, {
+    required Set<String> expandedParentIds,
     int depth = 0,
   }) {
     for (final c in roots) {
       out.add(_InlineReviewCommentEntry(comment: c, depth: depth));
-      if (c.replies.isNotEmpty) {
-        _flattenCommentsInto(c.replies, out, depth: depth + 1);
+      if (c.replies.isNotEmpty && expandedParentIds.contains(c.id)) {
+        _flattenCommentsInto(
+          c.replies,
+          out,
+          expandedParentIds: expandedParentIds,
+          depth: depth + 1,
+        );
       }
     }
   }
@@ -587,91 +721,312 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
 
   Widget _buildFlatCommentRow(
     _InlineReviewCommentEntry entry,
-    ColorScheme cs, {
+    ColorScheme cs,
+    Post post, {
     required bool showLeadingReplyIcon,
   }) {
     final c = entry.comment;
-    // 닉네임 시작선을 리뷰 카드 본문 시작선과 맞추기 위한 좌측 오프셋.
-    const alignToHeartStartFromSectionLeft = 32.0;
-    final depthNudge = entry.depth.clamp(0, 8) * 8.0;
-    const avatarSize = 22.0;
+    final isReply = entry.depth > 0;
+    const avatarSize = kAppUnifiedProfileAvatarSize;
+    final uid = AuthService.instance.currentUser.value?.uid ?? '';
+    final likeMap = _inlineCommentLikeState[post.id];
+    final likeState = likeMap?[c.id];
+    final isLiked = likeState?.liked ?? c.likedBy.contains(uid);
+    final likeCount = likeState?.count ?? c.votes;
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Padding(
-        padding: EdgeInsets.only(
-          left: alignToHeartStartFromSectionLeft + depthNudge,
+    // ── 톡/에스크와 동일한 색상·스타일 ──────────────────────────────────
+    final metaColor = cs.onSurface.withValues(alpha: 0.44);
+    final bodyFontSize = isReply ? 12.0 : 13.0;
+    final bodyTextStyle = GoogleFonts.notoSansKr(
+      fontSize: bodyFontSize,
+      color: cs.onSurface,
+      height: 1.38,
+    );
+    const talkAskBodyTextHeightBehavior = TextHeightBehavior(
+      applyHeightToLastDescent: false,
+    );
+    final replyStyle = appUnifiedNicknameStyle(
+      cs,
+    ).copyWith(
+      fontWeight: FontWeight.w500,
+      color: cs.onSurface.withValues(alpha: 0.30),
+      height: 1.2,
+    );
+    final countStyle = appUnifiedNicknameStyle(cs).copyWith(
+      fontWeight: FontWeight.w500,
+      color: isLiked ? Colors.redAccent : metaColor,
+      height: 1.2,
+    );
+
+    // ── 상수 (톡/에스크와 동일) ──────────────────────────────────────────
+    const talkAskLikeColW = 40.0;
+    const talkAskLikeCountDownNudge = 1.0;
+    const talkAskBodyVisualUpNudge = 1.5;
+    const heartIconSize = 16.0;
+    const heartVPad = 4.0;
+    const heartBlockH = heartVPad + heartIconSize + heartVPad;
+    const gapNameToBody = 1.0;
+    const bodyMicroUpPx = 1.0;
+    const gapTalkAskNameBodyReply = gapNameToBody - bodyMicroUpPx;
+    const replyArrowW = 18.0; // 14px 아이콘 + 4px gap
+
+    Widget heartWidget() {
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => unawaited(_toggleInlineCommentLike(post, c)),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: heartVPad),
+          child: Icon(
+            isLiked ? Icons.favorite : Icons.favorite_border,
+            size: heartIconSize,
+            color: isLiked ? Colors.redAccent : metaColor,
+          ),
         ),
-        child: Column(
+      );
+    }
+
+    final commentBody = LayoutBuilder(
+      builder: (ctx, cons) {
+        final innerMaxW = cons.maxWidth;
+        final textColumnMaxW =
+            (innerMaxW -
+                    avatarSize -
+                    8 -
+                    talkAskLikeColW -
+                    (isReply ? replyArrowW : 0.0))
+                .clamp(1.0, 9999.0);
+        final textScaler = MediaQuery.textScalerOf(ctx);
+        final textDir = Directionality.of(ctx);
+
+        final authorLineStyle = appUnifiedNicknameStyle(cs);
+        final authorText = c.author.startsWith('u/')
+            ? c.author.substring(2)
+            : c.author;
+
+        final tpAuthorLine = TextPainter(
+          text: TextSpan(
+            text: authorText.isEmpty ? ' ' : authorText,
+            style: authorLineStyle,
+          ),
+          textDirection: textDir,
+          maxLines: 1,
+          textScaler: textScaler,
+        )..layout(maxWidth: textColumnMaxW);
+        final nameBlockH = tpAuthorLine.height;
+
+        final tpReply = TextPainter(
+          text: TextSpan(text: 'Reply', style: replyStyle),
+          textDirection: textDir,
+          maxLines: 1,
+          textScaler: textScaler,
+        )..layout();
+        final replyRowH = math.max(tpReply.height + 2.0, 18.0);
+
+        final tpCountSlot = TextPainter(
+          text: TextSpan(
+            text: '0',
+            style: appUnifiedNicknameStyle(cs).copyWith(
+              fontWeight: FontWeight.w500,
+              color: metaColor,
+              height: 1.2,
+            ),
+          ),
+          textDirection: textDir,
+          maxLines: 1,
+          textScaler: textScaler,
+        )..layout();
+        final countSlotH = tpCountSlot.height;
+
+        final yBodyTop = nameBlockH + gapTalkAskNameBodyReply;
+        final hasText = c.text.trim().isNotEmpty;
+
+        double bodyH = 0;
+        List<LineMetrics>? bodyLineMetrics;
+        if (hasText) {
+          final tpBody = TextPainter(
+            text: TextSpan(text: c.text, style: bodyTextStyle),
+            textDirection: textDir,
+            maxLines: null,
+            textScaler: textScaler,
+            textHeightBehavior: talkAskBodyTextHeightBehavior,
+          )..layout(maxWidth: textColumnMaxW);
+          bodyH = tpBody.height;
+          bodyLineMetrics = tpBody.computeLineMetrics();
+        }
+
+        double countH = countSlotH;
+        if (likeCount > 0) {
+          final tpC = TextPainter(
+            text: TextSpan(
+              text: formatCompactCount(likeCount),
+              style: countStyle,
+            ),
+            textDirection: textDir,
+            maxLines: 1,
+            textScaler: textScaler,
+          )..layout();
+          countH = math.max(countSlotH, tpC.height);
+        }
+
+        final double heartTop;
+        final double countTop;
+        final double replyRowTop;
+
+        if (hasText && bodyH > 0 && bodyLineMetrics != null) {
+          final lines = bodyLineMetrics;
+          if (lines.length >= 2) {
+            final h0 = lines[0].height;
+            final h1 = lines[1].height;
+            heartTop = yBodyTop + h0 / 2 - heartBlockH / 2;
+            countTop =
+                yBodyTop + h0 + h1 / 2 - countH / 2 + talkAskLikeCountDownNudge;
+            replyRowTop = yBodyTop + bodyH + gapTalkAskNameBodyReply;
+          } else {
+            replyRowTop = yBodyTop + bodyH + gapTalkAskNameBodyReply;
+            heartTop = yBodyTop + bodyH / 2 - heartBlockH / 2;
+            final countCenterY = replyRowTop + replyRowH / 2;
+            final ct = countCenterY - countH / 2 + talkAskLikeCountDownNudge;
+            final min = replyRowTop;
+            final max = replyRowTop + replyRowH - countH;
+            countTop = max >= min ? ct.clamp(min, max) : min;
+          }
+        } else {
+          replyRowTop = hasText
+              ? yBodyTop + bodyH + gapTalkAskNameBodyReply
+              : yBodyTop;
+          heartTop = yBodyTop + replyRowH / 2 - heartBlockH / 2;
+          final countCenterY = replyRowTop + replyRowH / 2;
+          final ct = countCenterY - countH / 2 + talkAskLikeCountDownNudge;
+          final min = replyRowTop;
+          final max = replyRowTop + replyRowH - countH;
+          countTop = max >= min ? ct.clamp(min, max) : min;
+        }
+
+        final contentBottom = math.max(
+          hasText ? yBodyTop + bodyH + gapTalkAskNameBodyReply : replyRowTop,
+          replyRowTop + replyRowH,
+        );
+        var stackH = math.max(
+          contentBottom,
+          math.max(heartTop + heartBlockH, countTop + countH),
+        );
+        stackH = math.max(stackH, avatarSize.toDouble());
+
+        return Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const SizedBox(height: 12),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    SizedBox(
-                      width: 20,
-                      child: showLeadingReplyIcon
-                          ? Transform.rotate(
-                              angle: math.pi,
-                              child: Icon(
-                                LucideIcons.reply,
-                                size: 14,
-                                color: cs.onSurfaceVariant.withValues(alpha: 0.78),
-                              ),
-                            )
-                          : null,
-                    ),
-                    const SizedBox(width: 6),
-                    _buildInlineCommentAvatar(c, avatarSize),
-                  ],
+            if (isReply || showLeadingReplyIcon) ...[
+              Padding(
+                padding: EdgeInsets.only(
+                  left: showLeadingReplyIcon && !isReply ? 2 : 0,
+                  top: 2,
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Expanded(
-                            child: Text(
-                              c.author.startsWith('u/')
-                                  ? c.author.substring(2)
-                                  : c.author,
-                              style: GoogleFonts.notoSansKr(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700,
-                                color: cs.onSurfaceVariant.withValues(
-                                  alpha: 0.62,
-                                ),
+                child: Transform.rotate(
+                  angle: math.pi,
+                  child: Icon(LucideIcons.reply, size: 14, color: metaColor),
+                ),
+              ),
+              const SizedBox(width: 4),
+            ],
+            _buildInlineCommentAvatar(c, avatarSize),
+            const SizedBox(width: 8),
+            Expanded(
+              child: SizedBox(
+                height: stackH,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    // 닉네임
+                    Positioned(
+                      left: 0,
+                      right: talkAskLikeColW,
+                      top: 0,
+                      child: Transform.translate(
+                        offset: const Offset(0, -1.5),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Flexible(
+                              child: Text(
+                                authorText,
+                                style: authorLineStyle,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
                             ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        c.text,
-                        style: GoogleFonts.notoSansKr(
-                          fontSize: 13,
-                          height: 1.4,
-                          color: cs.onSurfaceVariant,
+                          ],
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                    // 댓글 본문
+                    if (hasText)
+                      Positioned(
+                        left: 0,
+                        right: talkAskLikeColW,
+                        top: yBodyTop,
+                        child: Transform.translate(
+                          offset: const Offset(0, -talkAskBodyVisualUpNudge),
+                          child: Text(
+                            c.text,
+                            style: bodyTextStyle,
+                            textHeightBehavior: talkAskBodyTextHeightBehavior,
+                          ),
+                        ),
+                      ),
+                    // Reply 버튼
+                    Positioned(
+                      left: 0,
+                      right: talkAskLikeColW,
+                      top: replyRowTop,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () => _startInlineReply(post, c),
+                        child: Text('Reply', style: replyStyle),
+                      ),
+                    ),
+                    // 하트 아이콘
+                    Positioned(
+                      right: 0,
+                      top: heartTop,
+                      width: talkAskLikeColW,
+                      height: heartBlockH,
+                      child: Center(child: heartWidget()),
+                    ),
+                    // 하트 숫자
+                    Positioned(
+                      right: 0,
+                      top: countTop,
+                      width: talkAskLikeColW,
+                      height: countH,
+                      child: Center(
+                        child: likeCount > 0
+                            ? Text(
+                                formatCompactCount(likeCount),
+                                textAlign: TextAlign.center,
+                                style: countStyle,
+                              )
+                            : const SizedBox.shrink(),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ],
-        ),
-      ),
+        );
+      },
+    );
+
+    if (!isReply) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(40, 20, 0, 8),
+        child: commentBody,
+      );
+    }
+    final nestedReplyLeft = 50.0 + ((entry.depth - 1) * 10.0);
+    return Padding(
+      padding: EdgeInsets.only(left: nestedReplyLeft, top: 12),
+      child: commentBody,
     );
   }
 
@@ -685,9 +1040,132 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
     _inlineCommentControllers.putIfAbsent(id, TextEditingController.new);
     final ctrl = _inlineCommentControllers[id]!;
     final p = _latestPost(post);
+    final expandedReplyParents = _inlineExpandedReplyThreads.putIfAbsent(
+      id,
+      () => <String>{},
+    );
     final flat = <_InlineReviewCommentEntry>[];
-    _flattenCommentsInto(p.commentsList, flat);
+    _flattenCommentsInto(
+      p.commentsList,
+      flat,
+      expandedParentIds: expandedReplyParents,
+    );
     final hasComments = flat.isNotEmpty;
+
+    final replyingComment = _inlineReplyingToComment[id];
+
+    final commentWidgets = <Widget>[];
+    final stack = <({int depth, PostComment comment, int flatIndex})>[];
+    for (var i = 0; i < flat.length; i++) {
+      final entry = flat[i];
+      final comment = entry.comment;
+      final showLeadingReplyIcon = i == 0;
+      while (stack.isNotEmpty && stack.last.depth >= entry.depth) {
+        stack.removeLast();
+      }
+      stack.add((depth: entry.depth, comment: comment, flatIndex: i));
+
+      final hasReplies = comment.replies.isNotEmpty;
+      final isExpanded = expandedReplyParents.contains(comment.id);
+      final row = _buildFlatCommentRow(
+        entry,
+        cs,
+        p,
+        showLeadingReplyIcon: showLeadingReplyIcon,
+      );
+      commentWidgets.add(row);
+
+      double toggleLeftFor(int depth, bool hasArrow) {
+        final rowLeft = depth == 0 ? 40.0 : 50.0 + ((depth - 1) * 10.0);
+        return rowLeft +
+            (hasArrow ? 18.0 : 0.0) +
+            kAppUnifiedProfileAvatarSize +
+            8.0;
+      }
+
+      if (hasReplies && !isExpanded) {
+        final hasArrow = entry.depth > 0 || showLeadingReplyIcon;
+        final toggleLeft = toggleLeftFor(entry.depth, hasArrow);
+        final repliesN = comment.replies.length;
+        final label = repliesN == 1 ? 'reply' : 'replies';
+        final metaColor = cs.onSurface.withValues(alpha: 0.44);
+        commentWidgets.add(
+          Padding(
+            padding: EdgeInsets.fromLTRB(toggleLeft, 0, 0, 4),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => setState(() => expandedReplyParents.add(comment.id)),
+              child: Text.rich(
+                TextSpan(
+                  style: GoogleFonts.notoSansKr(
+                    fontSize: 12,
+                    color: metaColor,
+                    height: 1.25,
+                  ),
+                  children: [
+                    const TextSpan(text: '— '),
+                    TextSpan(
+                      text: 'View $repliesN more $label',
+                      style: GoogleFonts.notoSansKr(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: metaColor,
+                        height: 1.25,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      }
+
+      final nextDepth = i + 1 < flat.length ? flat[i + 1].depth : -1;
+      for (var j = stack.length - 1; j >= 0; j--) {
+        final parent = stack[j];
+        if (parent.depth < nextDepth) break;
+        final parentComment = parent.comment;
+        final parentExpanded = expandedReplyParents.contains(parentComment.id);
+        if (!parentExpanded || parentComment.replies.isEmpty) continue;
+        final parentHasArrow = parent.depth > 0 || parent.flatIndex == 0;
+        final toggleLeft = toggleLeftFor(parent.depth, parentHasArrow);
+        final label = parentComment.replies.length == 1 ? 'reply' : 'replies';
+        final metaColor = cs.onSurface.withValues(alpha: 0.44);
+        commentWidgets.add(
+          Padding(
+            padding: EdgeInsets.fromLTRB(toggleLeft, 0, 0, 8),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => setState(
+                () => expandedReplyParents.remove(parentComment.id),
+              ),
+              child: Text.rich(
+                TextSpan(
+                  style: GoogleFonts.notoSansKr(
+                    fontSize: 12,
+                    color: metaColor,
+                    height: 1.25,
+                  ),
+                  children: [
+                    const TextSpan(text: '— '),
+                    TextSpan(
+                      text: 'Hide $label',
+                      style: GoogleFonts.notoSansKr(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: metaColor,
+                        height: 1.25,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      }
+    }
 
     return ColoredBox(
       color: cs.surfaceContainerHighest.withValues(alpha: 0.4),
@@ -700,18 +1178,18 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
               padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: flat
-                    .asMap()
-                    .entries
-                    .map(
-                      (e) => _buildFlatCommentRow(
-                        e.value,
-                        cs,
-                        showLeadingReplyIcon: e.key == 0,
-                      ),
-                    )
-                    .toList(),
+                children: commentWidgets,
               ),
+            ),
+          // 답글 중 배너
+          if (replyingComment != null)
+            _InlineReplyingToBanner(
+              comment: replyingComment,
+              cs: cs,
+              onCancel: () => setState(() {
+                _inlineReplyingToCommentId.remove(id);
+                _inlineReplyingToComment.remove(id);
+              }),
             ),
           _ReviewFeedInlineComposer(
             controller: ctrl,
@@ -729,62 +1207,67 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
     final uid = AuthService.instance.currentUser.value?.uid;
     final liked = uid != null && p.likedBy.contains(uid);
     const iconSize = 13.0;
+    final actionFg = feedInlineActionMutedForeground(cs);
     return Row(
       mainAxisAlignment: MainAxisAlignment.start,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        reviewInlineActionHitTarget(
-          onTap: () => _inlineToggleLike(post),
-          visual: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Icon(
-                  liked ? Icons.favorite : Icons.favorite_border,
-                  size: iconSize,
-                  color: liked ? Colors.redAccent : cs.onSurfaceVariant,
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  formatCompactCount(p.likeCount),
-                  style: GoogleFonts.notoSansKr(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                    height: 1.0,
-                    color: cs.onSurfaceVariant,
+        ReviewCardSuppressParentTap(
+          child: reviewInlineActionHitTarget(
+            onTap: () => _inlineToggleLike(post),
+            visual: Padding(
+              padding: const EdgeInsets.fromLTRB(0, 2, 4, 2),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Icon(
+                    liked ? Icons.favorite : Icons.favorite_border,
+                    size: iconSize,
+                    color: liked ? Colors.redAccent : actionFg,
                   ),
-                ),
-              ],
+                  const SizedBox(width: 4),
+                  Text(
+                    formatCompactCount(p.likeCount),
+                    style: GoogleFonts.notoSansKr(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      height: 1.0,
+                      color: actionFg,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
         const SizedBox(width: 4),
-        reviewInlineActionHitTarget(
-          onTap: () => _toggleReviewBodyComments(post),
-          visual: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Icon(
-                  LucideIcons.message_circle,
-                  size: iconSize,
-                  color: cs.onSurfaceVariant,
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  formatCompactCount(p.comments),
-                  style: GoogleFonts.notoSansKr(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                    height: 1.0,
-                    color: cs.onSurfaceVariant,
+        ReviewCardSuppressParentTap(
+          child: reviewInlineActionHitTarget(
+            onTap: () => _toggleReviewBodyComments(post),
+            visual: Padding(
+              padding: const EdgeInsets.fromLTRB(0, 2, 4, 2),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Icon(
+                    LucideIcons.message_circle,
+                    size: iconSize,
+                    color: actionFg,
                   ),
-                ),
-              ],
+                  const SizedBox(width: 4),
+                  Text(
+                    formatCompactCount(p.comments),
+                    style: GoogleFonts.notoSansKr(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      height: 1.0,
+                      color: actionFg,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -1288,8 +1771,8 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
                   if (index > 0)
                     Divider(
                       height: 1,
-                      thickness: 0.5,
-                      color: cs.onSurfaceVariant.withValues(alpha: 0.35),
+                      thickness: 1,
+                      color: cs.outline.withValues(alpha: 0.26),
                     ),
                   FeedReviewLetterboxdTile(
                     post: post,
@@ -1299,19 +1782,12 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
                     thumbTrailingActions: inline
                         ? _buildReviewInlineActionBar(post, cs, s)
                         : null,
-                    onDramaTap: inline
-                        ? () => _openDramaDetailForPost(context, post)
-                        : null,
+                    onDramaTap: () => _openDramaDetailFromPost(context, post),
                     onReviewBodyTap: inline
                         ? () => _toggleReviewBodyComments(post)
                         : null,
-                    onRatingTap: inline
-                        ? () => _openDramaDetailForPost(
-                            context,
-                            post,
-                            scrollToReviews: true,
-                          )
-                        : null,
+                    onRatingTap: () =>
+                        _openDramaWatchersFromPost(context, post),
                     currentUserAuthor: currentUserAuthor,
                     onPostUpdated: onPostUpdated,
                     onPostDeleted: onPostDeleted,
@@ -1550,8 +2026,8 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
                   if (index > 0)
                     Divider(
                       height: 1,
-                      thickness: 0.5,
-                      color: cs.onSurfaceVariant.withValues(alpha: 0.35),
+                      thickness: 1,
+                      color: cs.outline.withValues(alpha: 0.26),
                     ),
                   FeedReviewLetterboxdTile(
                     post: post,
@@ -1561,19 +2037,12 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
                     thumbTrailingActions: inline
                         ? _buildReviewInlineActionBar(post, cs, s)
                         : null,
-                    onDramaTap: inline
-                        ? () => _openDramaDetailForPost(context, post)
-                        : null,
+                    onDramaTap: () => _openDramaDetailFromPost(context, post),
                     onReviewBodyTap: inline
                         ? () => _toggleReviewBodyComments(post)
                         : null,
-                    onRatingTap: inline
-                        ? () => _openDramaDetailForPost(
-                            context,
-                            post,
-                            scrollToReviews: true,
-                          )
-                        : null,
+                    onRatingTap: () =>
+                        _openDramaWatchersFromPost(context, post),
                     currentUserAuthor: currentUserAuthor,
                     onPostUpdated: onPostUpdated,
                     onPostDeleted: onPostDeleted,
@@ -1704,7 +2173,7 @@ class _ReviewFeedInlineComposer extends StatelessWidget {
             final url = rawUrl?.trim();
             final colorIdx =
                 UserProfileService.instance.avatarColorNotifier.value ?? 0;
-            const avatarSize = 32.0;
+            const avatarSize = kAppUnifiedProfileAvatarSize;
             final Widget avatar = (url != null && url.isNotEmpty)
                 ? ClipOval(
                     child: OptimizedNetworkImage.avatar(
@@ -1932,7 +2401,7 @@ class _ReviewCommentComposerOverlayState
                                 .avatarColorNotifier
                                 .value ??
                             0;
-                        const avatarSize = 32.0;
+                        const avatarSize = kAppUnifiedProfileAvatarSize;
                         final Widget avatar = (url != null && url.isNotEmpty)
                             ? ClipOval(
                                 child: OptimizedNetworkImage.avatar(
@@ -2082,6 +2551,7 @@ class FreeBoardTab extends StatefulWidget {
     this.feedLoadingMore = false,
     this.feedHasMore = true,
     this.feedAuthorAvatarSize,
+    this.useCardFeedLayout = false,
   });
 
   final List<Post> posts;
@@ -2100,6 +2570,9 @@ class FreeBoardTab extends StatefulWidget {
   final bool feedLoadingMore;
   final bool feedHasMore;
   final double? feedAuthorAvatarSize;
+
+  /// false(기본): 구분선 리스트. true: 카드.
+  final bool useCardFeedLayout;
 
   @override
   State<FreeBoardTab> createState() => _FreeBoardTabState();
@@ -2622,19 +3095,32 @@ class _FreeBoardTabState extends State<FreeBoardTab> {
       itemBuilder: (context, index) {
         if (index < posts.length) {
           final post = posts[index];
+          if (widget.useCardFeedLayout) {
+            return RepaintBoundary(
+              child: FeedPostCard(
+                key: ValueKey(post.id),
+                post: post,
+                currentUserAuthor: currentUserAuthor,
+                onPostUpdated: onPostUpdated,
+                onPostDeleted: onPostDeleted,
+                tabName: tabName,
+                onTap: widget.onPostTap != null
+                    ? () => widget.onPostTap!(post)
+                    : null,
+                onUserBlocked: widget.onUserBlocked,
+                authorAvatarSize: widget.feedAuthorAvatarSize,
+              ),
+            );
+          }
           return RepaintBoundary(
-            child: FeedPostCard(
-              key: ValueKey(post.id),
+            key: ValueKey('talk_list_${post.id}'),
+            child: TalkAskFeedListRow(
               post: post,
-              currentUserAuthor: currentUserAuthor,
-              onPostUpdated: onPostUpdated,
-              onPostDeleted: onPostDeleted,
-              tabName: tabName,
+              colorScheme: cs,
+              showLeadingDivider: index > 0,
               onTap: widget.onPostTap != null
                   ? () => widget.onPostTap!(post)
                   : null,
-              onUserBlocked: widget.onUserBlocked,
-              authorAvatarSize: widget.feedAuthorAvatarSize,
             ),
           );
         }
@@ -2852,6 +3338,69 @@ class _FreeBoardTabState extends State<FreeBoardTab> {
       },
       behavior: HitTestBehavior.deferToChild,
       child: _wrapRefresh(listView),
+    );
+  }
+}
+
+class _InlineReplyingToBanner extends StatelessWidget {
+  const _InlineReplyingToBanner({
+    required this.comment,
+    required this.cs,
+    required this.onCancel,
+  });
+
+  final PostComment comment;
+  final ColorScheme cs;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    final author = comment.author.startsWith('u/')
+        ? comment.author.substring(2)
+        : comment.author;
+    return Container(
+      color: cs.surfaceContainerHighest.withValues(alpha: 0.7),
+      padding: const EdgeInsets.fromLTRB(14, 6, 8, 6),
+      child: Row(
+        children: [
+          Transform.rotate(
+            angle: math.pi,
+            child: const Icon(LucideIcons.reply, size: 13, color: Colors.white),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            'Replying to $author',
+            style: GoogleFonts.notoSansKr(
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              color: Colors.white,
+            ),
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text(
+              comment.text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.notoSansKr(
+                fontSize: 12,
+                color: cs.onSurfaceVariant.withValues(alpha: 0.7),
+              ),
+            ),
+          ),
+          GestureDetector(
+            onTap: onCancel,
+            child: Padding(
+              padding: const EdgeInsets.all(4),
+              child: Icon(
+                Icons.close,
+                size: 15,
+                color: cs.onSurfaceVariant.withValues(alpha: 0.6),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

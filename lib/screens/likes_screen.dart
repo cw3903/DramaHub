@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -13,7 +14,6 @@ import '../utils/post_board_utils.dart';
 import '../widgets/country_scope.dart';
 import '../widgets/feed_review_star_row.dart';
 import '../widgets/lists_style_subpage_app_bar.dart';
-import '../widgets/optimized_network_image.dart';
 import '../widgets/two_tab_segment_bar.dart';
 import 'login_page.dart';
 import 'post_detail_page.dart';
@@ -63,7 +63,8 @@ class _LikesScreenState extends State<LikesScreen>
     final headerBg = listsStyleSubpageHeaderBackground(theme);
     final overlay = listsStyleSubpageSystemOverlay(theme, headerBg);
 
-    return AnnotatedRegion<SystemUiOverlayStyle>(
+    return ListsStyleSwipeBack(
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
       value: overlay,
       child: Scaffold(
         backgroundColor: theme.scaffoldBackgroundColor,
@@ -109,6 +110,7 @@ class _LikesScreenState extends State<LikesScreen>
           },
         ),
       ),
+    ),
     );
   }
 }
@@ -350,40 +352,51 @@ class _LikesListEllipsisText extends StatelessWidget {
   }
 }
 
-/// 라이크 포스트·코멘츠 행 오른쪽 썸네일(48×72, 리뷰 탭 드라마 썸네일과 동일 비율).
+/// 라이크 포스트·코멘츠·리뷰 행 오른쪽 썸네일(2:3).
 class _LikedPostListThumb extends StatelessWidget {
-  const _LikedPostListThumb({required this.imageUrl, required this.cs});
+  const _LikedPostListThumb({
+    required this.imageUrl,
+    required this.cs,
+    this.errorIcon = LucideIcons.image,
+    this.emptyIcon = LucideIcons.file_text,
+  });
 
   final String? imageUrl;
   final ColorScheme cs;
-
-  static const double _w = 48;
-  static const double _h = 72;
+  final IconData errorIcon;
+  final IconData emptyIcon;
 
   @override
   Widget build(BuildContext context) {
+    const double thumbW = 48;
+    final double thumbH = thumbW * 1.5;
     final u = imageUrl?.trim();
     if (u != null &&
         u.isNotEmpty &&
         (u.startsWith('http://') || u.startsWith('https://'))) {
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(6),
-        child: SizedBox(
-          width: _w,
-          height: _h,
-          child: OptimizedNetworkImage(
-            imageUrl: u,
-            width: _w,
-            height: _h,
-            fit: BoxFit.cover,
-            memCacheWidth: 160,
-            memCacheHeight: 240,
-            errorWidget: ColoredBox(
-              color: cs.surfaceContainerHighest,
-              child: Icon(
-                LucideIcons.image,
-                size: 22,
-                color: cs.onSurfaceVariant.withValues(alpha: 0.35),
+      return SizedBox(
+        width: thumbW,
+        height: thumbH,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: OverflowBox(
+            minWidth: thumbW,
+            maxWidth: thumbW,
+            minHeight: thumbH,
+            maxHeight: thumbH,
+            alignment: Alignment.center,
+            child: CachedNetworkImage(
+              imageUrl: u,
+              fit: BoxFit.cover,
+              width: thumbW,
+              height: thumbH,
+              errorWidget: (_, __, ___) => ColoredBox(
+                color: cs.surfaceContainerHighest,
+                child: Icon(
+                  errorIcon,
+                  size: 22,
+                  color: cs.onSurfaceVariant.withValues(alpha: 0.35),
+                ),
               ),
             ),
           ),
@@ -395,10 +408,10 @@ class _LikedPostListThumb extends StatelessWidget {
       child: ColoredBox(
         color: cs.surfaceContainerHighest,
         child: SizedBox(
-          width: _w,
-          height: _h,
+          width: thumbW,
+          height: thumbH,
           child: Icon(
-            LucideIcons.file_text,
+            emptyIcon,
             size: 22,
             color: cs.onSurfaceVariant.withValues(alpha: 0.35),
           ),
@@ -604,8 +617,6 @@ class _LikedReviewsList extends StatelessWidget {
             : post.title;
         final rating = post.rating;
         final body = (post.body ?? '').replaceAll(RegExp(r'\s+'), ' ').trim();
-        const thumbW = 48.0;
-        const thumbH = 72.0;
         final titleAlpha = 0.8;
         final titleStyle = GoogleFonts.notoSansKr(
           fontSize: 13.5,
@@ -678,41 +689,11 @@ class _LikedReviewsList extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 10),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(6),
-                    child: SizedBox(
-                      width: thumbW,
-                      height: thumbH,
-                      child: hasHttp
-                          ? OptimizedNetworkImage(
-                              imageUrl: thumb,
-                              width: thumbW,
-                              height: thumbH,
-                              fit: BoxFit.cover,
-                              memCacheWidth: 160,
-                              memCacheHeight: 240,
-                              errorWidget: ColoredBox(
-                                color: cs.surfaceContainerHighest,
-                                child: Icon(
-                                  LucideIcons.tv,
-                                  size: 22,
-                                  color: cs.onSurfaceVariant.withValues(
-                                    alpha: 0.35,
-                                  ),
-                                ),
-                              ),
-                            )
-                          : ColoredBox(
-                              color: cs.surfaceContainerHighest,
-                              child: Icon(
-                                LucideIcons.tv,
-                                size: 22,
-                                color: cs.onSurfaceVariant.withValues(
-                                  alpha: 0.35,
-                                ),
-                              ),
-                            ),
-                    ),
+                  _LikedPostListThumb(
+                    imageUrl: hasHttp ? thumb : null,
+                    cs: cs,
+                    errorIcon: LucideIcons.tv,
+                    emptyIcon: LucideIcons.tv,
                   ),
                 ],
               ),

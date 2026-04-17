@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
@@ -9,9 +10,9 @@ import '../services/post_service.dart';
 import '../services/user_profile_service.dart';
 import '../widgets/country_scope.dart';
 import '../widgets/lists_style_subpage_app_bar.dart';
-import '../widgets/optimized_network_image.dart';
 import '../widgets/two_tab_segment_bar.dart';
 import '../widgets/user_follow_button.dart';
+import '../utils/post_board_utils.dart';
 import 'post_detail_page.dart';
 
 /// 특정 회원의 작성 글 + 댓글 (탭: Posts / Comments).
@@ -212,7 +213,8 @@ class _UserPostsScreenState extends State<UserPostsScreen> {
 
     final title = _headerTitle(s);
 
-    return AnnotatedRegion<SystemUiOverlayStyle>(
+    return ListsStyleSwipeBack(
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
       value: listsStyleSubpageSystemOverlay(theme, headerBg),
       child: Scaffold(
         backgroundColor: theme.scaffoldBackgroundColor,
@@ -266,6 +268,7 @@ class _UserPostsScreenState extends State<UserPostsScreen> {
                       ),
                     ],
                   ),
+        ),
       ),
     );
   }
@@ -341,9 +344,22 @@ class _UserPostsScreenState extends State<UserPostsScreen> {
             clipBehavior: Clip.none,
             child: InkWell(
               onTap: () async {
+                final isReview = postDisplayType(post) == 'review';
                 final result = await Navigator.push<PostDetailResult>(
                   context,
-                  MaterialPageRoute(builder: (_) => PostDetailPage(post: post)),
+                  MaterialPageRoute(
+                    builder: (_) => isReview
+                        ? PostDetailPage(
+                            post: post,
+                            hideBottomDramaFeed: true,
+                            suppressLetterboxdCommentsSection: false,
+                          )
+                        : PostDetailPage(
+                            post: post,
+                            hideBelowLetterboxdLike: false,
+                            suppressLetterboxdCommentsSection: false,
+                          ),
+                  ),
                 );
                 final updated = result?.updatedPost;
                 if (updated != null && mounted) {
@@ -476,9 +492,22 @@ class _UserPostsScreenState extends State<UserPostsScreen> {
             clipBehavior: Clip.none,
             child: InkWell(
               onTap: () async {
+                final p = item.post;
+                final isReview = postDisplayType(p) == 'review';
                 await Navigator.push<PostDetailResult>(
                   context,
-                  MaterialPageRoute(builder: (_) => PostDetailPage(post: item.post)),
+                  MaterialPageRoute(
+                    builder: (_) => isReview
+                        ? PostDetailPage(
+                            post: p,
+                            hideBottomDramaFeed: true,
+                            suppressLetterboxdCommentsSection: false,
+                          )
+                        : PostDetailPage(
+                            post: p,
+                            suppressLetterboxdCommentsSection: false,
+                          ),
+                  ),
                 );
               },
               child: Padding(
@@ -586,33 +615,38 @@ class _UserPostsListThumb extends StatelessWidget {
   final String? imageUrl;
   final ColorScheme cs;
 
-  static const double _w = 48;
-  static const double _h = 72;
+  static const double thumbW = 48;
 
   @override
   Widget build(BuildContext context) {
+    final thumbH = thumbW * 1.5;
     final u = imageUrl?.trim();
     if (u != null &&
         u.isNotEmpty &&
         (u.startsWith('http://') || u.startsWith('https://'))) {
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(6),
-        child: SizedBox(
-          width: _w,
-          height: _h,
-          child: OptimizedNetworkImage(
-            imageUrl: u,
-            width: _w,
-            height: _h,
-            fit: BoxFit.cover,
-            memCacheWidth: 160,
-            memCacheHeight: 240,
-            errorWidget: ColoredBox(
-              color: cs.surfaceContainerHighest,
-              child: Icon(
-                LucideIcons.image,
-                size: 22,
-                color: cs.onSurfaceVariant.withValues(alpha: 0.35),
+      return SizedBox(
+        width: thumbW,
+        height: thumbH,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: OverflowBox(
+            maxWidth: thumbW,
+            maxHeight: thumbH,
+            minWidth: thumbW,
+            minHeight: thumbH,
+            alignment: Alignment.center,
+            child: CachedNetworkImage(
+              imageUrl: u,
+              fit: BoxFit.cover,
+              width: thumbW,
+              height: thumbH,
+              errorWidget: (_, __, ___) => ColoredBox(
+                color: cs.surfaceContainerHighest,
+                child: Icon(
+                  LucideIcons.image,
+                  size: 22,
+                  color: cs.onSurfaceVariant.withValues(alpha: 0.35),
+                ),
               ),
             ),
           ),
@@ -624,8 +658,8 @@ class _UserPostsListThumb extends StatelessWidget {
       child: ColoredBox(
         color: cs.surfaceContainerHighest,
         child: SizedBox(
-          width: _w,
-          height: _h,
+          width: thumbW,
+          height: thumbH,
           child: Icon(
             LucideIcons.file_text,
             size: 22,

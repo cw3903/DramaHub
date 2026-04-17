@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-/// 참고 이미지(화살/책갈피형) 스타일: 왼쪽 둥근 모서리, 오른쪽 뾰족한 끝.
+/// 참고 이미지(화살/책갈피형) 스타일: 왼쪽은 살짝 둥근 모서리, 오른쪽 뾰족한 끝.
 class ReviewArrowTagChip extends StatelessWidget {
   const ReviewArrowTagChip({
     super.key,
@@ -63,9 +63,15 @@ class ReviewArrowTagChip extends StatelessWidget {
         ? horizPad + tip + (tightClose ? 2.0 : 4.0)
         : horizPad + tip * 0.4;
 
+    /// 왼쪽만 살짝 둥글게(전체 radius보다 작게).
+    final leftCornerR = compact ? 2.0 : 3.0;
+
     final chip = IntrinsicWidth(
       child: ClipPath(
-        clipper: _ArrowTagClipper(radius: radius, tipWidth: tip),
+        clipper: _ArrowTagClipper(
+          tipWidth: tip,
+          leftCornerRadius: leftCornerR,
+        ),
         child: Container(
           height: h,
           padding: EdgeInsets.fromLTRB(horizPad, 0, rightPad, 0),
@@ -120,7 +126,12 @@ class ReviewArrowTagChip extends StatelessWidget {
           onTap: onTap,
           splashColor: Colors.white.withValues(alpha: 0.14),
           highlightColor: Colors.white.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(radius),
+          borderRadius: BorderRadius.only(
+            topLeft: Radius.circular(leftCornerR),
+            bottomLeft: Radius.circular(leftCornerR),
+            topRight: Radius.circular(radius),
+            bottomRight: Radius.circular(radius),
+          ),
           canRequestFocus: false,
           child: chip,
         ),
@@ -131,18 +142,31 @@ class ReviewArrowTagChip extends StatelessWidget {
 }
 
 class _ArrowTagClipper extends CustomClipper<Path> {
-  _ArrowTagClipper({required this.radius, required this.tipWidth});
+  _ArrowTagClipper({
+    required this.tipWidth,
+    this.leftCornerRadius = 0,
+  });
 
-  final double radius;
   final double tipWidth;
+  final double leftCornerRadius;
 
   @override
   Path getClip(Size size) {
     final w = size.width;
     final h = size.height;
-    final r = radius.clamp(0.0, h / 2 - 0.01);
     final tw = tipWidth.clamp(2.0, w * 0.45);
     final xBody = w - tw;
+    final r = leftCornerRadius.clamp(0.0, h / 2 - 0.01);
+
+    if (r <= 0) {
+      return Path()
+        ..moveTo(0, 0)
+        ..lineTo(xBody, 0)
+        ..lineTo(w, h / 2)
+        ..lineTo(xBody, h)
+        ..lineTo(0, h)
+        ..close();
+    }
 
     return Path()
       ..moveTo(r, 0)
@@ -150,7 +174,11 @@ class _ArrowTagClipper extends CustomClipper<Path> {
       ..lineTo(w, h / 2)
       ..lineTo(xBody, h)
       ..lineTo(r, h)
-      ..arcToPoint(Offset(0, h - r), radius: Radius.circular(r), clockwise: true)
+      ..arcToPoint(
+        Offset(0, h - r),
+        radius: Radius.circular(r),
+        clockwise: true,
+      )
       ..lineTo(0, r)
       ..arcToPoint(Offset(r, 0), radius: Radius.circular(r), clockwise: true)
       ..close();
@@ -158,5 +186,6 @@ class _ArrowTagClipper extends CustomClipper<Path> {
 
   @override
   bool shouldReclip(covariant _ArrowTagClipper oldClipper) =>
-      oldClipper.radius != radius || oldClipper.tipWidth != tipWidth;
+      oldClipper.tipWidth != tipWidth ||
+      oldClipper.leftCornerRadius != leftCornerRadius;
 }

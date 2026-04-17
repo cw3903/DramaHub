@@ -1,5 +1,6 @@
 import 'dart:async' show unawaited;
 
+import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter/material.dart';
 import '../utils/format_utils.dart';
 import 'package:flutter/services.dart';
@@ -15,16 +16,19 @@ import '../services/drama_list_service.dart';
 import '../services/drama_view_service.dart';
 import '../services/episode_rating_service.dart';
 import '../services/episode_review_service.dart';
+import '../services/post_service.dart';
 import '../services/review_service.dart';
 import '../services/user_profile_service.dart';
+import '../services/custom_drama_list_service.dart';
 import '../services/watch_history_service.dart';
 import '../services/watchlist_service.dart';
+import '../constants/app_profile_avatar_size.dart';
 import '../models/drama.dart';
 import 'login_page.dart';
-import '../widgets/share_sheet.dart';
-import '../widgets/review_share_card.dart';
 import '../widgets/optimized_network_image.dart';
 import '../widgets/lists_style_subpage_app_bar.dart';
+import '../widgets/drama_reviews_list_feed_row.dart';
+import '../widgets/feed_inline_action_colors.dart';
 import '../widgets/green_rating_stars.dart';
 import '../widgets/episode_review_panel.dart';
 import '../widgets/app_delete_confirm_dialog.dart';
@@ -35,54 +39,47 @@ import 'drama_watchers_screen.dart';
 import 'drama_reviews_list_screen.dart';
 import 'drama_lists_screen.dart';
 
-/// 스탯 바 우측: 워치리스트 토글 (하단 CTA와 동일 동작).
-Future<void> _dramaDetailToggleWatchlist(
-  BuildContext context,
-  String dramaId,
-  dynamic strings,
-) async {
-  if (!AuthService.instance.isLoggedIn.value) {
-    await Navigator.push<void>(
-      context,
-      MaterialPageRoute<void>(builder: (_) => const LoginPage()),
-    );
-    if (!context.mounted || !AuthService.instance.isLoggedIn.value) {
-      return;
-    }
-    await WatchlistService.instance.loadIfNeeded(force: true);
-    if (!context.mounted) return;
-  }
-  final country = CountryScope.maybeOf(context)?.country ??
-      UserProfileService.instance.signupCountryNotifier.value;
-  final wasOn = WatchlistService.instance.isInWatchlist(dramaId);
-  await WatchlistService.instance.toggle(dramaId, country);
-  if (!context.mounted) return;
-  final nowOn = WatchlistService.instance.isInWatchlist(dramaId);
-  if (wasOn == nowOn) return;
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(
-      content: Text(
-        nowOn
-            ? strings.get('watchlistToastAdded')
-            : strings.get('watchlistToastRemoved'),
-        style: GoogleFonts.notoSansKr(),
-      ),
-      behavior: SnackBarBehavior.floating,
-    ),
-  );
-}
+TextStyle _detailSectionCapsLabel(ColorScheme cs) => GoogleFonts.notoSansKr(
+  fontSize: 16,
+  fontWeight: FontWeight.w800,
+  letterSpacing: 2.0,
+  height: 1.0,
+  color: cs.onSurface.withValues(alpha: 0.90),
+);
+
+Widget _sectionLabel(String text, ColorScheme cs) => Transform.scale(
+  scaleX: 1.1,
+  alignment: Alignment.centerLeft,
+  child: Text(text, style: _detailSectionCapsLabel(cs)),
+);
 
 class _StatsBarWatchlistButton extends StatelessWidget {
   const _StatsBarWatchlistButton({
     required this.dramaId,
+    required this.userCount,
     required this.strings,
+    required this.onTap,
   });
 
   final String dramaId;
+  /// 이 드라마를 워치리스트에 둔 전체 유저 수.
+  final int userCount;
   final dynamic strings;
+  final VoidCallback onTap;
 
   /// surfaceContainerHighest 대비 구분되는 선명한 인디고 슬레이트.
   static const Color _kBackground = Color(0xFF404B63);
+
+  /// 워치리스트 미담김: 배지 채움 + 플러스.
+  static const Color _kWatchlistBadgePlusFill = Color(0xFFB0BEC5);
+  static const Color _kWatchlistBadgePlusGlyph = Color(0xFF263238);
+
+  /// 워치리스트 담김: 빨간 배지 + 마이너스.
+  static const Color _kWatchlistBadgeMinusFill = Color(0xFFE53935);
+  static const Color _kWatchlistBadgeMinusGlyph = Color(0xFFFFFFFF);
+
+  static const double _clockSize = 22;
+  static const double _badgeSize = 12;
 
   @override
   Widget build(BuildContext context) {
@@ -93,8 +90,13 @@ class _StatsBarWatchlistButton extends StatelessWidget {
         WatchlistService.instance.itemsNotifier,
       ]),
       builder: (context, _) {
-        final on = WatchlistService.instance.isInWatchlist(dramaId);
-        final color = on ? AppColors.accent : Colors.white.withValues(alpha: 0.92);
+        final iconColor = cs.onSurface;
+        final did = dramaId.trim();
+        final inList = AuthService.instance.isLoggedIn.value &&
+            did.isNotEmpty &&
+            WatchlistService.instance.isInWatchlist(did);
+        final hasCount = userCount > 0;
+        final labelColor = cs.onSurface;
         return Material(
           color: _kBackground,
           borderRadius: BorderRadius.circular(8),
@@ -103,7 +105,7 @@ class _StatsBarWatchlistButton extends StatelessWidget {
             borderRadius: BorderRadius.circular(8),
             splashColor: cs.primary.withValues(alpha: 0.12),
             highlightColor: cs.primary.withValues(alpha: 0.06),
-            onTap: () => _dramaDetailToggleWatchlist(context, dramaId, strings),
+            onTap: onTap,
             child: SizedBox.expand(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
@@ -113,26 +115,111 @@ class _StatsBarWatchlistButton extends StatelessWidget {
                       fit: BoxFit.scaleDown,
                       alignment: Alignment.center,
                       child: ConstrainedBox(
-                        constraints: BoxConstraints(maxWidth: constraints.maxWidth),
+                        constraints: BoxConstraints(
+                          maxWidth: constraints.maxWidth,
+                        ),
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           mainAxisSize: MainAxisSize.min,
                           crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
-                            Icon(LucideIcons.clock, size: 22, color: color),
-                            const SizedBox(height: 3),
-                            Text(
-                              strings.get('dramaBottomActionWatchlist'),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.center,
-                              style: GoogleFonts.notoSansKr(
-                                fontSize: 10,
-                                fontWeight: FontWeight.w600,
-                                color: color,
-                                height: 1.12,
+                            SizedBox(
+                              width: _clockSize + 2,
+                              height: _clockSize,
+                              child: Stack(
+                                clipBehavior: Clip.none,
+                                alignment: Alignment.center,
+                                children: [
+                                  Icon(
+                                    LucideIcons.clock,
+                                    size: _clockSize,
+                                    color: iconColor,
+                                  ),
+                                  Positioned(
+                                    right: -1,
+                                    bottom: 0,
+                                    child: inList
+                                        ? Container(
+                                            width: _badgeSize,
+                                            height: _badgeSize,
+                                            alignment: Alignment.center,
+                                            decoration: const BoxDecoration(
+                                              color: _kWatchlistBadgeMinusFill,
+                                              shape: BoxShape.circle,
+                                            ),
+                                            child: Icon(
+                                              LucideIcons.minus,
+                                              size: 8,
+                                              color: _kWatchlistBadgeMinusGlyph,
+                                            ),
+                                          )
+                                        : Container(
+                                            width: _badgeSize,
+                                            height: _badgeSize,
+                                            alignment: Alignment.center,
+                                            decoration: const BoxDecoration(
+                                              color: _kWatchlistBadgePlusFill,
+                                              shape: BoxShape.circle,
+                                            ),
+                                            child: Icon(
+                                              LucideIcons.plus,
+                                              size: 8,
+                                              color: _kWatchlistBadgePlusGlyph,
+                                            ),
+                                          ),
+                                  ),
+                                ],
                               ),
                             ),
+                            const SizedBox(height: 4),
+                            if (hasCount)
+                              Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  Text(
+                                    strings.get('dramaBottomActionWatchlist'),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    textAlign: TextAlign.center,
+                                    style: GoogleFonts.notoSansKr(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w800,
+                                      color: labelColor,
+                                      height: 1.1,
+                                      letterSpacing: -0.2,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    formatCompactCount(userCount),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    textAlign: TextAlign.center,
+                                    style: GoogleFonts.notoSansKr(
+                                      fontSize: 10.5,
+                                      fontWeight: FontWeight.w600,
+                                      color: labelColor.withValues(alpha: 0.88),
+                                      height: 1.05,
+                                      letterSpacing: -0.15,
+                                    ),
+                                  ),
+                                ],
+                              )
+                            else
+                              Text(
+                                strings.get('dramaBottomActionWatchlist'),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                textAlign: TextAlign.center,
+                                style: GoogleFonts.notoSansKr(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w600,
+                                  color: labelColor,
+                                  height: 1.15,
+                                  letterSpacing: -0.1,
+                                ),
+                              ),
                           ],
                         ),
                       ),
@@ -172,17 +259,14 @@ class _StatsBarSlot extends StatelessWidget {
   final dynamic strings;
   final VoidCallback onTap;
 
-  static final Color _onCard = Colors.white;
-  static final Color _onCardMuted =
-      Colors.white.withValues(alpha: 0.9);
-  static final Color _onCardHint =
-      Colors.white.withValues(alpha: 0.92);
-
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final labelColor = cs.onSurface;
     final hasCount = count > 0;
-    final resolvedIcon =
-        hasCount && iconWhenHasCount != null ? iconWhenHasCount! : icon;
+    final resolvedIcon = hasCount && iconWhenHasCount != null
+        ? iconWhenHasCount!
+        : icon;
     return Material(
       color: backgroundColor,
       borderRadius: BorderRadius.circular(8),
@@ -207,11 +291,7 @@ class _StatsBarSlot extends StatelessWidget {
                       mainAxisAlignment: MainAxisAlignment.center,
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        Icon(
-                          resolvedIcon,
-                          size: 22,
-                          color: _onCard.withValues(alpha: 0.96),
-                        ),
+                        Icon(resolvedIcon, size: 22, color: labelColor),
                         const SizedBox(height: 4),
                         if (hasCount)
                           Column(
@@ -225,8 +305,8 @@ class _StatsBarSlot extends StatelessWidget {
                                 textAlign: TextAlign.center,
                                 style: GoogleFonts.notoSansKr(
                                   fontSize: 12,
-                                  fontWeight: FontWeight.w700,
-                                  color: _onCard,
+                                  fontWeight: FontWeight.w800,
+                                  color: labelColor,
                                   height: 1.1,
                                   letterSpacing: -0.2,
                                 ),
@@ -239,8 +319,8 @@ class _StatsBarSlot extends StatelessWidget {
                                 textAlign: TextAlign.center,
                                 style: GoogleFonts.notoSansKr(
                                   fontSize: 10.5,
-                                  fontWeight: FontWeight.w500,
-                                  color: _onCardMuted,
+                                  fontWeight: FontWeight.w600,
+                                  color: labelColor.withValues(alpha: 0.88),
                                   height: 1.05,
                                   letterSpacing: -0.15,
                                 ),
@@ -255,8 +335,8 @@ class _StatsBarSlot extends StatelessWidget {
                             textAlign: TextAlign.center,
                             style: GoogleFonts.notoSansKr(
                               fontSize: 11.5,
-                              fontWeight: FontWeight.w500,
-                              color: _onCardHint,
+                              fontWeight: FontWeight.w600,
+                              color: labelColor,
                               height: 1.15,
                               letterSpacing: -0.1,
                             ),
@@ -282,8 +362,10 @@ class _StatsBar extends StatelessWidget {
     required this.onReviewsTap,
     required this.onWatchedTap,
     required this.onListsTap,
+    required this.onWatchlistTap,
     required this.reviewCount,
     required this.watcherCount,
+    required this.watchlistUserCount,
   });
 
   final DramaDetail detail;
@@ -291,10 +373,10 @@ class _StatsBar extends StatelessWidget {
   final VoidCallback onReviewsTap;
   final VoidCallback onWatchedTap;
   final VoidCallback onListsTap;
+  final VoidCallback onWatchlistTap;
   final int reviewCount;
   final int watcherCount;
-
-  static const int _listsCount = 0;
+  final int watchlistUserCount;
 
   /// Letterboxd-style stat 타일 — 선명한 채도, 리뷰만 웜 코랄로 슬레이트(워치리스트)와 구분.
   static const Color _kWatchersGreen = Color(0xFF1FA65A);
@@ -306,6 +388,7 @@ class _StatsBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final dramaId = detail.item.id;
     return SizedBox(
       height: _rowHeight,
       child: Row(
@@ -337,21 +420,31 @@ class _StatsBar extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           Expanded(
-            child: _StatsBarSlot(
-              icon: LucideIcons.square_stack,
-              backgroundColor: _kListsBlue,
-              count: _listsCount,
-              labelKey: 'statsBarListsLabel',
-              zeroHintKey: 'statsBarMakeList',
-              strings: strings,
-              onTap: onListsTap,
+            child: ValueListenableBuilder(
+              valueListenable: CustomDramaListService.instance.listsNotifier,
+              builder: (context, lists, _) {
+                final listCount = lists
+                    .where((l) => l.dramaIds.contains(dramaId))
+                    .length;
+                return _StatsBarSlot(
+                  icon: LucideIcons.square_stack,
+                  backgroundColor: _kListsBlue,
+                  count: listCount,
+                  labelKey: 'statsBarListsLabel',
+                  zeroHintKey: 'statsBarMakeList',
+                  strings: strings,
+                  onTap: onListsTap,
+                );
+              },
             ),
           ),
           const SizedBox(width: 8),
           Expanded(
             child: _StatsBarWatchlistButton(
               dramaId: detail.item.id,
+              userCount: watchlistUserCount,
               strings: strings,
+              onTap: onWatchlistTap,
             ),
           ),
         ],
@@ -381,6 +474,10 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
   int? _liveCount;
   List<DramaReview>? _liveReviews;
   int? _liveViews;
+  int _watchlistUserCount = 0;
+  /// feedPostId → (likeCount, commentCount) from posts collection.
+  /// Overrides the potentially-stale likeCount stored in drama_reviews docs.
+  Map<String, ({int likeCount, int commentCount, bool isLiked})> _reviewPostMeta = {};
 
   /// 조회수: 낙관적 +1 즉시 표시 → 백그라운드에서 increment. 8초 타임아웃.
   Future<void> _updateViewCount() async {
@@ -413,31 +510,109 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
     final dramaId = widget.detail.item.id;
     final country = mounted
         ? (CountryScope.maybeOf(context)?.country ??
-            UserProfileService.instance.signupCountryNotifier.value)
+              UserProfileService.instance.signupCountryNotifier.value)
         : UserProfileService.instance.signupCountryNotifier.value;
     try {
+      // Pre-compute feedPost IDs from the already-loaded initial reviews so we
+      // can fire batchGetPostMeta in parallel with getDramaReviews.
+      final initialIds = _reviewPostIds(widget.detail.reviews);
+
       final results = await Future.wait([
-        ReviewService.instance.getDramaRatingStats(dramaId)
-            .timeout(const Duration(seconds: 8), onTimeout: () => (average: 0.0, count: 0)),
+        ReviewService.instance
+            .getDramaRatingStats(dramaId)
+            .timeout(
+              const Duration(seconds: 8),
+              onTimeout: () => (average: 0.0, count: 0),
+            ),
         ReviewService.instance
             .getDramaReviews(dramaId, country: country)
-            .timeout(const Duration(seconds: 8), onTimeout: () => <DramaReview>[]),
+            .timeout(
+              const Duration(seconds: 8),
+              onTimeout: () => <DramaReview>[],
+            ),
+        // Fetch like/comment counts from posts in parallel — completes at the
+        // same time as getDramaReviews so a single setState shows everything.
+        if (initialIds.isNotEmpty)
+          PostService.instance.batchGetPostMeta(initialIds)
+        else
+          Future.value(<String, ({int likeCount, int commentCount, bool isLiked})>{}),
       ]);
       if (mounted) {
         final stats = results[0] as ({double average, int count});
         final reviews = results[1] as List<DramaReview>;
+        final meta = results[2]
+            as Map<String, ({int likeCount, int commentCount, bool isLiked})>;
         setState(() {
           _liveAverage = stats.average;
           _liveCount = stats.count;
           _liveReviews = reviews;
+          if (meta.isNotEmpty) _reviewPostMeta = meta;
         });
+        // If the fresh reviews have IDs not covered by the initial batch,
+        // fetch those too (new reviews posted since the page last loaded).
+        final freshIds = _reviewPostIds(reviews);
+        final uncovered =
+            freshIds.where((id) => !meta.containsKey(id)).toList();
+        if (uncovered.isNotEmpty) _fetchReviewPostMeta(uncovered);
       }
     } catch (_) {}
+  }
+
+  /// Extracts unique feedPostId / id strings for a list of reviews.
+  List<String> _reviewPostIds(List<DramaReview> reviews) {
+    return reviews
+        .map((r) {
+          final fp = r.feedPostId?.trim();
+          if (fp != null && fp.isNotEmpty) return fp;
+          return r.id?.trim() ?? '';
+        })
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList();
+  }
+
+  Future<void> _fetchReviewPostMeta(List<String> ids) async {
+    if (ids.isEmpty) return;
+    try {
+      final meta = await PostService.instance.batchGetPostMeta(ids);
+      if (!mounted || meta.isEmpty) return;
+      setState(() => _reviewPostMeta = {..._reviewPostMeta, ...meta});
+    } catch (_) {}
+  }
+
+  Future<void> _loadWatchlistUserCount() async {
+    final dramaId = widget.detail.item.id;
+    try {
+      final n = await WatchlistService.instance
+          .countUsersIncludingDrama(dramaId)
+          .timeout(const Duration(seconds: 10));
+      if (!mounted || n == null) return;
+      // Firestore count aggregation can lag behind a very recent write.
+      // If the current user has this drama in their watchlist but the server
+      // count seems too low, bump by 1 so the UI is never stale after adding.
+      final userHasIt = WatchlistService.instance.isInWatchlist(dramaId);
+      final corrected = (userHasIt && n < 1) ? 1 : n;
+      setState(() => _watchlistUserCount = corrected);
+    } catch (_) {
+      // 타임아웃·네트워크 오류: 낙관적/이전 숫자 유지 (0으로 덮지 않음)
+    }
   }
 
   @override
   void initState() {
     super.initState();
+    // Optimistic initial value: if the user already has this drama in their
+    // local watchlist cache, show at least 1 before the server count arrives.
+    final dramaId = widget.detail.item.id;
+    if (WatchlistService.instance.isInWatchlist(dramaId)) {
+      _watchlistUserCount = 1;
+    }
+    // Kick off meta fetch immediately with pre-loaded reviews so like/comment
+    // counts are ready before the first frame renders (no blank-zero flash).
+    final initialIds = _reviewPostIds(widget.detail.reviews);
+    if (initialIds.isNotEmpty) {
+      _fetchReviewPostMeta(initialIds);
+    }
     // 첫 프레임 그린 뒤 각 작업을 독립적으로 실행 (순차 await 체인 제거 → ANR 방지)
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -445,6 +620,10 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
       _updateViewCount().catchError((_) {});
       _loadRatingStats().catchError((_) {});
       WatchHistoryService.instance.loadIfNeeded();
+      CustomDramaListService.instance.loadIfNeeded();
+      // 워치리스트 상태를 미리 로드 → 버튼 탭 시 즉시 응답
+      unawaited(WatchlistService.instance.loadIfNeeded());
+      unawaited(_loadWatchlistUserCount());
     });
     if (widget.scrollToRatings) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -459,16 +638,16 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
   }
 
   void _openDramaLists(BuildContext context, DramaDetail detail) {
-    final country = CountryScope.maybeOf(context)?.country ??
+    final country =
+        CountryScope.maybeOf(context)?.country ??
         UserProfileService.instance.signupCountryNotifier.value;
-    final locTitle =
-        DramaListService.instance.getDisplayTitle(detail.item.id, country);
-    final title =
-        locTitle.trim().isNotEmpty ? locTitle : detail.item.title;
-    final poster = DramaListService.instance.getDisplayImageUrl(
-          detail.item.id,
-          country,
-        ) ??
+    final locTitle = DramaListService.instance.getDisplayTitle(
+      detail.item.id,
+      country,
+    );
+    final title = locTitle.trim().isNotEmpty ? locTitle : detail.item.title;
+    final poster =
+        DramaListService.instance.getDisplayImageUrl(detail.item.id, country) ??
         detail.item.imageUrl;
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
@@ -482,31 +661,36 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
   }
 
   void _openDramaReviewsList(BuildContext context, DramaDetail detail) {
-    final country = CountryScope.maybeOf(context)?.country ??
+    final country =
+        CountryScope.maybeOf(context)?.country ??
         UserProfileService.instance.signupCountryNotifier.value;
-    final locTitle =
-        DramaListService.instance.getDisplayTitle(detail.item.id, country);
-    final title =
-        locTitle.trim().isNotEmpty ? locTitle : detail.item.title;
-    final reviews = _liveReviews ?? detail.reviews;
+    final locTitle = DramaListService.instance.getDisplayTitle(
+      detail.item.id,
+      country,
+    );
+    final title = locTitle.trim().isNotEmpty ? locTitle : detail.item.title;
+    final reviews = _visibleRatingsAndReviews(_liveReviews ?? detail.reviews);
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (_) => DramaReviewsListScreen(
           dramaId: detail.item.id,
           dramaTitle: title,
           initialReviews: reviews,
+          initialPostMeta: _reviewPostMeta,
         ),
       ),
     );
   }
 
   void _openDramaWatchers(BuildContext context, DramaDetail detail) {
-    final country = CountryScope.maybeOf(context)?.country ??
+    final country =
+        CountryScope.maybeOf(context)?.country ??
         UserProfileService.instance.signupCountryNotifier.value;
-    final locTitle =
-        DramaListService.instance.getDisplayTitle(detail.item.id, country);
-    final title =
-        locTitle.trim().isNotEmpty ? locTitle : detail.item.title;
+    final locTitle = DramaListService.instance.getDisplayTitle(
+      detail.item.id,
+      country,
+    );
+    final title = locTitle.trim().isNotEmpty ? locTitle : detail.item.title;
     final reviews = _liveReviews ?? detail.reviews;
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
@@ -520,16 +704,71 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
     );
   }
 
+  List<DramaReview> _visibleRatingsAndReviews(List<DramaReview> reviews) {
+    return reviews
+        .where((r) => r.rating > 0 || r.comment.trim().isNotEmpty)
+        .toList();
+  }
+
+  Future<void> _toggleWatchlistFromDetail(
+    BuildContext context,
+    DramaDetail detail,
+  ) async {
+    if (!AuthService.instance.isLoggedIn.value) {
+      final ok = await Navigator.push<bool>(
+        context,
+        MaterialPageRoute<bool>(builder: (_) => const LoginPage()),
+      );
+      if (!context.mounted) return;
+      if (ok != true || !AuthService.instance.isLoggedIn.value) return;
+    }
+
+    final country = CountryScope.maybeOf(context)?.country ??
+        UserProfileService.instance.signupCountryNotifier.value;
+    final id = detail.item.id;
+    final currentlyInList = WatchlistService.instance.isInWatchlist(id);
+
+    // Optimistic UI: 즉시 카운트 반영 (Firestore 응답 기다리지 않음)
+    setState(() {
+      _watchlistUserCount = currentlyInList
+          ? (_watchlistUserCount > 0 ? _watchlistUserCount - 1 : 0)
+          : _watchlistUserCount + 1;
+    });
+
+    // Firestore 쓰기는 백그라운드 (서비스 내부도 optimistic)
+    if (currentlyInList) {
+      unawaited(WatchlistService.instance.remove(id));
+    } else {
+      unawaited(WatchlistService.instance.add(id, country));
+    }
+
+    // 0.8초 뒤 서버 실제 집계로 카운트 보정
+    Future.delayed(const Duration(milliseconds: 800), () {
+      if (mounted) unawaited(_loadWatchlistUserCount());
+    });
+  }
+
   Future<void> _handleWriteReviewTap(BuildContext context, dynamic s) async {
     final dramaId = widget.detail.item.id;
     final dramaTitle = widget.detail.item.title;
     if (AuthService.instance.isLoggedIn.value) {
-      await WriteReviewSheet.show(context, dramaId: dramaId, dramaTitle: dramaTitle);
+      await WriteReviewSheet.show(
+        context,
+        dramaId: dramaId,
+        dramaTitle: dramaTitle,
+      );
       if (mounted) _loadRatingStats();
     } else {
-      final result = await Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginPage()));
+      final result = await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginPage()),
+      );
       if (result == true && mounted) {
-        await WriteReviewSheet.show(context, dramaId: dramaId, dramaTitle: dramaTitle);
+        await WriteReviewSheet.show(
+          context,
+          dramaId: dramaId,
+          dramaTitle: dramaTitle,
+        );
         if (mounted) _loadRatingStats();
       }
     }
@@ -539,6 +778,9 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
   Widget build(BuildContext context) {
     final s = CountryScope.of(context).strings;
     final detail = widget.detail;
+    final visibleReviews = _visibleRatingsAndReviews(
+      _liveReviews ?? detail.reviews,
+    );
     final theme = Theme.of(context);
     final headerBg = listsStyleSubpageHeaderBackground(theme);
     return PopScope(
@@ -552,88 +794,97 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
       child: AnnotatedRegion<SystemUiOverlayStyle>(
         value: listsStyleSubpageSystemOverlay(theme, headerBg),
         child: Scaffold(
-        backgroundColor: theme.scaffoldBackgroundColor,
-        body: CustomScrollView(
-        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-        slivers: [
-          // 상단: 포스터 + 제목 (조회수는 목록 갱신용으로만 서버 반영, UI 비표시)
-          SliverToBoxAdapter(
-            child: _HeaderSection(
-              detail: widget.detail,
-              onBack: () {
-                popListsStyleSubpage(
-                  context,
-                  _buildViewCountResult(),
-                );
-              },
-            ),
-          ),
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _StatsBar(
-                    detail: detail,
-                    strings: s,
-                    onReviewsTap: () => _openDramaReviewsList(context, detail),
-                    onWatchedTap: () => _openDramaWatchers(context, detail),
-                    onListsTap: () => _openDramaLists(context, detail),
-                    reviewCount: (_liveReviews ?? detail.reviews).length,
-                    watcherCount: _liveCount ?? detail.ratingCount,
-                  ),
-                  const SizedBox(height: 24),
-                  // 줄거리 (가입 국가별 언어, 위에 장르 태그 pill)
-                  _SynopsisSection(detail: detail, strings: s),
-                  const SizedBox(height: 24),
-                  // 회차 (구간 탭 + 에피소드 버튼)
-                  _EpisodesSection(dramaId: detail.item.id, episodes: detail.episodes, strings: s),
-                  const SizedBox(height: 24),
-                  if (detail.cast.any((n) => n.trim().isNotEmpty)) ...[
-                    _CastSection(
-                      castNames: detail.cast
-                          .map((n) => n.trim())
-                          .where((n) => n.isNotEmpty)
-                          .toList(),
-                      strings: s,
-                    ),
-                    const SizedBox(height: 28),
-                  ],
-                  // 평점 & 리뷰
-                  KeyedSubtree(
-                    key: _ratingsKey,
-                    child: _RatingsAndReviewsSection(
-                    dramaId: detail.item.id,
-                    dramaTitle: detail.item.title,
-                    averageRating: _liveAverage ?? detail.averageRating,
-                    ratingCount: _liveCount ?? detail.ratingCount,
-                    reviews: _liveReviews ?? detail.reviews,
-                    strings: s,
-                    onWriteReviewTap: () => _handleWriteReviewTap(context, s),
-                    onReviewsListTap: () => _openDramaReviewsList(context, detail),
-                    onReviewsChanged: () {
-                      if (mounted) _loadRatingStats();
-                    },
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  // 비슷한 작품
-                  _SimilarSection(
-                    dramaId: detail.item.id,
-                    genreDisplay: detail.genre,
-                    country: CountryScope.maybeOf(context)?.country
-                        ?? CountryService.instance.countryNotifier.value,
-                    preloadedSimilar: detail.similar,
-                    strings: s,
-                  ),
-                  const SizedBox(height: 32),
-                ],
+          backgroundColor: theme.scaffoldBackgroundColor,
+          body: CustomScrollView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            slivers: [
+              // 상단: 포스터 + 제목 (조회수는 목록 갱신용으로만 서버 반영, UI 비표시)
+              SliverToBoxAdapter(
+                child: _HeaderSection(
+                  detail: widget.detail,
+                  onBack: () {
+                    popListsStyleSubpage(context, _buildViewCountResult());
+                  },
+                ),
               ),
-            ),
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 32),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _StatsBar(
+                        detail: detail,
+                        strings: s,
+                        onReviewsTap: () =>
+                            _openDramaReviewsList(context, detail),
+                        onWatchedTap: () => _openDramaWatchers(context, detail),
+                        onListsTap: () => _openDramaLists(context, detail),
+                        onWatchlistTap: () =>
+                            unawaited(_toggleWatchlistFromDetail(context, detail)),
+                        reviewCount: visibleReviews.length,
+                        watcherCount: (_liveReviews ?? detail.reviews).length,
+                        watchlistUserCount: _watchlistUserCount,
+                      ),
+                      const SizedBox(height: 32),
+                      // 줄거리 (가입 국가별 언어, 위에 장르 태그 pill)
+                      _SynopsisSection(detail: detail, strings: s),
+                      const SizedBox(height: 32),
+                      // 회차 (구간 탭 + 에피소드 버튼)
+                      _EpisodesSection(
+                        dramaId: detail.item.id,
+                        episodes: detail.episodes,
+                        strings: s,
+                      ),
+                      const SizedBox(height: 32),
+                      if (detail.cast.any((n) => n.trim().isNotEmpty)) ...[
+                        _CastSection(
+                          castNames: detail.cast
+                              .map((n) => n.trim())
+                              .where((n) => n.isNotEmpty)
+                              .toList(),
+                          strings: s,
+                        ),
+                        const SizedBox(height: 32),
+                      ],
+                      // 평점 & 리뷰
+                      KeyedSubtree(
+                        key: _ratingsKey,
+                        child: _RatingsAndReviewsSection(
+                          dramaId: detail.item.id,
+                          dramaTitle: detail.item.title,
+                          averageRating: _liveAverage ?? detail.averageRating,
+                          ratingCount: _liveCount ?? detail.ratingCount,
+                          reviews: visibleReviews,
+                          postMeta: _reviewPostMeta,
+                          strings: s,
+                          onWriteReviewTap: () =>
+                              _handleWriteReviewTap(context, s),
+                          onReviewsListTap: () =>
+                              _openDramaReviewsList(context, detail),
+                          onReviewsChanged: () {
+                            if (mounted) _loadRatingStats();
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 32),
+                      // 비슷한 작품
+                      _SimilarSection(
+                        dramaId: detail.item.id,
+                        genreDisplay: detail.genre,
+                        country:
+                            CountryScope.maybeOf(context)?.country ??
+                            CountryService.instance.countryNotifier.value,
+                        preloadedSimilar: detail.similar,
+                        strings: s,
+                      ),
+                      const SizedBox(height: 32),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
         ),
       ),
     );
@@ -684,7 +935,11 @@ class _FullScreenPosterPage extends StatelessWidget {
                         fit: BoxFit.contain,
                         width: double.infinity,
                         height: double.infinity,
-                        errorBuilder: (_, __, ___) => Icon(LucideIcons.tv, size: 80, color: cs.onSurfaceVariant),
+                        errorBuilder: (_, __, ___) => Icon(
+                          LucideIcons.tv,
+                          size: 80,
+                          color: cs.onSurfaceVariant,
+                        ),
                       ),
               ),
             ),
@@ -695,9 +950,7 @@ class _FullScreenPosterPage extends StatelessWidget {
               child: IconButton(
                 icon: Icon(Icons.close, size: 28, color: Colors.white),
                 onPressed: () => Navigator.of(context).pop(),
-                style: IconButton.styleFrom(
-                  backgroundColor: Colors.black26,
-                ),
+                style: IconButton.styleFrom(backgroundColor: Colors.black26),
               ),
             ),
           ),
@@ -712,6 +965,7 @@ class _HeaderSection extends StatelessWidget {
   const _HeaderSection({required this.detail, this.onBack});
 
   final DramaDetail detail;
+
   /// null이면 기본 Navigator.pop(context). 있으면 호출 (pop 시 조회수 결과 전달용).
   final VoidCallback? onBack;
 
@@ -719,58 +973,21 @@ class _HeaderSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    final isDark = theme.brightness == Brightness.dark;
     final surfaceColor = cs.surface;
-    final surfaceDim = isDark ? cs.surface.withOpacity(0.6) : cs.surface.withOpacity(0.75);
-    final trailingIconColor = cs.onSurfaceVariant.withValues(alpha: 0.78);
-
     // 설정 언어(앱 locale) 기준으로 제목·이미지 표시
-    final country = CountryScope.maybeOf(context)?.country
-        ?? UserProfileService.instance.signupCountryNotifier.value;
+    final country =
+        CountryScope.maybeOf(context)?.country ??
+        UserProfileService.instance.signupCountryNotifier.value;
     final displayTitle = () {
-      final t = DramaListService.instance.getDisplayTitle(detail.item.id, country);
+      final t = DramaListService.instance.getDisplayTitle(
+        detail.item.id,
+        country,
+      );
       return t.isNotEmpty ? t : detail.item.title;
     }();
-    final displayImageUrl = DramaListService.instance.getDisplayImageUrl(detail.item.id, country)
-        ?? detail.item.imageUrl;
-
-    Future<void> onShareTap() async {
-      final my = ReviewService.instance.getByDramaId(detail.item.id);
-      if (my != null) {
-        final country = CountryScope.maybeOf(context)?.country
-            ?? UserProfileService.instance.signupCountryNotifier.value;
-        final locTitle = DramaListService.instance.getDisplayTitle(detail.item.id, country);
-        final shareTitle = locTitle.trim().isNotEmpty ? locTitle : detail.item.title;
-        final shareImageUrl =
-            DramaListService.instance.getDisplayImageUrl(detail.item.id, country) ?? detail.item.imageUrl;
-        String? posterUrl;
-        String? posterAsset;
-        if (shareImageUrl != null && shareImageUrl.isNotEmpty) {
-          if (shareImageUrl.startsWith('http')) {
-            posterUrl = shareImageUrl;
-          } else {
-            posterAsset = shareImageUrl;
-          }
-        }
-        final nickRaw = UserProfileService.instance.nicknameNotifier.value?.trim();
-        final nick = (nickRaw != null && nickRaw.isNotEmpty)
-            ? nickRaw
-            : (my.authorName?.trim().isNotEmpty == true ? my.authorName! : 'DramaFeed');
-        await ReviewShareImageHelper.captureAndShare(
-          context,
-          ReviewShareCardData(
-            dramaTitle: shareTitle,
-            rating: my.rating,
-            reviewPreview: my.comment,
-            userNickname: nick,
-            posterUrl: posterUrl,
-            posterAsset: posterAsset,
-          ),
-        );
-      } else {
-        await ShareSheet.show(context, title: detail.item.title, type: 'drama');
-      }
-    }
+    final displayImageUrl =
+        DramaListService.instance.getDisplayImageUrl(detail.item.id, country) ??
+        detail.item.imageUrl;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -785,72 +1002,26 @@ class _HeaderSection extends StatelessWidget {
               popListsStyleSubpage(context);
             }
           },
-          trailing: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              borderRadius: BorderRadius.circular(8),
-              onTap: onShareTap,
-              child: Padding(
-                padding: const EdgeInsets.all(6),
-                child: Icon(
-                  LucideIcons.share_2,
-                  size: 18,
-                  color: trailingIconColor,
-                ),
-              ),
-            ),
-          ),
         ),
         Stack(
           children: [
-            // 줄거리 위: 드라마 사진 옅게 배경
-            Positioned(
-              left: 0,
-              right: 0,
-              top: 0,
-              height: 140,
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      cs.outline.withOpacity(isDark ? 0.2 : 0.18),
-                      cs.outline.withOpacity(isDark ? 0.1 : 0.08),
-                      surfaceColor,
-                    ],
-                  ),
-                ),
-                child: Center(
-                  child: Icon(
-                    LucideIcons.tv,
-                    size: 120,
-                    color: cs.outline.withOpacity(0.2),
-                  ),
-                ),
-              ),
-            ),
             Container(
               width: double.infinity,
               padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [surfaceDim, surfaceColor],
-                  stops: const [0.0, 0.5],
-                ),
-              ),
+              decoration: BoxDecoration(color: surfaceColor),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   // 포스터 (탭 시 크게 보기)
                   GestureDetector(
                     onTap: () {
-                      if (displayImageUrl != null && displayImageUrl.isNotEmpty) {
+                      if (displayImageUrl != null &&
+                          displayImageUrl.isNotEmpty) {
                         Navigator.of(context).push(
                           MaterialPageRoute<void>(
-                            builder: (ctx) => _FullScreenPosterPage(imageUrl: displayImageUrl),
+                            builder: (ctx) => _FullScreenPosterPage(
+                              imageUrl: displayImageUrl,
+                            ),
                           ),
                         );
                       }
@@ -860,21 +1031,24 @@ class _HeaderSection extends StatelessWidget {
                       child: SizedBox(
                         width: 80,
                         height: 80 * 1.3,
-                        child: displayImageUrl != null && displayImageUrl.isNotEmpty
+                        child:
+                            displayImageUrl != null &&
+                                displayImageUrl.isNotEmpty
                             ? (displayImageUrl.startsWith('http')
-                                ? OptimizedNetworkImage(
-                                    imageUrl: displayImageUrl,
-                                    fit: BoxFit.cover,
-                                    width: 80,
-                                    height: 80 * 1.3,
-                                  )
-                                : Image.asset(
-                                    displayImageUrl,
-                                    fit: BoxFit.cover,
-                                    width: 80,
-                                    height: 80 * 1.3,
-                                    errorBuilder: (_, __, ___) => _posterPlaceholder(context),
-                                  ))
+                                  ? OptimizedNetworkImage(
+                                      imageUrl: displayImageUrl,
+                                      fit: BoxFit.cover,
+                                      width: 80,
+                                      height: 80 * 1.3,
+                                    )
+                                  : Image.asset(
+                                      displayImageUrl,
+                                      fit: BoxFit.cover,
+                                      width: 80,
+                                      height: 80 * 1.3,
+                                      errorBuilder: (_, __, ___) =>
+                                          _posterPlaceholder(context),
+                                    ))
                             : _posterPlaceholder(context),
                       ),
                     ),
@@ -940,26 +1114,31 @@ class _SynopsisSectionState extends State<_SynopsisSection> {
       builder: (context, countryCode, _) {
         // 설정 언어 기준으로 장르·줄거리 표시
         final country = CountryScope.maybeOf(context)?.country ?? countryCode;
-        final genre = DramaListService.instance.getDisplaySubtitle(detail.item.id, country);
+        final genre = DramaListService.instance.getDisplaySubtitle(
+          detail.item.id,
+          country,
+        );
         final displayGenre = genre.isNotEmpty ? genre : detail.genre;
-        var genreTags = displayGenre.split(RegExp(r'[·,]')).map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+        var genreTags = displayGenre
+            .split(RegExp(r'[·,]'))
+            .map((e) => e.trim())
+            .where((e) => e.isNotEmpty)
+            .toList();
         if (genreTags.isEmpty) genreTags = [displayGenre];
 
-        final synopsis = DramaListService.instance.getDisplaySynopsis(detail.item.id, country);
-        final displaySynopsis = synopsis.isNotEmpty ? synopsis : detail.synopsis;
+        final synopsis = DramaListService.instance.getDisplaySynopsis(
+          detail.item.id,
+          country,
+        );
+        final displaySynopsis = synopsis.isNotEmpty
+            ? synopsis
+            : detail.synopsis;
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              strings.get('synopsis'),
-              style: GoogleFonts.notoSansKr(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-                color: cs.onSurface,
-              ),
-            ),
-            const SizedBox(height: 6),
+            _sectionLabel(strings.get('synopsis').toUpperCase(), cs),
+            const SizedBox(height: 14),
             SizedBox(
               height: 24,
               child: ListView.separated(
@@ -977,7 +1156,10 @@ class _SynopsisSectionState extends State<_SynopsisSection> {
                       );
                     },
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 3,
+                      ),
                       decoration: BoxDecoration(
                         color: cs.surfaceContainerHighest,
                         borderRadius: BorderRadius.circular(3),
@@ -1008,7 +1190,11 @@ class _SynopsisSectionState extends State<_SynopsisSection> {
                               alignment: Alignment.center,
                               child: Padding(
                                 padding: const EdgeInsets.only(top: 0.5),
-                                child: Icon(LucideIcons.chevron_right, size: 14, color: cs.onSurfaceVariant),
+                                child: Icon(
+                                  LucideIcons.chevron_right,
+                                  size: 14,
+                                  color: cs.onSurfaceVariant,
+                                ),
                               ),
                             ),
                           ),
@@ -1028,12 +1214,14 @@ class _SynopsisSectionState extends State<_SynopsisSection> {
               child: Text(
                 displaySynopsis,
                 style: GoogleFonts.notoSansKr(
-                  fontSize: 14,
+                  fontSize: 12,
                   color: cs.onSurfaceVariant,
                   height: 1.6,
                 ),
                 maxLines: _synopsisExpanded ? null : 3,
-                overflow: _synopsisExpanded ? TextOverflow.visible : TextOverflow.ellipsis,
+                overflow: _synopsisExpanded
+                    ? TextOverflow.visible
+                    : TextOverflow.ellipsis,
               ),
             ),
           ],
@@ -1125,6 +1313,7 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
   int _rangeIndex = 0;
   int? _selectedEpisodeNumber;
   int? _pendingEpisodeNumber;
+
   /// 에피소드 구간 탭·가로 카드 목록 접기 (기본 펼침)
   bool _episodesExpanded = true;
 
@@ -1147,18 +1336,14 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            strings.get('episodes'),
-            style: GoogleFonts.notoSansKr(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: cs.onSurface,
-            ),
-          ),
+          _sectionLabel(strings.get('episodes').toUpperCase(), cs),
           const SizedBox(height: 12),
           Text(
             '회차 정보가 없습니다.',
-            style: GoogleFonts.notoSansKr(fontSize: 14, color: cs.onSurfaceVariant),
+            style: GoogleFonts.notoSansKr(
+              fontSize: 14,
+              color: cs.onSurfaceVariant,
+            ),
           ),
         ],
       );
@@ -1173,7 +1358,9 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
     }
     if (ranges.isEmpty) ranges.add((start: 1, end: episodes.length));
 
-    final selectedRange = _rangeIndex < ranges.length ? ranges[_rangeIndex] : ranges.first;
+    final selectedRange = _rangeIndex < ranges.length
+        ? ranges[_rangeIndex]
+        : ranges.first;
     final rangeEpisodes = episodes.sublist(
       selectedRange.start - 1,
       selectedRange.end.clamp(0, episodes.length),
@@ -1187,8 +1374,9 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
           children: [
             Expanded(
               child: Tooltip(
-                message:
-                    _episodesExpanded ? strings.get('collapse') : strings.get('expand'),
+                message: _episodesExpanded
+                    ? strings.get('collapse')
+                    : strings.get('expand'),
                 child: Material(
                   color: Colors.transparent,
                   child: InkWell(
@@ -1205,21 +1393,24 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
                     splashColor: cs.primary.withValues(alpha: 0.14),
                     highlightColor: cs.primary.withValues(alpha: 0.07),
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 0),
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 6,
+                        horizontal: 0,
+                      ),
                       child: Row(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          Flexible(
+                          Transform.scale(
+                            scaleX: 1.1,
+                            alignment: Alignment.centerLeft,
                             child: Text(
-                              strings.get('episodes'),
-                              style: GoogleFonts.notoSansKr(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
-                                color: cs.onSurface,
-                              ),
+                              strings.get('episodes').toUpperCase(),
+                              style: _detailSectionCapsLabel(cs),
+                              maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                          const SizedBox(width: 4),
+                          const SizedBox(width: 12),
                           Icon(
                             _episodesExpanded
                                 ? LucideIcons.chevron_up
@@ -1242,29 +1433,38 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
                 borderRadius: BorderRadius.circular(8),
                 splashColor: cs.primary.withValues(alpha: 0.14),
                 highlightColor: cs.primary.withValues(alpha: 0.07),
-                child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        strings
-                            .get('totalEpisodes')
-                            .replaceAll('%d', '${episodes.length}'),
-                        style: GoogleFonts.notoSansKr(
-                          fontSize: 13,
-                          color: cs.onSurfaceVariant,
-                        ),
+                child: Builder(
+                  builder: (context) {
+                    final totalEpsColor = cs.onSurfaceVariant.withValues(
+                      alpha: 0.72,
+                    );
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 6,
                       ),
-                      const SizedBox(width: 2),
-                      Icon(
-                        LucideIcons.chevron_right,
-                        size: _headerChevronSize,
-                        color: cs.onSurfaceVariant,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            strings
+                                .get('totalEpisodes')
+                                .replaceAll('%d', '${episodes.length}'),
+                            style: GoogleFonts.notoSansKr(
+                              fontSize: 12,
+                              color: totalEpsColor,
+                            ),
+                          ),
+                          const SizedBox(width: 2),
+                          Icon(
+                            LucideIcons.chevron_right,
+                            size: _headerChevronSize,
+                            color: totalEpsColor,
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
+                    );
+                  },
                 ),
               ),
             ),
@@ -1292,9 +1492,13 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
                               child: Text(
                                 '${r.start}-${r.end}',
                                 style: GoogleFonts.notoSansKr(
-                                  fontSize: 14,
-                                  fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                                  color: isSelected ? cs.onSurface : cs.onSurfaceVariant,
+                                  fontSize: 12,
+                                  fontWeight: isSelected
+                                      ? FontWeight.w700
+                                      : FontWeight.w500,
+                                  color: isSelected
+                                      ? cs.onSurface
+                                      : cs.onSurfaceVariant,
                                 ),
                               ),
                             ),
@@ -1304,51 +1508,69 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
                     if (ranges.length > 1) const SizedBox(height: 12),
                     ListenableBuilder(
                       listenable: Listenable.merge([
-                        EpisodeRatingService.instance.getAverageNotifierForDrama(widget.dramaId),
-                        EpisodeRatingService.instance.getCountNotifierForDrama(widget.dramaId),
+                        EpisodeRatingService.instance
+                            .getAverageNotifierForDrama(widget.dramaId),
+                        EpisodeRatingService.instance.getCountNotifierForDrama(
+                          widget.dramaId,
+                        ),
                       ]),
                       builder: (context, _) {
-                        final averageRatings =
-                            EpisodeRatingService.instance.getAverageNotifierForDrama(widget.dramaId).value;
-                        final countMap =
-                            EpisodeRatingService.instance.getCountNotifierForDrama(widget.dramaId).value;
+                        final averageRatings = EpisodeRatingService.instance
+                            .getAverageNotifierForDrama(widget.dramaId)
+                            .value;
+                        final countMap = EpisodeRatingService.instance
+                            .getCountNotifierForDrama(widget.dramaId)
+                            .value;
                         return SizedBox(
                           height: 56,
                           child: ListView.separated(
                             scrollDirection: Axis.horizontal,
                             itemCount: rangeEpisodes.length,
-                            separatorBuilder: (_, __) => const SizedBox(width: 4),
+                            separatorBuilder: (_, __) =>
+                                const SizedBox(width: 4),
                             itemBuilder: (context, i) {
                               final ep = rangeEpisodes[i];
                               final avg = averageRatings[ep.number] ?? 0.0;
                               final count = countMap[ep.number] ?? 0;
                               final hasRating = avg > 0;
-                              final myRating =
-                                  EpisodeRatingService.instance.getMyRating(widget.dramaId, ep.number);
+                              final myRating = EpisodeRatingService.instance
+                                  .getMyRating(widget.dramaId, ep.number);
                               return GestureDetector(
                                 onTap: () {
                                   FocusManager.instance.primaryFocus?.unfocus();
                                   if (_selectedEpisodeNumber == ep.number) {
-                                    setState(() => _selectedEpisodeNumber = null);
+                                    setState(
+                                      () => _selectedEpisodeNumber = null,
+                                    );
                                   } else if (_selectedEpisodeNumber != null) {
                                     setState(() {
                                       _selectedEpisodeNumber = null;
                                       _pendingEpisodeNumber = ep.number;
                                     });
-                                    WidgetsBinding.instance.addPostFrameCallback((_) {
-                                      if (!mounted) return;
-                                      final num = _pendingEpisodeNumber;
-                                      setState(() {
-                                        _selectedEpisodeNumber = num;
-                                        _pendingEpisodeNumber = null;
-                                      });
-                                      if (num != null) {
-                                        EpisodeReviewService.instance.loadReviews(widget.dramaId, num);
-                                      }
-                                    });
+                                    WidgetsBinding.instance
+                                        .addPostFrameCallback((_) {
+                                          if (!mounted) return;
+                                          final num = _pendingEpisodeNumber;
+                                          setState(() {
+                                            _selectedEpisodeNumber = num;
+                                            _pendingEpisodeNumber = null;
+                                          });
+                                          if (num != null) {
+                                            EpisodeReviewService.instance
+                                                .loadReviews(
+                                                  widget.dramaId,
+                                                  num,
+                                                );
+                                          }
+                                        });
                                   } else {
-                                    setState(() => _selectedEpisodeNumber = ep.number);
-                                    EpisodeReviewService.instance.loadReviews(widget.dramaId, ep.number);
+                                    setState(
+                                      () => _selectedEpisodeNumber = ep.number,
+                                    );
+                                    EpisodeReviewService.instance.loadReviews(
+                                      widget.dramaId,
+                                      ep.number,
+                                    );
                                   }
                                 },
                                 child: Container(
@@ -1358,13 +1580,18 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
                                   decoration: BoxDecoration(
                                     color: cs.surfaceContainerHighest,
                                     borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: cs.outline.withOpacity(0.4), width: 1),
+                                    border: Border.all(
+                                      color: cs.outline.withOpacity(0.4),
+                                      width: 1,
+                                    ),
                                   ),
                                   child: Column(
                                     mainAxisAlignment: MainAxisAlignment.center,
                                     children: [
                                       Text(
-                                        strings.get('episodeLabel').replaceAll('%d', '${ep.number}'),
+                                        strings
+                                            .get('episodeLabel')
+                                            .replaceAll('%d', '${ep.number}'),
                                         style: GoogleFonts.notoSansKr(
                                           fontSize: 13,
                                           fontWeight: FontWeight.w600,
@@ -1374,28 +1601,41 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
                                       const SizedBox(height: 2),
                                       Row(
                                         mainAxisSize: MainAxisSize.min,
-                                        mainAxisAlignment: MainAxisAlignment.center,
-                                        crossAxisAlignment: CrossAxisAlignment.center,
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.center,
                                         children: [
                                           Transform.translate(
                                             offset: const Offset(0, 1.5),
                                             child: Icon(
                                               Icons.star_rounded,
                                               size: 12,
-                                              color: hasRating ? AppColors.ratingStar : episodeNoRatingColor(context),
+                                              color: hasRating
+                                                  ? AppColors.ratingStar
+                                                  : episodeNoRatingColor(
+                                                      context,
+                                                    ),
                                             ),
                                           ),
                                           SizedBox(width: 12 * 0.25),
                                           Text(
-                                            hasRating ? avg.toStringAsFixed(1) : '0',
+                                            hasRating
+                                                ? avg.toStringAsFixed(1)
+                                                : '0',
                                             style: GoogleFonts.notoSansKr(
                                               fontSize: 12,
                                               fontWeight: FontWeight.w600,
                                               color: hasRating
-                                                  ? (Theme.of(context).brightness == Brightness.dark
-                                                      ? Colors.white
-                                                      : cs.onSurface)
-                                                  : episodeNoRatingColor(context),
+                                                  ? (Theme.of(
+                                                              context,
+                                                            ).brightness ==
+                                                            Brightness.dark
+                                                        ? Colors.white
+                                                        : cs.onSurface)
+                                                  : episodeNoRatingColor(
+                                                      context,
+                                                    ),
                                             ),
                                           ),
                                         ],
@@ -1409,26 +1649,16 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
                         );
                       },
                     ),
-                    AnimatedSize(
-                      duration: _pendingEpisodeNumber != null ? Duration.zero : const Duration(milliseconds: 280),
-                      curve: Curves.easeInOut,
-                      alignment: Alignment.topCenter,
-                      child: _selectedEpisodeNumber != null
-                          ? Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const SizedBox(height: 16),
-                                EpisodeReviewPanel(
-                                  dramaId: widget.dramaId,
-                                  episodeNumber: _selectedEpisodeNumber!,
-                                  onClose: () => setState(() => _selectedEpisodeNumber = null),
-                                  strings: widget.strings,
-                                ),
-                              ],
-                            )
-                          : const SizedBox.shrink(),
-                    ),
+                    if (_selectedEpisodeNumber != null) ...[
+                      const SizedBox(height: 16),
+                      EpisodeReviewPanel(
+                        dramaId: widget.dramaId,
+                        episodeNumber: _selectedEpisodeNumber!,
+                        onClose: () =>
+                            setState(() => _selectedEpisodeNumber = null),
+                        strings: widget.strings,
+                      ),
+                    ],
                   ],
                 )
               : const SizedBox.shrink(),
@@ -1437,7 +1667,11 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
     );
   }
 
-  void _showEpisodesBottomSheet(BuildContext context, List<DramaEpisode> episodes, dynamic strings) {
+  void _showEpisodesBottomSheet(
+    BuildContext context,
+    List<DramaEpisode> episodes,
+    dynamic strings,
+  ) {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -1508,7 +1742,9 @@ class _EpisodesBottomSheetState extends State<_EpisodesBottomSheet> {
       if (start < episodes.length) ranges.add((start: start + 1, end: end));
     }
     if (ranges.isEmpty) ranges.add((start: 1, end: episodes.length));
-    final selectedRange = _rangeIndex < ranges.length ? ranges[_rangeIndex] : ranges.first;
+    final selectedRange = _rangeIndex < ranges.length
+        ? ranges[_rangeIndex]
+        : ranges.first;
     final rangeEpisodes = episodes.sublist(
       selectedRange.start - 1,
       selectedRange.end.clamp(0, episodes.length),
@@ -1519,7 +1755,9 @@ class _EpisodesBottomSheetState extends State<_EpisodesBottomSheet> {
         color: theme.scaffoldBackgroundColor,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.7),
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.7,
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1537,7 +1775,11 @@ class _EpisodesBottomSheetState extends State<_EpisodesBottomSheet> {
                   ),
                 ),
                 IconButton(
-                  icon: Icon(LucideIcons.x, size: 22, color: cs.onSurfaceVariant),
+                  icon: Icon(
+                    LucideIcons.x,
+                    size: 22,
+                    color: cs.onSurfaceVariant,
+                  ),
                   onPressed: () => Navigator.pop(context),
                 ),
               ],
@@ -1555,9 +1797,14 @@ class _EpisodesBottomSheetState extends State<_EpisodesBottomSheet> {
                     child: GestureDetector(
                       onTap: () => setState(() => _rangeIndex = i),
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 8,
+                        ),
                         decoration: BoxDecoration(
-                          color: isSelected ? cs.primary : cs.surfaceContainerHighest,
+                          color: isSelected
+                              ? cs.primary
+                              : cs.surfaceContainerHighest,
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
@@ -1565,7 +1812,9 @@ class _EpisodesBottomSheetState extends State<_EpisodesBottomSheet> {
                           style: GoogleFonts.notoSansKr(
                             fontSize: 13,
                             fontWeight: FontWeight.w600,
-                            color: isSelected ? cs.onPrimary : cs.onSurfaceVariant,
+                            color: isSelected
+                                ? cs.onPrimary
+                                : cs.onSurfaceVariant,
                           ),
                         ),
                       ),
@@ -1579,32 +1828,47 @@ class _EpisodesBottomSheetState extends State<_EpisodesBottomSheet> {
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
               child: ListenableBuilder(
                 listenable: Listenable.merge([
-                  EpisodeRatingService.instance.getAverageNotifierForDrama(widget.dramaId),
-                  EpisodeRatingService.instance.getCountNotifierForDrama(widget.dramaId),
+                  EpisodeRatingService.instance.getAverageNotifierForDrama(
+                    widget.dramaId,
+                  ),
+                  EpisodeRatingService.instance.getCountNotifierForDrama(
+                    widget.dramaId,
+                  ),
                 ]),
                 builder: (context, _) {
-                  final averageRatings = EpisodeRatingService.instance.getAverageNotifierForDrama(widget.dramaId).value;
-                  final countMap = EpisodeRatingService.instance.getCountNotifierForDrama(widget.dramaId).value;
+                  final averageRatings = EpisodeRatingService.instance
+                      .getAverageNotifierForDrama(widget.dramaId)
+                      .value;
+                  final countMap = EpisodeRatingService.instance
+                      .getCountNotifierForDrama(widget.dramaId)
+                      .value;
                   return GridView.builder(
-                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 5,
-                      childAspectRatio: 1,
-                      crossAxisSpacing: 10,
-                      mainAxisSpacing: 10,
-                    ),
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 5,
+                          childAspectRatio: 1,
+                          crossAxisSpacing: 10,
+                          mainAxisSpacing: 10,
+                        ),
                     itemCount: rangeEpisodes.length,
                     itemBuilder: (context, i) {
                       final ep = rangeEpisodes[i];
                       final avg = averageRatings[ep.number] ?? 0.0;
                       final count = countMap[ep.number] ?? 0;
                       final hasRating = avg > 0;
-                      final myRating = EpisodeRatingService.instance.getMyRating(widget.dramaId, ep.number);
+                      final myRating = EpisodeRatingService.instance
+                          .getMyRating(widget.dramaId, ep.number);
                       return GestureDetector(
                         onTap: () {
                           if (widget.onEpisodeSelected != null) {
                             widget.onEpisodeSelected!(ep.number);
                           } else {
-                            _showEpisodeRatingPicker(context, widget.dramaId, ep.number, myRating ?? 0.0);
+                            _showEpisodeRatingPicker(
+                              context,
+                              widget.dramaId,
+                              ep.number,
+                              myRating ?? 0.0,
+                            );
                           }
                         },
                         child: Container(
@@ -1612,7 +1876,10 @@ class _EpisodesBottomSheetState extends State<_EpisodesBottomSheet> {
                           decoration: BoxDecoration(
                             color: cs.surfaceContainerHighest,
                             borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: cs.outline.withOpacity(0.4), width: 1),
+                            border: Border.all(
+                              color: cs.outline.withOpacity(0.4),
+                              width: 1,
+                            ),
                           ),
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
@@ -1636,7 +1903,9 @@ class _EpisodesBottomSheetState extends State<_EpisodesBottomSheet> {
                                     child: Icon(
                                       Icons.star_rounded,
                                       size: 10,
-                                      color: hasRating ? AppColors.ratingStar : episodeNoRatingColor(context),
+                                      color: hasRating
+                                          ? AppColors.ratingStar
+                                          : episodeNoRatingColor(context),
                                     ),
                                   ),
                                   const SizedBox(width: 2),
@@ -1646,7 +1915,10 @@ class _EpisodesBottomSheetState extends State<_EpisodesBottomSheet> {
                                       fontSize: 10,
                                       fontWeight: FontWeight.w600,
                                       color: hasRating
-                                          ? (Theme.of(context).brightness == Brightness.dark ? Colors.white : cs.onSurface)
+                                          ? (Theme.of(context).brightness ==
+                                                    Brightness.dark
+                                                ? Colors.white
+                                                : cs.onSurface)
                                           : episodeNoRatingColor(context),
                                     ),
                                   ),
@@ -1698,38 +1970,43 @@ class _CastSection extends StatelessWidget {
             ),
           )
         else
-          Transform.translate(
-            offset: const Offset(0, -6),
-            child: ListView.separated(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              padding: EdgeInsets.zero,
-              itemCount: castNames.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 12),
-              itemBuilder: (context, i) {
-                return Row(
-                  children: [
-                    CircleAvatar(
-                      radius: 22,
-                      backgroundColor: cs.surfaceContainerHighest,
-                      child: Icon(LucideIcons.user, size: 22, color: cs.onSurfaceVariant),
+          ListView.separated(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            padding: EdgeInsets.zero,
+            itemCount: castNames.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 12),
+            itemBuilder: (context, i) {
+              return Row(
+                children: [
+                  CircleAvatar(
+                    radius: 22,
+                    backgroundColor: cs.surfaceContainerHighest,
+                    child: Icon(
+                      LucideIcons.user,
+                      size: 22,
+                      color: cs.onSurfaceVariant,
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        castNames[i],
-                        style: GoogleFonts.notoSansKr(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w500,
-                          color: cs.onSurface,
-                        ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      castNames[i],
+                      style: GoogleFonts.notoSansKr(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w500,
+                        color: cs.onSurface,
                       ),
                     ),
-                    Icon(LucideIcons.chevron_right, size: 18, color: cs.onSurfaceVariant),
-                  ],
-                );
-              },
-            ),
+                  ),
+                  Icon(
+                    LucideIcons.chevron_right,
+                    size: 18,
+                    color: cs.onSurfaceVariant,
+                  ),
+                ],
+              );
+            },
           ),
       ],
     );
@@ -1748,6 +2025,7 @@ class _RatingsAndReviewsSection extends StatefulWidget {
     required this.onWriteReviewTap,
     required this.onReviewsListTap,
     this.onReviewsChanged,
+    this.postMeta = const {},
   });
 
   final String dramaId;
@@ -1757,58 +2035,104 @@ class _RatingsAndReviewsSection extends StatefulWidget {
   final List<DramaReview> reviews;
   final dynamic strings;
   final VoidCallback onWriteReviewTap;
+  /// feedPostId → real (likeCount, commentCount, isLiked) from the posts collection.
+  final Map<String, ({int likeCount, int commentCount, bool isLiked})> postMeta;
+
   /// 종합 평점 카드 탭 → 전체 리뷰 화면.
   final VoidCallback onReviewsListTap;
+
   /// 삭제·수정 후 부모가 서버 리뷰 목록·평점을 다시 불러오도록 할 때 사용.
   final VoidCallback? onReviewsChanged;
 
   @override
-  State<_RatingsAndReviewsSection> createState() => _RatingsAndReviewsSectionState();
+  State<_RatingsAndReviewsSection> createState() =>
+      _RatingsAndReviewsSectionState();
 }
 
 class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
-  bool _sortByLikes = true;
-  bool _showAllReviewCards = false;
+  /// 상세 카드에 표시하는 리뷰 최대 개수 — 좋아요 많은 순 상위 [개] (나머지는 "전체 리뷰").
+  static const int _kDetailReviewPreviewMax = 5;
   final Set<String> _likedIds = {};
 
   @override
   void initState() {
     super.initState();
     ReviewService.instance.loadIfNeeded();
+    _syncLikedIdsFromMeta(widget.postMeta);
   }
 
-  Future<void> _shareReviewAsImage(BuildContext context, DramaReview r) async {
-    final country = CountryScope.maybeOf(context)?.country
-        ?? UserProfileService.instance.signupCountryNotifier.value;
-    final locTitle = DramaListService.instance.getDisplayTitle(widget.dramaId, country).trim();
-    final displayTitle = locTitle.isNotEmpty ? locTitle : widget.dramaTitle;
-    final displayImageUrl = DramaListService.instance.getDisplayImageUrl(widget.dramaId, country);
-    String? posterUrl;
-    String? posterAsset;
-    if (displayImageUrl != null && displayImageUrl.isNotEmpty) {
-      if (displayImageUrl.startsWith('http')) {
-        posterUrl = displayImageUrl;
-      } else {
-        posterAsset = displayImageUrl;
+  @override
+  void didUpdateWidget(covariant _RatingsAndReviewsSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.postMeta != widget.postMeta) {
+      _syncLikedIdsFromMeta(widget.postMeta);
+    }
+  }
+
+  void _syncLikedIdsFromMeta(
+      Map<String, ({int likeCount, int commentCount, bool isLiked})> meta) {
+    final liked = <String>{};
+    for (final r in widget.reviews) {
+      final m = _postMetaForWith(r, meta);
+      if (m != null && m.isLiked) {
+        liked.add(_reviewKey(r));
       }
     }
-    await ReviewShareImageHelper.captureAndShare(
-      context,
-      ReviewShareCardData(
-        dramaTitle: displayTitle,
-        rating: r.rating,
-        reviewPreview: r.comment,
-        userNickname: r.userName,
-        posterUrl: posterUrl,
-        posterAsset: posterAsset,
-      ),
-    );
+    if (liked.isNotEmpty || _likedIds.isNotEmpty) {
+      // Only update if there's a real change to avoid unnecessary rebuilds
+      if (!setEquals(liked, _likedIds)) {
+        setState(() => _likedIds
+          ..clear()
+          ..addAll(liked));
+      }
+    }
   }
 
+  ({int likeCount, int commentCount, bool isLiked})? _postMetaForWith(
+      DramaReview r,
+      Map<String, ({int likeCount, int commentCount, bool isLiked})> meta) {
+    final fp = r.feedPostId?.trim();
+    if (fp != null && fp.isNotEmpty) {
+      final m = meta[fp];
+      if (m != null) return m;
+    }
+    final id = r.id?.trim();
+    if (id != null && id.isNotEmpty) return meta[id];
+    return null;
+  }
+
+  /// Returns the postMeta entry for this review (keyed by feedPostId then id).
+  ({int likeCount, int commentCount, bool isLiked})? _postMetaFor(
+      DramaReview r) {
+    final fp = r.feedPostId?.trim();
+    if (fp != null && fp.isNotEmpty) {
+      final m = widget.postMeta[fp];
+      if (m != null) return m;
+    }
+    final id = r.id?.trim();
+    if (id != null && id.isNotEmpty) return widget.postMeta[id];
+    return null;
+  }
+
+  String _reviewKey(DramaReview r) =>
+      r.id ?? '${r.userName}_${r.timeAgo}';
+
   int _displayLikeCount(DramaReview r) {
-    final base = r.likeCount ?? 0;
-    final id = r.id ?? '${r.userName}_${r.timeAgo}';
-    return base + (_likedIds.contains(id) ? 1 : 0);
+    final meta = _postMetaFor(r);
+    final base = meta != null ? meta.likeCount : (r.likeCount ?? 0);
+    final nowLiked = _likedIds.contains(_reviewKey(r));
+    if (meta == null) {
+      return base + (nowLiked ? 1 : 0);
+    }
+    // base already includes server liked-state. Only apply optimistic delta.
+    final delta = nowLiked == meta.isLiked ? 0 : (nowLiked ? 1 : -1);
+    return (base + delta).clamp(0, 999999);
+  }
+
+  int _displayCommentCount(DramaReview r) {
+    final meta = _postMetaFor(r);
+    if (meta != null) return meta.commentCount;
+    return r.replies.length;
   }
 
   Widget _buildRatingSpotlightColumn(ColorScheme cs, dynamic s) {
@@ -1876,17 +2200,30 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
   }
 
   void _toggleLike(DramaReview r) {
-    final id = r.id ?? '${r.userName}_${r.timeAgo}';
+    final key = _reviewKey(r);
+    final nowLiked = !_likedIds.contains(key);
     setState(() {
-      if (_likedIds.contains(id)) {
-        _likedIds.remove(id);
+      if (nowLiked) {
+        _likedIds.add(key);
       } else {
-        _likedIds.add(id);
+        _likedIds.remove(key);
       }
     });
+    final feedPostId = (r.feedPostId?.trim().isNotEmpty == true)
+        ? r.feedPostId!.trim()
+        : r.id?.trim();
+    if (feedPostId != null && feedPostId.isNotEmpty) {
+      unawaited(PostService.instance.togglePostLike(
+        feedPostId,
+        postAuthorUid: r.authorUid,
+      ));
+    }
   }
 
-  static final DateTime _epoch = DateTime.fromMillisecondsSinceEpoch(0, isUtc: false);
+  static final DateTime _epoch = DateTime.fromMillisecondsSinceEpoch(
+    0,
+    isUtc: false,
+  );
 
   DateTime _reviewTimestamp(DramaReview r) => r.writtenAt ?? _epoch;
 
@@ -1900,8 +2237,10 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
       if (n > maxLikes) maxLikes = n;
     }
     if (maxLikes > 0) {
-      final best = reviews.where((r) => _displayLikeCount(r) == maxLikes).toList()
-        ..sort((a, b) => _reviewTimestamp(b).compareTo(_reviewTimestamp(a)));
+      final best =
+          reviews.where((r) => _displayLikeCount(r) == maxLikes).toList()..sort(
+            (a, b) => _reviewTimestamp(b).compareTo(_reviewTimestamp(a)),
+          );
       return best.first;
     }
     final sorted = List<DramaReview>.from(reviews)
@@ -1926,7 +2265,8 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
     final timeAgo = my.modifiedAt != null
         ? '${formatTimeAgo(my.modifiedAt!, safeLoc)} (${widget.strings.get('edited')})'
         : formatTimeAgo(my.writtenAt, safeLoc);
-    final myPhotoUrl = UserProfileService.instance.profileImageUrlNotifier.value;
+    final myPhotoUrl =
+        UserProfileService.instance.profileImageUrlNotifier.value;
     return DramaReview(
       id: my.id,
       userName: my.authorName ?? '나',
@@ -1938,42 +2278,41 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
       authorPhotoUrl: myPhotoUrl,
       writtenAt: my.modifiedAt ?? my.writtenAt,
       authorUid: AuthService.instance.currentUser.value?.uid,
+      feedPostId: my.feedPostId,
     );
   }
 
   List<DramaReview> get _displayReviews {
     final myIds = _myReviewIdsForDrama;
     final list = List<DramaReview>.from(widget.reviews);
+    list.removeWhere((r) => r.comment.trim().isEmpty);
     list.removeWhere((r) {
       final id = r.id;
       return id != null && id.isNotEmpty && myIds.contains(id);
     });
-    final mine = ReviewService.instance.list
-        .where((e) => e.dramaId == widget.dramaId)
-        .toList()
-      ..sort((a, b) {
-        final tb = b.modifiedAt ?? b.writtenAt;
-        final ta = a.modifiedAt ?? a.writtenAt;
-        return tb.compareTo(ta);
-      });
+    final mine =
+        ReviewService.instance.list
+            .where(
+              (e) => e.dramaId == widget.dramaId && e.comment.trim().isNotEmpty,
+            )
+            .toList()
+          ..sort((a, b) {
+            final tb = b.modifiedAt ?? b.writtenAt;
+            final ta = a.modifiedAt ?? a.writtenAt;
+            return tb.compareTo(ta);
+          });
     final head = mine.map(_localMyReviewToCard).toList();
     return [...head, ...list];
   }
 
-  List<DramaReview> get _sortedReviews {
-    final list = _displayReviews;
-    if (_sortByLikes) {
-      final sorted = List<DramaReview>.from(list);
-      sorted.sort((a, b) => _displayLikeCount(b).compareTo(_displayLikeCount(a)));
-      return sorted;
-    }
-    return list;
-  }
-
-  bool _isMyReview(DramaReview r) {
-    final id = r.id;
-    if (id == null || id.isEmpty) return false;
-    return _myReviewIdsForDrama.contains(id);
+  List<DramaReview> get _likesSortedReviews {
+    final sorted = List<DramaReview>.from(_displayReviews);
+    sorted.sort((a, b) {
+      final byLikes = _displayLikeCount(b).compareTo(_displayLikeCount(a));
+      if (byLikes != 0) return byLikes;
+      return _reviewTimestamp(b).compareTo(_reviewTimestamp(a));
+    });
+    return sorted;
   }
 
   /// Firestore 집계에 내 여러 건이 이미 포함되므로 그대로 사용.
@@ -1988,23 +2327,16 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          s.get('ratingsAndComments'),
-          style: GoogleFonts.notoSansKr(
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
-            color: cs.onSurface,
-          ),
-        ),
+        _sectionLabel(s.get('ratingsAndComments').toUpperCase(), cs),
         const SizedBox(height: 16),
-        // 평균·스포트라이트 + 정렬 + 리뷰 목록을 한 카드로 통합
+        // 평균·스포트라이트 + 좋아요순 상위 리뷰 목록을 한 카드로 통합
         ValueListenableBuilder<List<MyReviewItem>>(
           valueListenable: ReviewService.instance.listNotifier,
           builder: (context, _, __) {
-            final list = _sortedReviews;
+            final list = _likesSortedReviews;
             final hasReviews = list.isNotEmpty;
             final preview = hasReviews
-                ? (_showAllReviewCards ? list : list.take(3).toList())
+                ? list.take(_kDetailReviewPreviewMax).toList()
                 : const <DramaReview>[];
 
             return Container(
@@ -2020,7 +2352,13 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
               ),
               child: Material(
                 color: cs.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(20),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                  side: BorderSide(
+                    color: cs.outline.withOpacity(0.4),
+                    width: 1,
+                  ),
+                ),
                 clipBehavior: Clip.antiAlias,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2036,7 +2374,11 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
                           crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
                             const SizedBox(width: 6),
-                            Icon(Icons.star_rounded, size: 60, color: AppColors.ratingStar),
+                            Icon(
+                              Icons.star_rounded,
+                              size: 60,
+                              color: AppColors.ratingStar,
+                            ),
                             const SizedBox(width: 8),
                             Column(
                               mainAxisSize: MainAxisSize.min,
@@ -2075,7 +2417,7 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
                       thickness: 1,
                       indent: 16,
                       endIndent: 16,
-                      color: cs.outline.withValues(alpha: 0.12),
+                      color: cs.outline.withValues(alpha: 0.26),
                     ),
                     if (!hasReviews)
                       Padding(
@@ -2086,70 +2428,17 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
                         ),
                       )
                     else ...[
-                      _SortTabsPill(
-                        sortByLikes: _sortByLikes,
-                        onSortChanged: (v) => setState(() {
-                          _sortByLikes = v;
-                          _showAllReviewCards = false;
-                        }),
-                        strings: s,
-                      ),
                       ...preview.asMap().entries.expand((e) {
                         final i = e.key;
                         final r = e.value;
-                        final isMine = _isMyReview(r);
                         final card = _ReviewCard(
                           review: r,
                           likeCount: _displayLikeCount(r),
-                          isLiked: _likedIds.contains(
-                            r.id ?? '${r.userName}_${r.timeAgo}',
-                          ),
+                          commentCountOverride: _displayCommentCount(r),
+                          isLiked: _likedIds.contains(_reviewKey(r)),
                           onLikeTap: () => _toggleLike(r),
                           strings: s,
-                          isMine: isMine,
                           embeddedInMergedSection: true,
-                          onShareReview: () => _shareReviewAsImage(context, r),
-                          onEdit: isMine && (r.id != null && r.id!.isNotEmpty)
-                              ? () async {
-                                  final my = ReviewService.instance.getById(r.id!);
-                                  if (my != null) {
-                                    await WriteReviewSheet.show(
-                                      context,
-                                      dramaId: widget.dramaId,
-                                      dramaTitle: widget.dramaTitle,
-                                      editingReviewId: my.id,
-                                      initialRating: my.rating,
-                                      initialComment: my.comment,
-                                    );
-                                    if (context.mounted) {
-                                      widget.onReviewsChanged?.call();
-                                      setState(() {
-                                        _showAllReviewCards = false;
-                                      });
-                                    }
-                                  }
-                                }
-                              : null,
-                          onDelete: isMine && (r.id != null && r.id!.isNotEmpty)
-                              ? () async {
-                                  final dlg = CountryScope.of(context).strings;
-                                  final ok = await showAppDeleteConfirmDialog(
-                                    context,
-                                    message: dlg.get('deleteReviewConfirm'),
-                                    cancelText: dlg.get('cancel'),
-                                    confirmText: dlg.get('delete'),
-                                  );
-                                  if (ok == true) {
-                                    await ReviewService.instance.deleteById(r.id!);
-                                    widget.onReviewsChanged?.call();
-                                    if (context.mounted) {
-                                      setState(() {
-                                        _showAllReviewCards = false;
-                                      });
-                                    }
-                                  }
-                                }
-                              : null,
                         );
                         if (i == 0) return [card];
                         return [
@@ -2158,27 +2447,28 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
                             thickness: 1,
                             indent: 16,
                             endIndent: 16,
-                            color: cs.outline.withValues(alpha: 0.08),
+                            color: cs.outline.withValues(alpha: 0.22),
                           ),
                           card,
                         ];
                       }),
-                      if (list.length > 3 && !_showAllReviewCards)
+                      if (list.length > _kDetailReviewPreviewMax)
                         Padding(
                           padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
                           child: Center(
                             child: TextButton(
                               style: TextButton.styleFrom(
-                                foregroundColor: cs.onSurfaceVariant,
+                                foregroundColor: cs.onSurfaceVariant
+                                    .withValues(alpha: 0.55),
                               ),
-                              onPressed: () =>
-                                  setState(() => _showAllReviewCards = true),
+                              onPressed: widget.onReviewsListTap,
                               child: Text(
                                 s.get('dramaAllReviewsCta'),
                                 style: GoogleFonts.notoSansKr(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
-                                  color: cs.onSurfaceVariant,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                  color: cs.onSurfaceVariant
+                                      .withValues(alpha: 0.55),
                                 ),
                               ),
                             ),
@@ -2245,7 +2535,10 @@ class _ReviewsEmptyState extends StatelessWidget {
                 backgroundColor: cs.primary,
                 foregroundColor: cs.onPrimary,
                 elevation: 0,
-                padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 28,
+                  vertical: 14,
+                ),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -2259,113 +2552,6 @@ class _ReviewsEmptyState extends StatelessWidget {
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-/// 정렬 탭: FavoriteTitleActivityScreen의 TwoTabSegmentBar와 동일한 스타일
-class _SortTabsPill extends StatelessWidget {
-  const _SortTabsPill({
-    required this.sortByLikes,
-    required this.onSortChanged,
-    required this.strings,
-  });
-
-  static const double _trackRadius = 7;
-  static const double _chipRadius = 6;
-  static const double _barHeight = 28;
-  static const Color _trackDark = Color(0xFF1C1C1E);
-  static const Color _trackBorderDark = Color(0xFF2C2C2E);
-  static const Color _selectedBg = Color(0xFF5D6D7E);
-
-  final bool sortByLikes;
-  final ValueChanged<bool> onSortChanged;
-  final dynamic strings;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final s = strings;
-    final trackBg = isDark
-        ? _trackDark
-        : cs.surfaceContainerHighest.withValues(alpha: 0.92);
-    final trackBorder = isDark
-        ? _trackBorderDark
-        : cs.outline.withValues(alpha: 0.22);
-    final selectedBg = isDark
-        ? _selectedBg
-        : Color.lerp(_selectedBg, cs.surface, 0.25) ?? _selectedBg;
-    final dimLabel = isDark
-        ? const Color(0xFF8E8E93)
-        : cs.onSurfaceVariant.withValues(alpha: 0.72);
-
-    BorderRadius chipRadius(bool on, bool isLeft) {
-      if (!on) return BorderRadius.zero;
-      return isLeft
-          ? const BorderRadius.only(
-              topLeft: Radius.circular(_chipRadius),
-              bottomLeft: Radius.circular(_chipRadius),
-            )
-          : const BorderRadius.only(
-              topRight: Radius.circular(_chipRadius),
-              bottomRight: Radius.circular(_chipRadius),
-            );
-    }
-
-    Widget chip(String label, bool isLeft, bool selected) {
-      final radius = chipRadius(selected, isLeft);
-      return Expanded(
-        child: GestureDetector(
-          onTap: () => onSortChanged(isLeft),
-          behavior: HitTestBehavior.opaque,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
-            curve: Curves.easeOut,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: selected ? selectedBg : Colors.transparent,
-              borderRadius: radius,
-            ),
-            child: Text(
-              label,
-              textAlign: TextAlign.center,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: GoogleFonts.notoSansKr(
-                fontSize: 12,
-                height: 1,
-                fontWeight: selected ? FontWeight.w900 : FontWeight.w800,
-                color: selected ? Colors.white : dimLabel,
-              ),
-            ),
-          ),
-        ),
-      );
-    }
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
-      child: SizedBox(
-        height: _barHeight,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: trackBg,
-            borderRadius: BorderRadius.circular(_trackRadius),
-            border: Border.all(color: trackBorder, width: 1),
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(_trackRadius),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                chip(s.get('sortByLikes'), true, sortByLikes),
-                chip(s.get('sortByLatest'), false, !sortByLikes),
-              ],
-            ),
-          ),
         ),
       ),
     );
@@ -2413,10 +2599,7 @@ class _LikedHeartIcon extends StatelessWidget {
 
 /// 답글 입력창 (리뷰 카드 하단)
 class _ReplyInput extends StatefulWidget {
-  const _ReplyInput({
-    required this.strings,
-    required this.onSubmitted,
-  });
+  const _ReplyInput({required this.strings, required this.onSubmitted});
 
   final dynamic strings;
   final ValueChanged<String> onSubmitted;
@@ -2499,7 +2682,9 @@ class _ReplyInputState extends State<_ReplyInput> {
               style: GoogleFonts.notoSansKr(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
-                color: hasText ? Theme.of(context).colorScheme.primary : Theme.of(context).colorScheme.onSurfaceVariant,
+                color: hasText
+                    ? Theme.of(context).colorScheme.primary
+                    : Theme.of(context).colorScheme.onSurfaceVariant,
               ),
             ),
           ),
@@ -2513,7 +2698,7 @@ class _ReplyInputState extends State<_ReplyInput> {
 class _ReplyRowAvatar extends StatelessWidget {
   const _ReplyRowAvatar({required this.reply});
 
-  static const double _size = 20;
+  static const double _size = kAppUnifiedProfileAvatarSize;
 
   final DramaReviewReply reply;
 
@@ -2524,7 +2709,7 @@ class _ReplyRowAvatar extends StatelessWidget {
       child: CircleAvatar(
         radius: _size / 2,
         backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
-        child: Icon(Icons.person, size: 14, color: Colors.white),
+        child: Icon(Icons.person, size: 15, color: Colors.white),
       ),
     );
   }
@@ -2538,7 +2723,7 @@ class _ReplyRowAvatar extends StatelessWidget {
       child: CircleAvatar(
         radius: _size / 2,
         backgroundColor: bg,
-        child: Icon(Icons.person, size: 14, color: iconColor),
+        child: Icon(Icons.person, size: 15, color: iconColor),
       ),
     );
   }
@@ -2554,13 +2739,16 @@ class _ReplyRowAvatar extends StatelessWidget {
           child: OptimizedNetworkImage(
             imageUrl: url,
             fit: BoxFit.cover,
-            memCacheWidth: 40,
-            memCacheHeight: 40,
+            memCacheWidth: 52,
+            memCacheHeight: 52,
             errorWidget: ValueListenableBuilder<int?>(
               valueListenable: UserProfileService.instance.avatarColorNotifier,
               builder: (_, colorIdx, __) {
-                final isMine = reply.author == (UserProfileService.instance.nicknameNotifier.value ?? '나');
-                if (isMine && colorIdx != null) return _coloredMemberIcon(colorIdx);
+                final isMine =
+                    reply.author ==
+                    (UserProfileService.instance.nicknameNotifier.value ?? '나');
+                if (isMine && colorIdx != null)
+                  return _coloredMemberIcon(colorIdx);
                 return _greyIconAvatar(context);
               },
             ),
@@ -2571,7 +2759,9 @@ class _ReplyRowAvatar extends StatelessWidget {
     return ValueListenableBuilder<int?>(
       valueListenable: UserProfileService.instance.avatarColorNotifier,
       builder: (_, colorIdx, __) {
-        final isMine = reply.author == (UserProfileService.instance.nicknameNotifier.value ?? '나');
+        final isMine =
+            reply.author ==
+            (UserProfileService.instance.nicknameNotifier.value ?? '나');
         if (isMine && colorIdx != null) return _coloredMemberIcon(colorIdx);
         return _greyIconAvatar(context);
       },
@@ -2583,7 +2773,7 @@ class _ReplyRowAvatar extends StatelessWidget {
 class _ReviewAvatar extends StatelessWidget {
   const _ReviewAvatar({required this.review, required this.isMine});
 
-  static const double _size = 28;
+  static const double _size = kAppUnifiedProfileAvatarSize;
 
   final DramaReview review;
   final bool isMine;
@@ -2595,7 +2785,7 @@ class _ReviewAvatar extends StatelessWidget {
       child: CircleAvatar(
         radius: _size / 2,
         backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
-        child: Icon(Icons.person, size: 20, color: Colors.white),
+        child: Icon(Icons.person, size: 16, color: Colors.white),
       ),
     );
   }
@@ -2609,7 +2799,7 @@ class _ReviewAvatar extends StatelessWidget {
       child: CircleAvatar(
         radius: _size / 2,
         backgroundColor: bg,
-        child: Icon(Icons.person, size: 20, color: iconColor),
+        child: Icon(Icons.person, size: 16, color: iconColor),
       ),
     );
   }
@@ -2625,8 +2815,8 @@ class _ReviewAvatar extends StatelessWidget {
           child: OptimizedNetworkImage(
             imageUrl: url!,
             fit: BoxFit.cover,
-            memCacheWidth: 56,
-            memCacheHeight: 56,
+            memCacheWidth: 52,
+            memCacheHeight: 52,
             errorWidget: colorIndex != null
                 ? _coloredMemberIcon(colorIndex)
                 : _greyMemberIcon(context),
@@ -2671,6 +2861,8 @@ class _ReviewCard extends StatefulWidget {
     this.onEdit,
     this.onDelete,
     this.onShareReview,
+    this.commentCountOverride,
+
     /// true: 평점 요약과 같은 큰 카드 안 — 개별 그림자·배경 카드 제거.
     this.embeddedInMergedSection = false,
   });
@@ -2684,6 +2876,8 @@ class _ReviewCard extends StatefulWidget {
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
   final VoidCallback? onShareReview;
+  /// When non-null, overrides the replies.length used as comment count display.
+  final int? commentCountOverride;
   final bool embeddedInMergedSection;
 
   @override
@@ -2716,14 +2910,305 @@ class _ReviewCardState extends State<_ReviewCard> {
     final author = UserProfileService.instance.nicknameNotifier.value ?? '나';
     final photoUrl = UserProfileService.instance.profileImageUrlNotifier.value;
     setState(() {
-      _localReplies.add(DramaReviewReply(
-        author: author,
-        text: text,
-        timeAgo: widget.strings.get('timeAgoJustNow'),
-        likeCount: 0,
-        authorPhotoUrl: photoUrl,
-      ));
+      _localReplies.add(
+        DramaReviewReply(
+          author: author,
+          text: text,
+          timeAgo: widget.strings.get('timeAgoJustNow'),
+          likeCount: 0,
+          authorPhotoUrl: photoUrl,
+        ),
+      );
     });
+  }
+
+  List<Widget> _embeddedMineActions(BuildContext context) {
+    if (!widget.isMine ||
+        (widget.onEdit == null && widget.onDelete == null)) {
+      return const [];
+    }
+    return [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(14, 4, 14, 0),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            if (widget.onEdit != null)
+              TextButton(
+                onPressed: () {
+                  HapticFeedback.lightImpact();
+                  widget.onEdit!();
+                },
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: Text(
+                  widget.strings.get('edit'),
+                  style: GoogleFonts.notoSansKr(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            if (widget.onDelete != null)
+              TextButton(
+                onPressed: () {
+                  HapticFeedback.lightImpact();
+                  widget.onDelete!();
+                },
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: Text(
+                  widget.strings.get('delete'),
+                  style: GoogleFonts.notoSansKr(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: kAppDeleteActionColor,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    ];
+  }
+
+  Widget _embeddedActionRow(
+    BuildContext context,
+    List<DramaReviewReply> replies,
+    bool hasReplies, {
+    EdgeInsetsGeometry padding = const EdgeInsets.fromLTRB(14, 2, 14, 2),
+  }) {
+    final cs = Theme.of(context).colorScheme;
+    const iconSize = 13.0;
+    final actionFg = feedInlineActionMutedForeground(cs);
+    return Padding(
+      padding: padding,
+      child: Row(
+        children: [
+          InkWell(
+            onTap: () {
+              HapticFeedback.lightImpact();
+              widget.onLikeTap();
+            },
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  widget.isLiked
+                      ? Icon(
+                          Icons.favorite,
+                          size: iconSize,
+                          color: Colors.redAccent,
+                        )
+                      : Icon(
+                          Icons.favorite_border,
+                          size: iconSize,
+                          color: actionFg,
+                        ),
+                  const SizedBox(width: 4),
+                  Text(
+                    formatCompactCount(widget.likeCount),
+                    style: GoogleFonts.notoSansKr(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      height: 1.0,
+                      color: actionFg,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+          InkWell(
+            onTap: () {
+              if (hasReplies) {
+                setState(() => _showReplies = !_showReplies);
+                HapticFeedback.lightImpact();
+              } else {
+                setState(() => _showReplies = true);
+                HapticFeedback.lightImpact();
+              }
+            },
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    LucideIcons.message_circle,
+                    size: iconSize,
+                    color: actionFg,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    formatCompactCount(
+                      widget.commentCountOverride ?? replies.length,
+                    ),
+                    style: GoogleFonts.notoSansKr(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      height: 1.0,
+                      color: actionFg,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (widget.onShareReview != null) ...[
+            const Spacer(),
+            InkWell(
+              onTap: () {
+                HapticFeedback.lightImpact();
+                widget.onShareReview?.call();
+              },
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+                child: Icon(
+                  LucideIcons.share_2,
+                  size: 16,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _replyExpansionWidgets(
+    BuildContext context,
+    List<DramaReviewReply> replies,
+    bool hasReplies,
+  ) {
+    if (!_showReplies) return const [];
+    return [
+      if (hasReplies) ...[
+        const SizedBox(height: 10),
+        Container(
+          margin: const EdgeInsets.only(left: 8),
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surface,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: Theme.of(context).colorScheme.outline.withOpacity(0.3),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: replies.asMap().entries.map((entry) {
+              final r = entry.value;
+              final isLast = entry.key == replies.length - 1;
+              final replyId = r.id ?? '${r.author}_${r.timeAgo}';
+              final isLiked = _likedReplyIds.contains(replyId);
+              final displayCount = _replyDisplayLikeCount(r);
+              return Padding(
+                padding: EdgeInsets.only(bottom: isLast ? 0 : 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _ReplyRowAvatar(reply: r),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Text(
+                                r.author,
+                                style: appUnifiedNicknameStyle(
+                                  Theme.of(context).colorScheme,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                r.timeAgo,
+                                style: GoogleFonts.notoSansKr(
+                                  fontSize: 10,
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            r.text,
+                            style: GoogleFonts.notoSansKr(
+                              fontSize: 12,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
+                              height: 1.4,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    InkWell(
+                      onTap: () => _toggleReplyLike(r),
+                      borderRadius: BorderRadius.circular(6),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 4,
+                          horizontal: 4,
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            isLiked
+                                ? const _LikedHeartIcon(size: 14)
+                                : Icon(
+                                    Icons.favorite_border,
+                                    size: 14,
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurfaceVariant,
+                                  ),
+                            const SizedBox(width: 2),
+                            Text(
+                              displayCount > 0
+                                  ? formatCompactCount(displayCount)
+                                  : '0',
+                              style: GoogleFonts.notoSansKr(
+                                fontSize: 11,
+                                color: isLiked
+                                    ? const Color(0xFFd95d75)
+                                    : Theme.of(
+                                        context,
+                                      ).colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+      ],
+      const SizedBox(height: 10),
+      _ReplyInput(strings: widget.strings, onSubmitted: _addReply),
+    ];
   }
 
   @override
@@ -2731,6 +3216,23 @@ class _ReviewCardState extends State<_ReviewCard> {
     final review = widget.review;
     final replies = [...review.replies, ..._localReplies];
     final hasReplies = replies.isNotEmpty;
+
+    if (widget.embeddedInMergedSection) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ..._embeddedMineActions(context),
+          DramaReviewsListFeedRow(
+            key: ValueKey<String>(review.id ?? '${review.userName}_${review.timeAgo}'),
+            review: review,
+            displayLikeCountOverride: widget.likeCount,
+            displayCommentCountOverride: widget.commentCountOverride,
+            initialIsLiked: widget.isLiked,
+            rowMaterialColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+          ),
+        ],
+      );
+    }
 
     return GestureDetector(
       onTap: () {
@@ -2754,7 +3256,9 @@ class _ReviewCardState extends State<_ReviewCard> {
                 borderRadius: BorderRadius.circular(12),
                 boxShadow: [
                   BoxShadow(
-                    color: Theme.of(context).colorScheme.shadow.withOpacity(0.08),
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.shadow.withOpacity(0.08),
                     blurRadius: 6,
                     offset: const Offset(0, 2),
                   ),
@@ -2777,10 +3281,7 @@ class _ReviewCardState extends State<_ReviewCard> {
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _ReviewAvatar(
-                          review: review,
-                          isMine: widget.isMine,
-                        ),
+                        _ReviewAvatar(review: review, isMine: widget.isMine),
                         const SizedBox(width: 10),
                         Expanded(
                           child: Column(
@@ -2791,10 +3292,8 @@ class _ReviewCardState extends State<_ReviewCard> {
                                 review.userName,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: GoogleFonts.notoSansKr(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: Theme.of(context).colorScheme.onSurface,
+                                style: appUnifiedNicknameStyle(
+                                  Theme.of(context).colorScheme,
                                 ),
                               ),
                               const SizedBox(height: 2),
@@ -2813,9 +3312,9 @@ class _ReviewCardState extends State<_ReviewCard> {
                                       overflow: TextOverflow.ellipsis,
                                       style: GoogleFonts.notoSansKr(
                                         fontSize: 11,
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .onSurfaceVariant,
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.onSurfaceVariant,
                                       ),
                                     ),
                                   ),
@@ -2828,7 +3327,8 @@ class _ReviewCardState extends State<_ReviewCard> {
                     ),
                   ),
                 ),
-                if (widget.isMine && (widget.onEdit != null || widget.onDelete != null))
+                if (widget.isMine &&
+                    (widget.onEdit != null || widget.onDelete != null))
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -2847,7 +3347,9 @@ class _ReviewCardState extends State<_ReviewCard> {
                             widget.strings.get('edit'),
                             style: GoogleFonts.notoSansKr(
                               fontSize: 12,
-                              color: Theme.of(context).colorScheme.onSurfaceVariant,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
                             ),
                           ),
                         ),
@@ -2885,180 +3387,13 @@ class _ReviewCardState extends State<_ReviewCard> {
               ),
             ),
             const SizedBox(height: 8),
-            Row(
-              children: [
-                InkWell(
-                  onTap: () {
-                    HapticFeedback.lightImpact();
-                    widget.onLikeTap();
-                  },
-                  borderRadius: BorderRadius.circular(8),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        widget.isLiked
-                            ? const _LikedHeartIcon(size: 16)
-                            : Icon(Icons.favorite_border, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
-                        const SizedBox(width: 4),
-                        Text(
-                          widget.likeCount > 0 ? formatCompactCount(widget.likeCount) : '0',
-                          style: GoogleFonts.notoSansKr(
-                            fontSize: 12,
-                            color: widget.isLiked ? const Color(0xFFd95d75) : Theme.of(context).colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 20),
-                InkWell(
-                  onTap: () {
-                    if (hasReplies) {
-                      setState(() => _showReplies = !_showReplies);
-                      HapticFeedback.lightImpact();
-                    } else {
-                      setState(() => _showReplies = true);
-                      HapticFeedback.lightImpact();
-                    }
-                  },
-                  borderRadius: BorderRadius.circular(8),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          LucideIcons.message_circle,
-                          size: 16,
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          '${replies.length}',
-                          style: GoogleFonts.notoSansKr(
-                            fontSize: 12,
-                            color: Theme.of(context).colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                if (widget.onShareReview != null) ...[
-                  const Spacer(),
-                  InkWell(
-                    onTap: () {
-                      HapticFeedback.lightImpact();
-                      widget.onShareReview?.call();
-                    },
-                    borderRadius: BorderRadius.circular(8),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
-                      child: Icon(LucideIcons.share_2, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
-                    ),
-                  ),
-                ],
-              ],
+            _embeddedActionRow(
+              context,
+              replies,
+              hasReplies,
+              padding: EdgeInsets.zero,
             ),
-            if (_showReplies) ...[
-              if (hasReplies) ...[
-                const SizedBox(height: 10),
-                Container(
-                  margin: const EdgeInsets.only(left: 8),
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.surface,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Theme.of(context).colorScheme.outline.withOpacity(0.3)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: replies.asMap().entries.map((entry) {
-                      final r = entry.value;
-                      final isLast = entry.key == replies.length - 1;
-                      final replyId = r.id ?? '${r.author}_${r.timeAgo}';
-                      final isLiked = _likedReplyIds.contains(replyId);
-                      final displayCount = _replyDisplayLikeCount(r);
-                      return Padding(
-                        padding: EdgeInsets.only(bottom: isLast ? 0 : 8),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _ReplyRowAvatar(reply: r),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      Text(
-                                        r.author,
-                                        style: GoogleFonts.notoSansKr(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w600,
-                                          color: Theme.of(context).colorScheme.onSurface,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Text(
-                                        r.timeAgo,
-                                        style: GoogleFonts.notoSansKr(
-                                          fontSize: 10,
-                                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    r.text,
-                                    style: GoogleFonts.notoSansKr(
-                                      fontSize: 12,
-                                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                                      height: 1.4,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            InkWell(
-                              onTap: () => _toggleReplyLike(r),
-                              borderRadius: BorderRadius.circular(6),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    isLiked
-                                        ? const _LikedHeartIcon(size: 14)
-                                        : Icon(Icons.favorite_border, size: 14, color: Theme.of(context).colorScheme.onSurfaceVariant),
-                                    const SizedBox(width: 2),
-                                    Text(
-                                      displayCount > 0 ? formatCompactCount(displayCount) : '0',
-                                      style: GoogleFonts.notoSansKr(
-                                        fontSize: 11,
-                                        color: isLiked ? const Color(0xFFd95d75) : Theme.of(context).colorScheme.onSurfaceVariant,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                ),
-              ],
-              const SizedBox(height: 10),
-              _ReplyInput(strings: widget.strings, onSubmitted: _addReply),
-            ],
+            ..._replyExpansionWidgets(context, replies, hasReplies),
           ],
         ),
       ),
@@ -3077,6 +3412,7 @@ class _SimilarSection extends StatefulWidget {
 
   final String dramaId;
   final String genreDisplay;
+
   /// 부모 build()에서 확정된 국가 코드 — CountryService 폴백 포함.
   final String? country;
   final List<DramaItem> preloadedSimilar;
@@ -3103,8 +3439,8 @@ class _SimilarSectionState extends State<_SimilarSection> {
         Future<void>.microtask(() {
           if (!mounted) return;
           // country는 부모에서 확정된 값(CountryService 폴백 포함)을 그대로 사용
-          final country = widget.country
-              ?? CountryService.instance.countryNotifier.value;
+          final country =
+              widget.country ?? CountryService.instance.countryNotifier.value;
           final list = DramaListService.instance.getSimilarByGenre(
             widget.dramaId,
             widget.genreDisplay,
@@ -3123,25 +3459,19 @@ class _SimilarSectionState extends State<_SimilarSection> {
 
   @override
   Widget build(BuildContext context) {
-    final country = widget.country
-        ?? CountryScope.maybeOf(context)?.country
-        ?? CountryService.instance.countryNotifier.value;
+    final country =
+        widget.country ??
+        CountryScope.maybeOf(context)?.country ??
+        CountryService.instance.countryNotifier.value;
     final colorScheme = Theme.of(context).colorScheme;
     final strings = widget.strings;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          strings.get('similarDramas'),
-          style: GoogleFonts.notoSansKr(
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
-            color: colorScheme.onSurface,
-          ),
-        ),
-        const SizedBox(height: 12),
+        _sectionLabel(strings.get('similarDramas').toUpperCase(), colorScheme),
+        const SizedBox(height: 14),
         SizedBox(
-          height: 208,
+          height: 165,
           child: _loading && _similar.isEmpty
               ? Center(
                   child: SizedBox(
@@ -3154,121 +3484,138 @@ class _SimilarSectionState extends State<_SimilarSection> {
                   ),
                 )
               : ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: _similar.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 12),
-            itemBuilder: (context, i) {
-              final item = _similar[i];
-              final imageUrl = DramaListService.instance.getDisplayImageUrl(item.id, country);
-              final genre = DramaListService.instance.getDisplaySubtitle(item.id, country);
-              final rating = item.rating;
-              return GestureDetector(
-                onTap: () {
-                  final detail = DramaListService.instance.buildDetailForItem(item, country);
-                  Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => DramaDetailPage(detail: detail),
-                    ),
-                  );
-                },
-                child: SizedBox(
-                  width: 110,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      AspectRatio(
-                        aspectRatio: 1 / 1.3,
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(10),
-                          child: imageUrl != null && imageUrl.isNotEmpty
-                              ? OptimizedNetworkImage(
-                                  imageUrl: imageUrl,
-                                  fit: BoxFit.cover,
-                                  width: double.infinity,
-                                  height: double.infinity,
-                                )
-                              : Container(
-                                  decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(10),
-                                    color: colorScheme.surfaceContainerHighest,
-                                    border: Border.all(color: colorScheme.outline.withOpacity(0.3)),
-                                  ),
-                                  child: Center(
-                                    child: Icon(LucideIcons.tv, size: 32, color: colorScheme.onSurfaceVariant),
-                                  ),
-                                ),
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        () {
-                          final t = DramaListService.instance.getDisplayTitle(item.id, country);
-                          return t.isNotEmpty ? t : item.title;
-                        }(),
-                        style: GoogleFonts.notoSansKr(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: colorScheme.onSurface,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 2),
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Transform.translate(
-                            offset: const Offset(0, 1.5),
-                            child: Icon(
-                              Icons.star_rounded,
-                              size: 12,
-                              color: rating > 0 ? AppColors.ratingStar : colorScheme.onSurfaceVariant,
-                            ),
+                  scrollDirection: Axis.horizontal,
+                  itemCount: _similar.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 8),
+                  itemBuilder: (context, i) {
+                    final item = _similar[i];
+                    final imageUrl = DramaListService.instance
+                        .getDisplayImageUrl(item.id, country);
+                    final genre = DramaListService.instance.getDisplaySubtitle(
+                      item.id,
+                      country,
+                    );
+                    final rating = ReviewService.instance.ratingForListCard(
+                      item.id,
+                      catalogRating: item.rating,
+                    );
+                    final displayTitle = () {
+                      final t = DramaListService.instance.getDisplayTitle(
+                        item.id,
+                        country,
+                      );
+                      return t.isNotEmpty ? t : item.title;
+                    }();
+                    final isDark =
+                        Theme.of(context).brightness == Brightness.dark;
+                    final titleColor = colorScheme.onSurface;
+                    final greyColor = isDark
+                        ? colorScheme.onSurfaceVariant
+                        : Colors.grey.shade500;
+                    const posterW = 80.0;
+                    const posterH = 104.0;
+                    const posterRadius = 8.0;
+                    const metaFont = 9.0;
+                    const starSize = 11.0;
+                    final ratingTextColor =
+                        rating > 0
+                            ? (isDark ? colorScheme.onSurface : Colors.black)
+                            : greyColor;
+                    return GestureDetector(
+                      onTap: () {
+                        final detail = DramaListService.instance
+                            .buildDetailForItem(item, country);
+                        Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => DramaDetailPage(detail: detail),
                           ),
-                          const SizedBox(width: 2),
-                          Text(
-                            rating > 0 ? rating.toStringAsFixed(1) : '0',
-                            style: GoogleFonts.notoSansKr(
-                              fontSize: 10,
-                              color: rating > 0
-                                  ? (Theme.of(context).brightness == Brightness.dark ? Colors.white : colorScheme.onSurface)
-                                  : colorScheme.onSurfaceVariant,
+                        );
+                      },
+                      child: SizedBox(
+                        width: posterW,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(posterRadius),
+                              child: SizedBox(
+                                width: posterW,
+                                height: posterH,
+                                child:
+                                    imageUrl != null && imageUrl.isNotEmpty
+                                    ? (imageUrl.startsWith('http')
+                                          ? OptimizedNetworkImage(
+                                              imageUrl: imageUrl,
+                                              fit: BoxFit.cover,
+                                              width: posterW,
+                                              height: posterH,
+                                            )
+                                          : Image.asset(
+                                              imageUrl,
+                                              fit: BoxFit.cover,
+                                              width: posterW,
+                                              height: posterH,
+                                              errorBuilder: (_, __, ___) =>
+                                                  _posterPlaceholder(context),
+                                            ))
+                                    : _posterPlaceholder(context),
+                              ),
                             ),
-                          ),
-                          if (genre.isNotEmpty) ...[
+                            const SizedBox(height: 6),
                             Text(
-                              '  ·  ',
+                              displayTitle,
                               style: GoogleFonts.notoSansKr(
-                                fontSize: 10,
-                                color: Theme.of(context).brightness == Brightness.dark
-                                    ? colorScheme.onSurfaceVariant
-                                    : const Color(0xFF424242),
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: titleColor,
+                                height: 1.15,
                               ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
-                            Expanded(
-                              child: Text(
-                                genre,
-                                style: GoogleFonts.notoSansKr(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w600,
-                                  color: Theme.of(context).brightness == Brightness.dark
-                                      ? colorScheme.onSurfaceVariant
-                                      : const Color(0xFF424242),
+                            const SizedBox(height: 4),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.star_rounded,
+                                  size: starSize,
+                                  color: rating > 0
+                                      ? AppColors.ratingStar
+                                      : greyColor,
                                 ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
+                                Text(
+                                  rating > 0 ? rating.toStringAsFixed(1) : '0',
+                                  style: GoogleFonts.notoSansKr(
+                                    fontSize: metaFont,
+                                    fontWeight: FontWeight.w500,
+                                    color: ratingTextColor,
+                                  ),
+                                ),
+                                if (genre.isNotEmpty) ...[
+                                  const SizedBox(width: 4),
+                                  Expanded(
+                                    child: Text(
+                                      genre,
+                                      style: GoogleFonts.notoSansKr(
+                                        fontSize: metaFont,
+                                        fontWeight: FontWeight.w600,
+                                        color: colorScheme.onSurfaceVariant,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ],
                             ),
                           ],
-                        ],
+                        ),
                       ),
-                    ],
-                  ),
+                    );
+                  },
                 ),
-              );
-            },
-          ),
         ),
       ],
     );

@@ -13,7 +13,7 @@ import '../widgets/optimized_network_image.dart';
 import '../widgets/two_tab_segment_bar.dart';
 import '../widgets/user_profile_nav.dart';
 
-/// Letterboxd 스타일 Network — Following/Followers 탭.
+/// Letterboxd 스타일 Network — Followers / Following 탭.
 class FollowScreen extends StatefulWidget {
   const FollowScreen({
     super.key,
@@ -38,7 +38,7 @@ class _FollowScreenState extends State<FollowScreen> {
   String _effectiveOwnerUid() => widget.networkOwnerUid ?? AuthService.instance.currentUser.value?.uid ?? '';
 
   String _appBarTitle(dynamic s, String ownerUid) {
-    final viewerUid = AuthService.instance.currentUser.value?.uid?.trim() ?? '';
+    final viewerUid = AuthService.instance.currentUser.value?.uid.trim() ?? '';
     if (viewerUid.isNotEmpty && viewerUid == ownerUid.trim()) {
       return s.get('followScreenTitle');
     }
@@ -58,7 +58,8 @@ class _FollowScreenState extends State<FollowScreen> {
     final headerBg = listsStyleSubpageHeaderBackground(theme);
 
     if (ownerUid.isEmpty) {
-      return AnnotatedRegion<SystemUiOverlayStyle>(
+      return ListsStyleSwipeBack(
+        child: AnnotatedRegion<SystemUiOverlayStyle>(
         value: listsStyleSubpageSystemOverlay(theme, headerBg),
         child: Scaffold(
           backgroundColor: theme.scaffoldBackgroundColor,
@@ -80,10 +81,12 @@ class _FollowScreenState extends State<FollowScreen> {
             ),
           ),
         ),
+      ),
       );
     }
 
-    return AnnotatedRegion<SystemUiOverlayStyle>(
+    return ListsStyleSwipeBack(
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
       value: listsStyleSubpageSystemOverlay(theme, headerBg),
       child: Scaffold(
         backgroundColor: theme.scaffoldBackgroundColor,
@@ -100,8 +103,9 @@ class _FollowScreenState extends State<FollowScreen> {
             TwoTabSegmentBar(
               selectedIndex: _segment,
               onSelect: (i) => setState(() => _segment = i),
-              labelLeft: s.get('tabFollowing'),
-              labelRight: s.get('tabFollowers'),
+              // Letterboxd-style: Followers (left) · Following (right).
+              labelLeft: s.get('tabFollowers'),
+              labelRight: s.get('tabFollowing'),
               colorScheme: cs,
               brightness: theme.brightness,
             ),
@@ -111,14 +115,14 @@ class _FollowScreenState extends State<FollowScreen> {
                 children: [
                   _NetworkList(
                     ownerUid: ownerUid,
-                    isFollowingTab: true,
+                    isFollowingTab: false,
                     cs: cs,
                     s: s,
                     lbGreen: _lbGreen,
                   ),
                   _NetworkList(
                     ownerUid: ownerUid,
-                    isFollowingTab: false,
+                    isFollowingTab: true,
                     cs: cs,
                     s: s,
                     lbGreen: _lbGreen,
@@ -129,6 +133,7 @@ class _FollowScreenState extends State<FollowScreen> {
           ],
         ),
       ),
+    ),
     );
   }
 

@@ -162,6 +162,50 @@ class FollowService {
     });
   }
 
+  /// 빠른 팔로우 — getUserPublic Firestore 왕복 없이 배치 쓰기 1회.
+  /// UI 레벨에서 미팔로우 상태임을 확인한 뒤 호출할 것.
+  Future<void> followUserFast({
+    required String targetUid,
+    required String targetNickname,
+    String? targetPhotoUrl,
+    required String myNickname,
+    String? myPhotoUrl,
+  }) async {
+    final me = AuthService.instance.currentUser.value?.uid;
+    if (me == null || me == targetUid) return;
+
+    final myRef = _firestore.collection('users').doc(me);
+    final targetRef = _firestore.collection('users').doc(targetUid);
+    final followingRef = myRef.collection('following').doc(targetUid);
+    final followerRef = targetRef.collection('followers').doc(me);
+    final ts = FieldValue.serverTimestamp();
+
+    final batch = _firestore.batch();
+    batch.set(followingRef, {
+      'uid': targetUid,
+      'nickname': targetNickname,
+      'photoUrl': targetPhotoUrl,
+      'createdAt': ts,
+    });
+    batch.set(followerRef, {
+      'uid': me,
+      'nickname': myNickname,
+      'photoUrl': myPhotoUrl,
+      'createdAt': ts,
+    });
+    batch.set(
+      targetRef,
+      {'followersCount': FieldValue.increment(1)},
+      SetOptions(merge: true),
+    );
+    batch.set(
+      myRef,
+      {'followingCount': FieldValue.increment(1)},
+      SetOptions(merge: true),
+    );
+    await batch.commit();
+  }
+
   /// 언팔: 서브문서 삭제 + 카운터 감소.
   Future<void> unfollowUser(String targetUid) async {
     final me = AuthService.instance.currentUser.value?.uid;
@@ -181,6 +225,33 @@ class FollowService {
       tx.set(targetRef, {'followersCount': FieldValue.increment(-1)}, SetOptions(merge: true));
       tx.set(myRef, {'followingCount': FieldValue.increment(-1)}, SetOptions(merge: true));
     });
+  }
+
+  /// 빠른 언팔로우 — 트랜잭션 read 없이 배치 삭제 1회.
+  /// UI 레벨에서 팔로우 중인 상태임을 확인한 뒤 호출할 것.
+  Future<void> unfollowUserFast(String targetUid) async {
+    final me = AuthService.instance.currentUser.value?.uid;
+    if (me == null) return;
+
+    final myRef = _firestore.collection('users').doc(me);
+    final targetRef = _firestore.collection('users').doc(targetUid);
+    final followingRef = myRef.collection('following').doc(targetUid);
+    final followerRef = targetRef.collection('followers').doc(me);
+
+    final batch = _firestore.batch();
+    batch.delete(followingRef);
+    batch.delete(followerRef);
+    batch.set(
+      targetRef,
+      {'followersCount': FieldValue.increment(-1)},
+      SetOptions(merge: true),
+    );
+    batch.set(
+      myRef,
+      {'followingCount': FieldValue.increment(-1)},
+      SetOptions(merge: true),
+    );
+    await batch.commit();
   }
 }
 

@@ -3,6 +3,7 @@ import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../services/saved_service.dart';
+import '../theme/app_theme.dart';
 import '../widgets/country_scope.dart';
 import 'post_detail_page.dart';
 
@@ -118,11 +119,20 @@ class SavedScreen extends StatelessWidget {
                                   overflow: TextOverflow.ellipsis,
                                 ),
                                 const SizedBox(height: 8),
-                                Text(
-                                  '${post.author.startsWith("u/") ? post.author.substring(2) : post.author} · ${post.timeAgo}',
-                                  style: GoogleFonts.notoSansKr(
-                                    fontSize: 13,
-                                    color: cs.onSurfaceVariant,
+                                Text.rich(
+                                  TextSpan(
+                                    children: [
+                                      TextSpan(
+                                        text: post.author.startsWith('u/')
+                                            ? post.author.substring(2)
+                                            : post.author,
+                                        style: appUnifiedNicknameStyle(cs),
+                                      ),
+                                      TextSpan(
+                                        text: ' · ${post.timeAgo}',
+                                        style: appUnifiedNicknameMetaTimeStyle(cs),
+                                      ),
+                                    ],
                                   ),
                                 ),
                               ],

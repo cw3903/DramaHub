@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../models/post.dart';
+import '../theme/app_theme.dart';
 import '../services/auth_service.dart';
 import 'country_scope.dart';
+import 'feed_review_star_row.dart';
 import 'optimized_network_image.dart';
 import 'user_profile_nav.dart';
 
@@ -30,61 +32,29 @@ class FeedReviewPostCard extends StatelessWidget {
   final VoidCallback? onTap;
   final VoidCallback? onUserBlocked;
 
-  static const Color _starOrange = Color(0xFFFFB020);
-
-  /// 0.5점: 반쪽 채움만(오른쪽 빈 윤곽 없음).
-  static Widget _filledHalfStarOnly(double iconSize, Color color) {
-    return ClipRect(
-      child: Align(
-        alignment: Alignment.centerLeft,
-        widthFactor: 0.5,
-        child: Icon(Icons.star_rounded, size: iconSize, color: color),
-      ),
-    );
-  }
-
-  static Widget _starRow(
-    double rating, {
-    double iconSize = 17,
-    /// 인덱스 i마다 왼쪽으로 i배만큼 이동(겹침으로 간격 축소, 레이아웃 폭은 유지).
-    double cumulativeShiftXPerIndex = 0,
-    double translateY = 0,
-  }) {
-    final units = (rating.clamp(0.0, 5.0) * 2).round().clamp(0, 10);
-    final fullCount = units ~/ 2;
-    final hasHalf = units.isOdd;
-    final starCount = fullCount + (hasHalf ? 1 : 0);
-    if (starCount == 0) return const SizedBox.shrink();
-    final Widget row = Row(
-      mainAxisSize: MainAxisSize.min,
-      children: List.generate(starCount, (i) {
-        final isHalf = hasHalf && i == fullCount;
-        final Widget raw = isHalf
-            ? _filledHalfStarOnly(iconSize, _starOrange)
-            : Icon(Icons.star_rounded, size: iconSize, color: _starOrange);
-        if (cumulativeShiftXPerIndex == 0 && translateY == 0) return raw;
-        return Transform.translate(
-          offset: Offset(-cumulativeShiftXPerIndex * i, translateY),
-          child: raw,
-        );
-      }),
-    );
-    return row;
-  }
-
-  /// 홈 탭 리뷰 피드 카드와 동일 — 17px, 0.5점 단위는 반쪽 클립(4.5 → 별4 + 반개).
+  /// 홈 리뷰 Letterboxd 타일과 동일 — [FeedReviewRatingStars], 0.5점은 `1/2` 텍스트.
+  /// [iconSize]에 맞추려면 [FeedReviewRatingStars]의 `slotW * slotIconFraction` 역산.
   static Widget homeFeedStyleStarRow(
     double rating, {
     double iconSize = 17,
-    double cumulativeShiftXPerIndex = 0,
     double translateY = 0,
-  }) =>
-      _starRow(
-        rating,
-        iconSize: iconSize,
-        cumulativeShiftXPerIndex: cumulativeShiftXPerIndex,
-        translateY: translateY,
-      );
+    double slotIconFraction = 0.82,
+    double starOverlapPx = 0,
+  }) {
+    final r = rating.clamp(0.0, 5.0);
+    final frac = slotIconFraction.clamp(0.5, 0.98);
+    final layoutThumbWidth = 5 * iconSize / frac;
+    Widget core = FeedReviewRatingStars(
+      rating: r,
+      layoutThumbWidth: layoutThumbWidth,
+      slotIconFraction: frac,
+      starOverlapPx: starOverlapPx,
+    );
+    if (translateY != 0) {
+      core = Transform.translate(offset: Offset(0, translateY), child: core);
+    }
+    return core;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -226,7 +196,7 @@ class FeedReviewPostCard extends StatelessWidget {
                             style: GoogleFonts.notoSansKr(
                               fontSize: 15,
                               fontWeight: FontWeight.w700,
-                              color: cs.onSurface,
+                              color: AppColors.homeBoardTitleForeground(cs),
                               height: 1.25,
                             ),
                           ),
@@ -259,20 +229,13 @@ class FeedReviewPostCard extends StatelessWidget {
                           canonicalAuthor,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: GoogleFonts.notoSansKr(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                            color: cs.onSurfaceVariant,
-                          ),
+                          style: appUnifiedNicknameStyle(cs),
                         ),
                       ),
                     ),
                     Text(
                       post.timeAgo,
-                      style: GoogleFonts.notoSansKr(
-                        fontSize: 12,
-                        color: cs.onSurfaceVariant.withValues(alpha: 0.85),
-                      ),
+                      style: appUnifiedNicknameMetaTimeStyle(cs),
                     ),
                   ],
                 ),

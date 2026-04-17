@@ -20,6 +20,43 @@ import 'notification_service.dart';
 import 'review_service.dart';
 import 'user_profile_service.dart';
 
+// ── compute() 격리 실행용 top-level 함수 ────────────────────────────────────
+// (compute()는 top-level 또는 static 함수만 허용)
+
+typedef _CompressArgs = ({List<int> rawBytes, int maxEdge, int quality});
+typedef _CompressResult = ({List<int> bytes, int width, int height})?;
+
+_CompressResult _compressImageTask(_CompressArgs args) {
+  try {
+    final decoded = img.decodeImage(Uint8List.fromList(args.rawBytes));
+    if (decoded == null) return null;
+    final w = decoded.width;
+    final h = decoded.height;
+    final longest = w > h ? w : h;
+    img.Image resized = decoded;
+    if (longest > args.maxEdge) {
+      resized = w > h
+          ? img.copyResize(decoded, width: args.maxEdge)
+          : img.copyResize(decoded, height: args.maxEdge);
+    }
+    final out = img.encodeJpg(resized, quality: args.quality);
+    return (bytes: out, width: resized.width, height: resized.height);
+  } catch (_) {
+    return null;
+  }
+}
+
+List<int>? _getDimsTask(List<int> rawBytes) {
+  try {
+    final decoded = img.decodeImage(Uint8List.fromList(rawBytes));
+    return decoded != null ? [decoded.width, decoded.height] : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 /// 자유게시판 글 Firestore 저장/로드
 class PostService {
   PostService._();
@@ -43,27 +80,27 @@ class PostService {
 
   static const int _maxImageLongEdge = 1280;
   static const int _jpegQuality = 82;
+  /// 이 크기 이하 원본은 isolate 생성 비용보다 메인에서 바로 압축하는 편이 빠른 경우가 많음.
+  static const int _compressInlineMaxBytes = 220000;
 
-  /// 한 장 압축: 긴 변 1280 이하, JPEG 품질 82. 실패 시 null (원본 업로드).
-  /// XFile을 받아 content:// URI도 처리.
+  /// 한 장 압축: 긴 변 1280 이하, JPEG 품질 82.
+  /// 큰 이미지는 [compute] 격리, 작은 이미지는 메인에서 즉시 처리.
   Future<({List<int> bytes, int width, int height})?> _compressImage(XFile xfile) async {
     try {
-      final bytes = await xfile.readAsBytes();
-      final decoded = img.decodeImage(Uint8List.fromList(bytes));
-      if (decoded == null) return null;
-      final w = decoded.width;
-      final h = decoded.height;
-      final maxEdge = w > h ? w : h;
-      img.Image resized = decoded;
-      if (maxEdge > _maxImageLongEdge) {
-        if (w > h) {
-          resized = img.copyResize(decoded, width: _maxImageLongEdge);
-        } else {
-          resized = img.copyResize(decoded, height: _maxImageLongEdge);
-        }
+      final rawBytes = await xfile.readAsBytes(); // IO — await OK on main
+      if (rawBytes.isEmpty) return null;
+      final args = (
+        rawBytes: rawBytes,
+        maxEdge: _maxImageLongEdge,
+        quality: _jpegQuality,
+      );
+      if (rawBytes.length <= _compressInlineMaxBytes) {
+        return _compressImageTask(args);
       }
-      final out = img.encodeJpg(resized, quality: _jpegQuality);
-      return (bytes: out, width: resized.width, height: resized.height);
+      return await compute<_CompressArgs, _CompressResult>(
+        _compressImageTask,
+        args,
+      );
     } catch (_) {
       return null;
     }
@@ -142,14 +179,8 @@ class PostService {
     );
   }
 
-  Future<List<int>?> _getDimensionsFromBytes(List<int> bytes) async {
-    try {
-      final decoded = img.decodeImage(Uint8List.fromList(bytes));
-      return decoded != null ? [decoded.width, decoded.height] : null;
-    } catch (_) {
-      return null;
-    }
-  }
+  Future<List<int>?> _getDimensionsFromBytes(List<int> bytes) =>
+      compute<List<int>, List<int>?>(_getDimsTask, bytes).catchError((_) => null);
 
   /// 댓글 첨부 이미지/GIF 한 장 업로드 후 다운로드 URL 반환. 실패 시 null.
   /// posts/ 경로 사용 (기존 Storage 규칙으로 허용, comment_ 접두사로 구분)
@@ -353,6 +384,22 @@ class PostService {
     return lastResult;
   }
 
+  /// [Post.toMap]과 동일 — Firestore는 배열 원소로 또 다른 배열을 둘 수 없음.
+  static List<Map<String, int>>? _imageDimensionsForFirestore(
+    List<List<int>>? dims,
+  ) {
+    if (dims == null || dims.isEmpty) return null;
+    final out = <Map<String, int>>[];
+    for (final d in dims) {
+      if (d.length < 2) continue;
+      final w = d[0];
+      final h = d[1];
+      if (w <= 0 || h <= 0) continue;
+      out.add({'width': w, 'height': h});
+    }
+    return out.isEmpty ? null : out;
+  }
+
   /// 글 수정. 제목·내용·미디어·게시판·리뷰 메타 등 저장 필드 업데이트.
   Future<Post?> updatePost(Post post) async {
     if (post.id.isEmpty) return null;
@@ -379,7 +426,12 @@ class PostService {
         updateData['dramaThumbnail'] = post.dramaThumbnail;
       }
       if (post.rating != null) updateData['rating'] = post.rating;
-      if (post.imageDimensions != null) updateData['imageDimensions'] = post.imageDimensions;
+      final dimsForFs = _imageDimensionsForFirestore(post.imageDimensions);
+      if (dimsForFs != null) {
+        updateData['imageDimensions'] = dimsForFs;
+      } else if (post.imageUrls.isEmpty) {
+        updateData['imageDimensions'] = FieldValue.delete();
+      }
       if (post.videoUrl != null) updateData['videoUrl'] = post.videoUrl;
       if (post.videoThumbnailUrl != null) updateData['videoThumbnailUrl'] = post.videoThumbnailUrl;
       if (post.isGif != null) updateData['isGif'] = post.isGif;
@@ -550,23 +602,103 @@ class PostService {
   /// 글 하나 불러오기 (최신 데이터). createdAt 있으면 timeAgo 계산. [locale]이 있으면 해당 언어로 timeAgo 표시.
   Future<Post?> getPost(String postId, [String? locale]) async {
     if (postId.isEmpty) return null;
+    final uid = AuthService.instance.currentUser.value?.uid;
     try {
-      final doc = await _col.doc(postId).get();
-      if (!doc.exists) return null;
-      final data = doc.data()!;
-      data['id'] = doc.id;
+      // Fire all reads in parallel — postId is known upfront so we don't need
+      // the main doc result before starting the like/dislike subcollection reads.
+      // This collapses two sequential round-trips into one parallel batch.
+      final futures = <Future>[
+        _col.doc(postId).get(),
+        if (uid != null) _postLikeDoc(postId, uid).get(),
+        if (uid != null) _postDislikeDoc(postId, uid).get(),
+      ];
+      final results = await Future.wait(futures);
+      final docSnap =
+          results[0] as DocumentSnapshot<Map<String, dynamic>>;
+      if (!docSnap.exists) return null;
+      final data = docSnap.data()!;
+      data['id'] = docSnap.id;
       final createdAt = data['createdAt'];
       if (createdAt is Timestamp) {
         data['timeAgo'] = formatTimeAgo(createdAt.toDate(), locale);
       }
-      final post = Post.fromMap(_normalizePostMap(data));
-      final hydrated = await hydratePostsViewerVotes([post]);
-      return hydrated.isEmpty ? post : hydrated.first;
+      var post = Post.fromMap(_normalizePostMap(data));
+      if (uid != null && results.length >= 3) {
+        final likeSnap =
+            results[1] as DocumentSnapshot<Map<String, dynamic>>;
+        final dislikeSnap =
+            results[2] as DocumentSnapshot<Map<String, dynamic>>;
+        var hasLike = likeSnap.exists || post.likedBy.contains(uid);
+        var hasDislike =
+            dislikeSnap.exists || post.dislikedBy.contains(uid);
+        if (hasLike && hasDislike) {
+          if (likeSnap.exists && !dislikeSnap.exists) {
+            hasDislike = false;
+          } else if (!likeSnap.exists && dislikeSnap.exists) {
+            hasLike = false;
+          } else {
+            hasDislike = false;
+          }
+        }
+        var lb = post.likedBy.where((u) => u != uid).toList();
+        var db = post.dislikedBy.where((u) => u != uid).toList();
+        if (hasLike) lb = [...lb, uid];
+        if (hasDislike) db = [...db, uid];
+        post = post.copyWith(likedBy: lb, dislikedBy: db);
+      }
+      return post;
     } catch (e, st) {
       debugPrint('getPost 실패: $e');
       debugPrint('$st');
       return null;
     }
+  }
+
+  /// 여러 포스트 ID의 likeCount·commentCount·isLiked를 한 번에 조회 (워치 리뷰 목록 표시용).
+  /// Firestore whereIn은 최대 30개 → 청크로 분할.
+  Future<Map<String, ({int likeCount, int commentCount, bool isLiked})>>
+      batchGetPostMeta(
+    List<String> postIds,
+  ) async {
+    final ids = postIds.where((e) => e.isNotEmpty).toSet().toList();
+    if (ids.isEmpty) return {};
+    final uid = AuthService.instance.currentUser.value?.uid;
+    final result =
+        <String, ({int likeCount, int commentCount, bool isLiked})>{};
+    const chunkSize = 30;
+    final futures = <Future<void>>[];
+    for (var i = 0; i < ids.length; i += chunkSize) {
+      final chunk = ids.sublist(i, (i + chunkSize).clamp(0, ids.length));
+      futures.add(
+        _col
+            .where(FieldPath.documentId, whereIn: chunk)
+            .get()
+            .then((snap) {
+              for (final doc in snap.docs) {
+                final d = doc.data();
+                final lc = (d['likeCount'] as num?)?.toInt() ?? 0;
+                // Use the larger of the counter field vs the actual array length
+                // in case the counter is stale (e.g. incremented out-of-sync).
+                final ccCounter = (d['comments'] as num?)?.toInt() ?? 0;
+                final ccList = (d['commentsList'] as List?)?.length ?? 0;
+                final cc = ccList > ccCounter ? ccList : ccCounter;
+                final likedByRaw = d['likedBy'];
+                final likedBy = (likedByRaw is List)
+                    ? likedByRaw.map((e) => e.toString()).toList()
+                    : <String>[];
+                final liked = uid != null && likedBy.contains(uid);
+                result[doc.id] = (
+                  likeCount: lc,
+                  commentCount: cc,
+                  isLiked: liked,
+                );
+              }
+            })
+            .catchError((Object _) {}),
+      );
+    }
+    await Future.wait(futures);
+    return result;
   }
 
   /// 같은 유저·같은 드라마의 DramaFeed 리뷰 글(`posts`, type=review) 중 최신 1건.
@@ -626,6 +758,8 @@ class PostService {
     if (uid == null) return (createdNewPost: false, postId: null);
     final did = dramaId.trim();
     if (did.isEmpty) return (createdNewPost: false, postId: null);
+    // 별점+리뷰글 둘 다 있어야 홈탭 리뷰 게시판에 게시글 생성
+    if (comment.trim().isEmpty) return (createdNewPost: false, postId: null);
     try {
       await DramaListService.instance.loadFromAsset();
       await UserProfileService.instance.loadIfNeeded();
@@ -694,6 +828,78 @@ class PostService {
       return (createdNewPost: saved != null, postId: saved?.id);
     } catch (e, st) {
       debugPrint('syncReviewFeedPostFromDramaDetail: $e\n$st');
+      return (createdNewPost: false, postId: null);
+    }
+  }
+
+  /// 드라마 상세 Watch 화면 `+` 저장 시 — 항상 새 피드 글(`posts`, type=review).
+  /// [rating]이 0이면 봤어요만; 본문은 [comment] (별 없이 본문만 있으면 호출하지 말 것).
+  Future<({bool createdNewPost, String? postId})> addDramaWatchActivityFeedPost({
+    required String dramaId,
+    required String dramaTitle,
+    required double rating,
+    required String comment,
+    required String reviewsTabLabel,
+    required String timeSoonLabel,
+  }) async {
+    final uid = AuthService.instance.currentUser.value?.uid;
+    if (uid == null) return (createdNewPost: false, postId: null);
+    final did = dramaId.trim();
+    if (did.isEmpty) return (createdNewPost: false, postId: null);
+    final trimmed = comment.trim();
+    if (trimmed.isNotEmpty && rating <= 0) {
+      return (createdNewPost: false, postId: null);
+    }
+    try {
+      await DramaListService.instance.loadFromAsset();
+      await UserProfileService.instance.loadIfNeeded();
+      await LevelService.instance.loadIfNeeded();
+      final author = await UserProfileService.instance.getAuthorForPost();
+      final rawCountry =
+          UserProfileService.instance.signupCountryNotifier.value?.trim().toLowerCase();
+      final countryOr =
+          (rawCountry != null && rawCountry.isNotEmpty) ? rawCountry : 'us';
+      final titleText = dramaTitle.trim().isNotEmpty
+          ? dramaTitle.trim()
+          : DramaListService.instance.getDisplayTitle(did, countryOr);
+      final thumb =
+          DramaListService.instance.getDisplayImageUrl(did, countryOr) ?? '';
+
+      final tempId = DateTime.now().millisecondsSinceEpoch.toString();
+      final post = Post(
+        id: tempId,
+        title: titleText.isNotEmpty ? titleText : did,
+        subreddit: reviewsTabLabel,
+        author: author,
+        timeAgo: timeSoonLabel,
+        votes: 0,
+        comments: 0,
+        body: trimmed.isNotEmpty ? trimmed : null,
+        authorLevel: LevelService.instance.currentLevel.clamp(1, 30),
+        category: 'free',
+        type: 'review',
+        dramaId: did,
+        dramaTitle: titleText.isNotEmpty ? titleText : null,
+        dramaThumbnail: thumb.isNotEmpty ? thumb : null,
+        rating: rating > 0 ? rating : null,
+        hasSpoiler: false,
+        isLiked: false,
+        isFirstWatch: true,
+        tags: const [],
+        allowReply: true,
+        authorPhotoUrl:
+            UserProfileService.instance.profileImageUrlNotifier.value,
+        authorAvatarColorIndex:
+            UserProfileService.instance.avatarColorNotifier.value,
+        country: countryOr,
+      );
+      final (saved, _) = await addPostWithRetry(post);
+      if (saved != null) {
+        LevelService.instance.addPoints(5);
+      }
+      return (createdNewPost: saved != null, postId: saved?.id);
+    } catch (e, st) {
+      debugPrint('addDramaWatchActivityFeedPost: $e\n$st');
       return (createdNewPost: false, postId: null);
     }
   }
@@ -1159,14 +1365,31 @@ class PostService {
   }
 
   /// 프로필 별점 분포: `posts`(type=review, authorUid) + `drama_reviews`(uid). dramaId 기준 중복 제거.
+  /// 두 쿼리를 병렬 실행하여 순차 대기 병목 제거.
   Future<ProfileRatingHistogram> aggregateReviewRatingsForUid(String uid) async {
     if (uid.isEmpty) return ProfileRatingHistogram.empty();
 
+    // 두 Firestore 쿼리를 동시에 시작
+    final postSnapF = _col.where('authorUid', isEqualTo: uid).get();
+    final drSnapF =
+        _firestore.collection('drama_reviews').where('uid', isEqualTo: uid).get();
+
+    QuerySnapshot<Map<String, dynamic>>? postSnap;
+    QuerySnapshot<Map<String, dynamic>>? drSnap;
+
+    await Future.wait([
+      postSnapF.then((s) { postSnap = s; }).catchError((Object e, StackTrace st) {
+        debugPrint('aggregateReviewRatingsForUid posts: $e\n$st');
+      }),
+      drSnapF.then((s) { drSnap = s; }).catchError((Object e, StackTrace st) {
+        debugPrint('aggregateReviewRatingsForUid drama_reviews: $e\n$st');
+      }),
+    ]);
+
     final dramaIdToRating = <String, double>{};
 
-    try {
-      final postSnap = await _col.where('authorUid', isEqualTo: uid).get();
-      for (final doc in postSnap.docs) {
+    if (postSnap != null) {
+      for (final doc in postSnap!.docs) {
         final data = doc.data();
         final type = (data['type'] as String?)?.toLowerCase();
         if (type != 'review') continue;
@@ -1176,13 +1399,10 @@ class PostService {
         final key = dramaId.isNotEmpty ? dramaId : 'post_${doc.id}';
         dramaIdToRating[key] = r;
       }
-    } catch (e, st) {
-      debugPrint('aggregateReviewRatingsForUid posts: $e\n$st');
     }
 
-    try {
-      final drSnap = await _firestore.collection('drama_reviews').where('uid', isEqualTo: uid).get();
-      for (final doc in drSnap.docs) {
+    if (drSnap != null) {
+      for (final doc in drSnap!.docs) {
         final data = doc.data();
         final dramaId = (data['dramaId'] as String?)?.trim() ?? '';
         if (dramaId.isEmpty) continue;
@@ -1190,8 +1410,6 @@ class PostService {
         final r = (data['rating'] as num?)?.toDouble() ?? 0;
         if (r > 0) dramaIdToRating[dramaId] = r;
       }
-    } catch (e, st) {
-      debugPrint('aggregateReviewRatingsForUid drama_reviews: $e\n$st');
     }
 
     return ProfileRatingHistogram.fromRatings(dramaIdToRating.values.toList());

@@ -4,6 +4,7 @@ import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../models/post.dart';
 import '../widgets/feed_post_card.dart';
+import '../widgets/talk_ask_feed_list_row.dart';
 import '../widgets/country_scope.dart';
 import '../widgets/community_board_tabs.dart' show PostSearchScope, postSearchScopeLabel, postSearchScopeOrder;
 
@@ -31,6 +32,7 @@ class QuestionBoardTab extends StatefulWidget {
     this.feedLoadingMore = false,
     this.feedHasMore = true,
     this.feedAuthorAvatarSize,
+    this.useCardFeedLayout = false,
   });
 
   final List<Post> posts;
@@ -49,6 +51,7 @@ class QuestionBoardTab extends StatefulWidget {
   final bool feedLoadingMore;
   final bool feedHasMore;
   final double? feedAuthorAvatarSize;
+  final bool useCardFeedLayout;
 
   @override
   State<QuestionBoardTab> createState() => _QuestionBoardTabState();
@@ -210,17 +213,32 @@ class _QuestionBoardTabState extends State<QuestionBoardTab> {
       itemBuilder: (context, index) {
         if (index < posts.length) {
           final post = posts[index];
+          if (widget.useCardFeedLayout) {
+            return RepaintBoundary(
+              child: FeedPostCard(
+                key: ValueKey(post.id),
+                post: post,
+                currentUserAuthor: currentUserAuthor,
+                onPostUpdated: onPostUpdated,
+                onPostDeleted: onPostDeleted,
+                tabName: tabName,
+                onTap: widget.onPostTap != null
+                    ? () => widget.onPostTap!(post)
+                    : null,
+                onUserBlocked: widget.onUserBlocked,
+                authorAvatarSize: widget.feedAuthorAvatarSize,
+              ),
+            );
+          }
           return RepaintBoundary(
-            child: FeedPostCard(
-              key: ValueKey(post.id),
+            key: ValueKey('ask_list_${post.id}'),
+            child: TalkAskFeedListRow(
               post: post,
-              currentUserAuthor: currentUserAuthor,
-              onPostUpdated: onPostUpdated,
-              onPostDeleted: onPostDeleted,
-              tabName: tabName,
-              onTap: widget.onPostTap != null ? () => widget.onPostTap!(post) : null,
-              onUserBlocked: widget.onUserBlocked,
-              authorAvatarSize: widget.feedAuthorAvatarSize,
+              colorScheme: cs,
+              showLeadingDivider: index > 0,
+              onTap: widget.onPostTap != null
+                  ? () => widget.onPostTap!(post)
+                  : null,
             ),
           );
         }

@@ -64,6 +64,25 @@ SystemUiOverlayStyle listsStyleSubpageSystemOverlay(
   );
 }
 
+/// `< 헤더` 서브페이지 공통 — 오른쪽 스와이프로 뒤로가기.
+class ListsStyleSwipeBack extends StatelessWidget {
+  const ListsStyleSwipeBack({super.key, required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onHorizontalDragEnd: (details) {
+        if ((details.primaryVelocity ?? 0) > 200) {
+          Navigator.maybePop(context);
+        }
+      },
+      child: child,
+    );
+  }
+}
+
 /// [ListsScreen]·워치리스트 헤더 trailing 공통 — 24×24 다크 칩 + 흰색 십자.
 class ListsStyleSubpageHeaderAddButton extends StatelessWidget {
   const ListsStyleSubpageHeaderAddButton({super.key, required this.onTap});

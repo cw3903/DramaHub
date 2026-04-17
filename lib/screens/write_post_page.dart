@@ -1,3 +1,4 @@
+import 'dart:async' show unawaited;
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -144,9 +145,19 @@ class _WritePostPageState extends State<WritePostPage> {
     }
     _reviewBodyController.addListener(_onReviewFieldChanged);
     _dramaSearchController.addListener(_onReviewFieldChanged);
+    _titleController.addListener(_onTitleCounterChanged);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      // 제출 시 getAuthorForPost 대기 시간 줄이기
+      unawaited(UserProfileService.instance.loadIfNeeded());
+    });
   }
 
   void _onReviewFieldChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _onTitleCounterChanged() {
     if (mounted) setState(() {});
   }
 
@@ -169,6 +180,7 @@ class _WritePostPageState extends State<WritePostPage> {
     }
     _reviewBodyController.removeListener(_onReviewFieldChanged);
     _dramaSearchController.removeListener(_onReviewFieldChanged);
+    _titleController.removeListener(_onTitleCounterChanged);
     _titleController.dispose();
     _bodyController.dispose();
     _linkController.dispose();
@@ -519,8 +531,6 @@ class _WritePostPageState extends State<WritePostPage> {
 
     setState(() => _isSubmitting = true);
 
-    await Future.delayed(const Duration(milliseconds: 400));
-
     try {
     // 영상/GIF 업로드 모드 (클립 조정에서 진입)
     if (_isVideoMode && _videoPathForUpload != null) {
@@ -698,7 +708,12 @@ class _WritePostPageState extends State<WritePostPage> {
       return;
     }
 
-    // 이미지 업로드 (Firebase Storage) + 크기 저장 (레딧처럼 가로 꽉, 세로는 비율에 따라)
+    // 이미지 업로드 + getAuthorForPost 병렬 실행
+    // - 수정 모드는 author 정보를 사용하지 않으므로 생략
+    final authorFuture = _isEditMode
+        ? Future.value('')
+        : UserProfileService.instance.getAuthorForPost();
+
     List<String> imageUrls = [];
     List<List<int>>? imageDimensions;
     if (_pickedImages.isNotEmpty) {
@@ -724,7 +739,8 @@ class _WritePostPageState extends State<WritePostPage> {
       }
     }
 
-    final postAuthor = await UserProfileService.instance.getAuthorForPost();
+    // 이미지 업로드 완료 후 author 결과 수령 (병렬로 이미 실행 중이었으므로 대기 최소)
+    final postAuthor = await authorFuture;
 
     final linkTrimmed = _linkController.text.trim();
     if (_isEditMode && widget.initialPost != null) {
@@ -753,9 +769,7 @@ class _WritePostPageState extends State<WritePostPage> {
       final result = await PostService.instance.updatePost(updated);
       if (!mounted) return;
       if (result != null) {
-        try {
-          await _syncReviewWatchHistory();
-        } catch (_) {}
+        unawaited(_syncReviewWatchHistory().catchError((_) {}));
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(s.get('postEditSuccess'), style: GoogleFonts.notoSansKr()), behavior: SnackBarBehavior.floating),
         );
@@ -799,9 +813,7 @@ class _WritePostPageState extends State<WritePostPage> {
       country: UserProfileService.instance.signupCountryNotifier.value ?? LocaleService.instance.locale,
     );
 
-    try {
-      await _syncReviewWatchHistory();
-    } catch (_) {}
+    unawaited(_syncReviewWatchHistory().catchError((_) {}));
 
     if (!mounted) return;
     Navigator.pop(context, post);

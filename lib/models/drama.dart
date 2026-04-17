@@ -71,6 +71,8 @@ class DramaReview {
     this.authorPhotoUrl,
     this.writtenAt,
     this.authorUid,
+    /// DramaFeed `posts` 문서 id (없으면 [id]로 피드 조회 시도)
+    this.feedPostId,
   });
   final String userName;
   final double rating;
@@ -88,6 +90,8 @@ class DramaReview {
   final String? authorPhotoUrl;
   /// `drama_reviews` 문서의 `uid`
   final String? authorUid;
+  /// 홈 리뷰 피드 `posts`와 1:1일 때만 채워짐
+  final String? feedPostId;
 }
 
 /// 드라마 상세 정보

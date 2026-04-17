@@ -8,6 +8,9 @@ import 'auth_service.dart';
 class WatchedDramaItem {
   const WatchedDramaItem({
     required this.id,
+    this.dramaId,
+    this.rating,
+    this.comment,
     required this.title,
     required this.subtitle,
     required this.views,
@@ -16,33 +19,52 @@ class WatchedDramaItem {
   });
 
   final String id;
+
+  /// 실제 드라마 id. 신규 저장은 분리 저장하고, 구버전 데이터는 비어 있을 수 있음.
+  final String? dramaId;
+  final double? rating;
+  final String? comment;
   final String title;
   final String subtitle;
   final String views;
   final DateTime watchedAt;
+
   /// 드라마 썸네일 이미지 URL (프로필 카드 표시용)
   final String? imageUrl;
 
+  /// 구버전(엔트리 id = 드라마 id)과 신버전(엔트리 id 분리) 모두 지원.
+  String get dramaKey {
+    final d = dramaId?.trim();
+    if (d != null && d.isNotEmpty) return d;
+    return id;
+  }
+
   Map<String, dynamic> toMap() => {
-        'id': id,
-        'title': title,
-        'subtitle': subtitle,
-        'views': views,
-        'watchedAt': watchedAt.millisecondsSinceEpoch,
-        if (imageUrl != null && imageUrl!.isNotEmpty) 'imageUrl': imageUrl,
-      };
+    'id': id,
+    if (dramaId != null && dramaId!.isNotEmpty) 'dramaId': dramaId,
+    if (rating != null) 'rating': rating,
+    if (comment != null && comment!.isNotEmpty) 'comment': comment,
+    'title': title,
+    'subtitle': subtitle,
+    'views': views,
+    'watchedAt': watchedAt.millisecondsSinceEpoch,
+    if (imageUrl != null && imageUrl!.isNotEmpty) 'imageUrl': imageUrl,
+  };
 
   static WatchedDramaItem fromMap(Map<String, dynamic> map) => WatchedDramaItem(
-        id: map['id'] as String? ?? '',
-        title: map['title'] as String? ?? '',
-        subtitle: map['subtitle'] as String? ?? '',
-        views: map['views'] as String? ?? '0',
-        watchedAt: DateTime.fromMillisecondsSinceEpoch(
-          map['watchedAt'] as int? ?? 0,
-          isUtc: false,
-        ),
-        imageUrl: map['imageUrl'] as String?,
-      );
+    id: map['id'] as String? ?? '',
+    dramaId: map['dramaId'] as String?,
+    rating: (map['rating'] as num?)?.toDouble(),
+    comment: map['comment'] as String?,
+    title: map['title'] as String? ?? '',
+    subtitle: map['subtitle'] as String? ?? '',
+    views: map['views'] as String? ?? '0',
+    watchedAt: DateTime.fromMillisecondsSinceEpoch(
+      map['watchedAt'] as int? ?? 0,
+      isUtc: false,
+    ),
+    imageUrl: map['imageUrl'] as String?,
+  );
 }
 
 /// 숏폼 시청 기록 관리 (SharedPreferences 로컬 캐시 + Firestore 영구 저장, 게시글처럼 DB화)
@@ -113,13 +135,22 @@ class WatchHistoryService {
     _persist(list);
   }
 
-  static WatchedDramaItem? _itemFromFirestore(String id, Map<String, dynamic> data) {
+  static WatchedDramaItem? _itemFromFirestore(
+    String id,
+    Map<String, dynamic> data,
+  ) {
     final watchedAt = data['watchedAt'];
     final at = watchedAt is Timestamp
         ? watchedAt.toDate()
-        : DateTime.fromMillisecondsSinceEpoch((watchedAt as num?)?.toInt() ?? 0, isUtc: false);
+        : DateTime.fromMillisecondsSinceEpoch(
+            (watchedAt as num?)?.toInt() ?? 0,
+            isUtc: false,
+          );
     return WatchedDramaItem(
       id: id,
+      dramaId: data['dramaId'] as String? ?? data['id'] as String?,
+      rating: (data['rating'] as num?)?.toDouble(),
+      comment: data['comment'] as String?,
       title: data['title'] as String? ?? '',
       subtitle: data['subtitle'] as String? ?? '',
       views: data['views'] as String? ?? '0',
@@ -131,7 +162,10 @@ class WatchHistoryService {
   Future<void> _persist(List<WatchedDramaItem> list) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_key, jsonEncode(list.map((e) => e.toMap()).toList()));
+      await prefs.setString(
+        _key,
+        jsonEncode(list.map((e) => e.toMap()).toList()),
+      );
     } catch (_) {}
   }
 
@@ -210,17 +244,25 @@ class WatchHistoryService {
     }
   }
 
-  /// 숏폼 시청 시 호출 (중복 시 최신으로 갱신). 로그인 시 Firestore에도 저장.
+  /// 숏폼 시청 시 호출. 같은 작품이라도 저장할 때마다 새 다이어리 엔트리를 쌓는다.
   Future<void> add({
     required String id,
     required String title,
     String subtitle = '',
     String views = '0',
     String? imageUrl,
+    double? rating,
+    String? comment,
   }) async {
     final now = DateTime.now();
+    final dramaId = id.trim();
+    if (dramaId.isEmpty) return;
+    final entryId = '${dramaId}_${now.microsecondsSinceEpoch}';
     final item = WatchedDramaItem(
-      id: id,
+      id: entryId,
+      dramaId: dramaId,
+      rating: rating,
+      comment: comment?.trim(),
       title: title,
       subtitle: subtitle,
       views: views,
@@ -228,7 +270,6 @@ class WatchHistoryService {
       imageUrl: imageUrl,
     );
     var list = List<WatchedDramaItem>.from(listNotifier.value);
-    list.removeWhere((e) => e.id == id);
     list.insert(0, item);
     if (list.length > _maxItems) {
       list = list.sublist(0, _maxItems);
@@ -238,21 +279,29 @@ class WatchHistoryService {
 
     final uid = _uid;
     if (uid != null) {
-      _watchCol.doc(id).set({
-        'id': id,
-        'title': title,
-        'subtitle': subtitle,
-        'views': views,
-        'watchedAt': Timestamp.fromDate(now),
-        if (imageUrl != null && imageUrl.isNotEmpty) 'imageUrl': imageUrl,
-      }).timeout(const Duration(seconds: 8)).catchError((e) {
-        debugPrint('WatchHistoryService add Firestore: $e');
-      });
+      _watchCol
+          .doc(entryId)
+          .set({
+            'id': dramaId,
+            'dramaId': dramaId,
+            if (rating != null) 'rating': rating,
+            if (comment != null && comment.trim().isNotEmpty)
+              'comment': comment.trim(),
+            'title': title,
+            'subtitle': subtitle,
+            'views': views,
+            'watchedAt': Timestamp.fromDate(now),
+            if (imageUrl != null && imageUrl.isNotEmpty) 'imageUrl': imageUrl,
+          })
+          .timeout(const Duration(seconds: 8))
+          .catchError((e) {
+            debugPrint('WatchHistoryService add Firestore: $e');
+          });
     }
   }
 
   bool isWatched(String id) {
-    return listNotifier.value.any((e) => e.id == id);
+    return listNotifier.value.any((e) => e.dramaKey == id);
   }
 
   Future<void> remove(String id) async {

@@ -1,3 +1,4 @@
+import 'dart:async' show unawaited;
 import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
@@ -29,6 +30,7 @@ import 'profile_photo_preview_page.dart';
 import 'lists_screen.dart';
 import '../widgets/lists_style_subpage_app_bar.dart';
 import '../widgets/app_delete_confirm_dialog.dart';
+import '../widgets/review_body_lines_indicator.dart';
 import 'watchlist_screen.dart';
 import 'language_select_screen.dart';
 import 'user_posts_screen.dart';
@@ -519,12 +521,26 @@ class _ProfileStatRow extends StatefulWidget {
 
 class _ProfileStatRowState extends State<_ProfileStatRow> {
   late Future<ProfileStatRowData> _statsFuture;
+  // extras가 늦게 도착하면 didUpdateWidget에서 반영
+  int? _reviewCountFromExtras;
 
   @override
   void initState() {
     super.initState();
+    _reviewCountFromExtras = widget.reviewCountOverride;
     _statsFuture = _load();
     _profileStatsRefreshNotifier.addListener(_onRefresh);
+  }
+
+  @override
+  void didUpdateWidget(_ProfileStatRow old) {
+    super.didUpdateWidget(old);
+    final newOverride = widget.reviewCountOverride;
+    if (newOverride != null && newOverride != _reviewCountFromExtras) {
+      _reviewCountFromExtras = newOverride;
+      // 리뷰 수만 업데이트 — 재쿼리 없이 setState로 build만 갱신
+      if (mounted) setState(() {});
+    }
   }
 
   @override
@@ -543,26 +559,20 @@ class _ProfileStatRowState extends State<_ProfileStatRow> {
     if (statsUid != null && statsUid.isNotEmpty) {
       final nick = w.statsDisplayNickname?.trim() ?? '';
 
-      // posts + followCount + (review if not overridden) 병렬 실행
-      // posts + followCount + (review if not overridden) 병렬 실행
+      // 포스트 수 + 팔로잉 수를 병렬 로드.
+      // 댓글은 UserPostsScreen 진입 시 lazy 로드 (getCommentsByAuthorUid → getPostsAllPages 병목 제거).
+      // 리뷰 수는 extras에서 오거나 직접 fetch.
       final postsF = PostService.instance.getPostsByAuthorUid(statsUid);
-      final commentsF = PostService.instance.getCommentsByAuthorUid(statsUid);
       final fcF = FollowService.instance.getFollowingCountOnce(statsUid);
-      final reviewsF = w.reviewCountOverride == null
+      final reviewsF = (_reviewCountFromExtras == null)
           ? ReviewService.instance.fetchReviewsForUserUid(statsUid)
           : Future.value(<MyReviewItem>[]);
 
-      final parallel = await Future.wait([postsF, commentsF, fcF, reviewsF]);
+      final parallel = await Future.wait([postsF, fcF, reviewsF]);
 
       final posts = parallel[0] as List<Post>;
-      var comments = parallel[1] as List<({Post post, PostComment comment})>;
-      final fc = parallel[2] as int;
-      final reviews = parallel[3] as List<MyReviewItem>;
-
-      // 댓글이 없고 닉네임 기반 fallback 필요 시 추가 조회
-      if (comments.isEmpty && nick.isNotEmpty && nick != 'Member') {
-        comments = await PostService.instance.getCommentsByAuthor(nick);
-      }
+      final fc = parallel[1] as int;
+      final reviews = parallel[2] as List<MyReviewItem>;
 
       String postAuthor;
       String commentAuthor;
@@ -583,12 +593,12 @@ class _ProfileStatRowState extends State<_ProfileStatRow> {
         postAuthor: postAuthor,
         commentAuthor: commentAuthor,
         postCount: posts.length,
-        commentCount: comments.length,
-        reviewCount: w.reviewCountOverride ?? reviews.length,
+        commentCount: 0, // UserPostsScreen 진입 시 authorUid로 lazy 로드
+        reviewCount: _reviewCountFromExtras ?? reviews.length,
         followCountOverride: fc,
         viewAuthorUid: statsUid,
         posts: posts,
-        commentItems: comments,
+        commentItems: null, // lazy
       );
     }
     final base = await UserProfileService.instance.getAuthorBaseName();
@@ -631,14 +641,17 @@ class _ProfileStatRowState extends State<_ProfileStatRow> {
               ? FutureBuilder<ProfileStatRowData>(
                   future: _statsFuture,
                   builder: (context, snap) {
-                    final reviewCount = snap.data?.reviewCount ?? 0;
+                    // extras override가 있으면 우선 사용, 없으면 future 결과
+                    final reviewCount =
+                        _reviewCountFromExtras ??
+                        snap.data?.reviewCount ??
+                        0;
                     final uid = w.statsForUid!;
                     final disp = w.statsDisplayNickname?.trim();
                     return _StatCard(
                       icon: LucideIcons.star,
                       label: s.get('tabReviews'),
                       count: reviewCount,
-                      loading: snap.connectionState == ConnectionState.waiting,
                       onTap: () {
                         Navigator.push<void>(
                           context,
@@ -690,7 +703,6 @@ class _ProfileStatRowState extends State<_ProfileStatRow> {
                 icon: LucideIcons.file_text,
                 label: s.get('userPostsTabPosts'),
                 count: postCount,
-                loading: snap.connectionState == ConnectionState.waiting,
                 onTap: () {
                   final nick = snap.data?.commentAuthor ?? '';
                   final nameForScreen =
@@ -722,16 +734,6 @@ class _ProfileStatRowState extends State<_ProfileStatRow> {
             builder: (context, snap) {
               final w = widget;
               if (w.statsForUid != null) {
-                if (snap.connectionState != ConnectionState.done) {
-                  return _StatCard(
-                    icon: LucideIcons.user_plus,
-                    label: s.get('profileStatFollow'),
-                    count: 0,
-                    loading: true,
-                    onTap: () {},
-                    isLight: true,
-                  );
-                }
                 final fc = snap.data?.followCountOverride ?? 0;
                 final uid = w.statsForUid!;
                 final disp = w.statsDisplayNickname?.trim().isNotEmpty == true
@@ -991,47 +993,64 @@ class _OtherUserProfileScreenState extends State<_OtherUserProfileScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
-                              Align(
-                                alignment: Alignment.center,
-                                child: Container(
-                                  width: 80,
-                                  height: 80,
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: hasPhoto
-                                        ? cs.surfaceContainerHighest
-                                        : (p.avatarColorIndex != null
-                                              ? UserProfileService.bgColorFromIndex(
-                                                  p.avatarColorIndex!,
-                                                )
-                                              : cs.surfaceContainerHighest),
-                                    border: Border.all(
-                                      color: cs.outline.withValues(alpha: 0.4),
-                                      width: 2,
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  Expanded(
+                                    child: Align(
+                                      alignment: Alignment.centerRight,
+                                      child: _OtherProfileFollowButton(
+                                        targetUid: p.uid,
+                                        targetNickname: p.displayNickname,
+                                        targetPhotoUrl: p.profileImageUrl,
+                                        cs: cs,
+                                      ),
                                     ),
-                                    image: hasPhoto
-                                        ? DecorationImage(
-                                            image: CachedNetworkImageProvider(
-                                              p.profileImageUrl!,
-                                            ),
-                                            fit: BoxFit.cover,
-                                          )
-                                        : null,
                                   ),
-                                  child: hasPhoto
-                                      ? null
-                                      : Icon(
-                                          Icons.person,
-                                          size: 44,
-                                          color: p.avatarColorIndex != null
-                                              ? UserProfileService.iconColorFromIndex(
-                                                  p.avatarColorIndex!,
-                                                )
-                                              : cs.onSurfaceVariant.withValues(
-                                                  alpha: 0.6,
-                                                ),
-                                        ),
-                                ),
+                                  const SizedBox(width: 16),
+                                  Container(
+                                    width: 80,
+                                    height: 80,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: hasPhoto
+                                          ? cs.surfaceContainerHighest
+                                          : (p.avatarColorIndex != null
+                                                ? UserProfileService.bgColorFromIndex(
+                                                    p.avatarColorIndex!,
+                                                  )
+                                                : cs.surfaceContainerHighest),
+                                      border: Border.all(
+                                        color: cs.outline.withValues(alpha: 0.4),
+                                        width: 2,
+                                      ),
+                                      image: hasPhoto
+                                          ? DecorationImage(
+                                              image: CachedNetworkImageProvider(
+                                                p.profileImageUrl!,
+                                              ),
+                                              fit: BoxFit.cover,
+                                            )
+                                          : null,
+                                    ),
+                                    child: hasPhoto
+                                        ? null
+                                        : Icon(
+                                            Icons.person,
+                                            size: 44,
+                                            color: p.avatarColorIndex != null
+                                                ? UserProfileService.iconColorFromIndex(
+                                                    p.avatarColorIndex!,
+                                                  )
+                                                : cs.onSurfaceVariant.withValues(
+                                                    alpha: 0.6,
+                                                  ),
+                                          ),
+                                  ),
+                                  const SizedBox(width: 16),
+                                  const Expanded(child: SizedBox()),
+                                ],
                               ),
                               const SizedBox(height: 12),
                               Text(
@@ -1851,22 +1870,7 @@ class _ProfileRatingsSectionState extends State<_ProfileRatingsSection> {
       child: FutureBuilder<ProfileRatingHistogram>(
         future: _histFuture,
         builder: (context, snap) {
-          if (!snap.hasData) {
-            return SizedBox(
-              height: 128,
-              child: Center(
-                child: SizedBox(
-                  width: 24,
-                  height: 24,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: cs.primary.withValues(alpha: 0.6),
-                  ),
-                ),
-              ),
-            );
-          }
-          final hist = snap.requireData;
+          final hist = snap.data ?? ProfileRatingHistogram.empty();
           return _ProfileRatingsInteractiveBody(
             key: ValueKey(hist.countsPerHalfStar.join(',')),
             hist: hist,
@@ -2515,6 +2519,8 @@ Post _syntheticLetterboxdPostFromMyReview({
   required MyReviewItem review,
   required String author,
   required String country,
+  String? authorPhotoUrl,
+  String? authorUid,
 }) {
   final did = review.dramaId.trim();
   final locale = country;
@@ -2541,7 +2547,16 @@ Post _syntheticLetterboxdPostFromMyReview({
   }
   if (thumb != null && thumb.isEmpty) thumb = null;
 
-  final uid = AuthService.instance.currentUser.value?.uid;
+  final myUid = AuthService.instance.currentUser.value?.uid;
+  final resolvedUid = authorUid ?? myUid;
+  // Only fall back to the current user's photo when the post author IS the
+  // current user. For other users, prefer null (default avatar) over showing
+  // the wrong profile picture before _feedPost loads.
+  final isMyPost = resolvedUid != null && resolvedUid == myUid;
+  final resolvedPhotoUrl = authorPhotoUrl ??
+      (isMyPost
+          ? UserProfileService.instance.profileImageUrlNotifier.value
+          : null);
   final id =
       'local_profile_review_${review.writtenAt.millisecondsSinceEpoch}_${did.isNotEmpty ? did : displayTitle.hashCode}';
 
@@ -2559,14 +2574,22 @@ Post _syntheticLetterboxdPostFromMyReview({
     dramaTitle: displayTitle,
     dramaThumbnail: thumb,
     rating: review.rating,
-    authorPhotoUrl: UserProfileService.instance.profileImageUrlNotifier.value,
+    authorPhotoUrl: resolvedPhotoUrl,
     authorAvatarColorIndex:
         UserProfileService.instance.avatarColorNotifier.value,
     country: country,
-    authorUid: uid,
+    authorUid: resolvedUid,
     createdAt: review.modifiedAt ?? review.writtenAt,
     commentsList: const [],
   );
+}
+
+String _fastSyntheticPostAuthor() {
+  final nickname = UserProfileService.instance.nicknameNotifier.value?.trim();
+  if (nickname != null && nickname.isNotEmpty) return nickname;
+  final displayName = AuthService.instance.currentUser.value?.displayName?.trim();
+  if (displayName != null && displayName.isNotEmpty) return displayName;
+  return 'DramaFeed';
 }
 
 /// 별점을 준 리뷰만, 최신 작성 순 (최대 4개 표시용).
@@ -2584,6 +2607,36 @@ List<MyReviewItem> _ratedReviewsForProfileRecentActivityFromList(
       .toList();
   out.sort((a, b) => b.writtenAt.compareTo(a.writtenAt));
   return out;
+}
+
+/// Recent Activity(내 프로필): 별점 리뷰 + watch-only(eye만 저장) 합산.
+/// 별점/리뷰가 이미 있는 드라마의 워치기록은 중복 제외.
+List<MyReviewItem> _recentActivitiesForMyProfile() {
+  final rated = _ratedReviewsForProfileRecentActivity();
+  // 별점/리뷰가 있는 dramaId 셋 — 워치기록 중복 방지
+  final ratedDramaIds = rated.map((r) => r.dramaId.trim()).toSet();
+  final watchOnly = WatchHistoryService.instance.list
+      .where(
+        (e) =>
+            (e.rating == null || e.rating! <= 0) &&
+            (e.comment?.trim().isEmpty ?? true) &&
+            e.dramaKey.trim().isNotEmpty &&
+            !ratedDramaIds.contains(e.dramaKey.trim()),
+      )
+      .map(
+        (e) => MyReviewItem(
+          id: 'watch_${e.id}',
+          dramaId: e.dramaKey,
+          dramaTitle: e.title,
+          rating: 0,
+          comment: '',
+          writtenAt: e.watchedAt,
+        ),
+      )
+      .toList();
+  final merged = <MyReviewItem>[...rated, ...watchOnly];
+  merged.sort((a, b) => b.writtenAt.compareTo(a.writtenAt));
+  return merged;
 }
 
 Widget _profileRecentActivityRow(ColorScheme cs, List<MyReviewItem> list) {
@@ -2685,11 +2738,12 @@ class _ProfileRecentActivitySection extends StatelessWidget {
                 : AnimatedBuilder(
                     animation: Listenable.merge([
                       ReviewService.instance.listNotifier,
+                      WatchHistoryService.instance.listNotifier,
                       DramaListService.instance.listNotifier,
                       DramaListService.instance.extraNotifier,
                     ]),
                     builder: (context, _) {
-                      final list = _ratedReviewsForProfileRecentActivity();
+                      final list = _recentActivitiesForMyProfile();
                       return _profileRecentActivityRow(cs, list);
                     },
                   ),
@@ -2755,6 +2809,9 @@ class _RecentActivitySlot extends StatelessWidget {
   const _RecentActivitySlot({required this.review});
 
   final MyReviewItem review;
+
+  bool get _isWatchOnlyActivity =>
+      review.rating <= 0 && review.comment.trim().isEmpty;
 
   static const List<List<Color>> _gradients = [
     [Color(0xFF2D5A3D), Color(0xFF1E3D2C)],
@@ -2856,11 +2913,25 @@ class _RecentActivitySlot extends StatelessWidget {
                 final uid = AuthService.instance.currentUser.value?.uid;
                 final dramaId = review.dramaId.trim();
                 final locale = CountryScope.maybeOf(context)?.country;
+                if (_isWatchOnlyActivity) {
+                  Navigator.push<void>(
+                    context,
+                    CupertinoPageRoute<void>(
+                      builder: (_) => RecentActivityWatchOnlyPage(
+                        authorUid: uid ?? '',
+                        review: review,
+                        country: country,
+                        locale: locale,
+                      ),
+                    ),
+                  );
+                  return;
+                }
                 if (uid != null) {
                   Navigator.push<void>(
                     context,
                     CupertinoPageRoute<void>(
-                      builder: (_) => _RecentActivityReviewGate(
+                      builder: (_) => RecentActivityReviewGate(
                         authorUid: uid,
                         dramaId: dramaId,
                         locale: locale,
@@ -2894,25 +2965,392 @@ class _RecentActivitySlot extends StatelessWidget {
         const SizedBox(height: 3),
         if (rating > 0)
           Center(
-            child: _StarRow(
-              rating: rating,
-              size: _kProfileRatingsAxisStarSize,
-              fillColor: cs.onSurfaceVariant.withValues(alpha: 0.52),
-              halfAsTextLabel: true,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _StarRow(
+                  rating: rating,
+                  size: _kProfileRatingsAxisStarSize,
+                  fillColor: cs.onSurfaceVariant.withValues(alpha: 0.52),
+                  halfAsTextLabel: true,
+                ),
+                if (review.comment.trim().isNotEmpty) ...[
+                  const SizedBox(width: 2),
+                  Transform.scale(
+                    scale: 0.82,
+                    child: ReviewBodyLinesIndicator(
+                      color: cs.onSurfaceVariant.withValues(alpha: 0.44),
+                    ),
+                  ),
+                ],
+              ],
             ),
           )
         else
-          Text(
-            '—',
-            textAlign: TextAlign.center,
-            style: _profileText(
-              cs,
-              size: _kProfileRatingsAndMenuFontSize,
-              color: cs.onSurfaceVariant.withValues(alpha: 0.5),
-              letterSpacing: 0.12,
+          const SizedBox(height: 0),
+      ],
+    );
+  }
+}
+
+class RecentActivityWatchOnlyPage extends StatefulWidget {
+  const RecentActivityWatchOnlyPage({
+    required this.authorUid,
+    required this.review,
+    required this.country,
+    required this.locale,
+    /// null이면 로그인 유저 닉네임. 타인 워치로그 보기 시 해당 유저 이름 전달.
+    this.authorNameOverride,
+    this.authorPhotoUrl,
+  });
+
+  final String authorUid;
+  final MyReviewItem review;
+  final String? country;
+  final String? locale;
+  final String? authorNameOverride;
+  /// 타인 피드 진입 시 해당 유저의 프로필 사진 URL. null이면 현재 로그인 유저 사진.
+  final String? authorPhotoUrl;
+
+  @override
+  State<RecentActivityWatchOnlyPage> createState() =>
+      _RecentActivityWatchOnlyPageState();
+}
+
+class _RecentActivityWatchOnlyPageState
+    extends State<RecentActivityWatchOnlyPage> {
+  late final Post? _syntheticPost;
+  Post? _feedPost;
+
+  @override
+  void initState() {
+    super.initState();
+    final raw =
+        (widget.country ??
+                UserProfileService.instance.signupCountryNotifier.value ??
+                'us')
+            .trim()
+            .toLowerCase();
+    final c = raw.isNotEmpty ? raw : 'us';
+    // Prefer authorNameOverride (set by Drama Watchers screen), then
+    // review.authorName, then fall back to the current user's nickname.
+    final overrideName = widget.authorNameOverride?.trim() ?? '';
+    final reviewAuthorName = widget.review.authorName?.trim() ?? '';
+    final watchSyntheticAuthor = overrideName.isNotEmpty
+        ? overrideName
+        : (reviewAuthorName.isNotEmpty
+              ? (reviewAuthorName.startsWith('u/')
+                    ? reviewAuthorName
+                    : 'u/$reviewAuthorName')
+              : _fastSyntheticPostAuthor());
+    _syntheticPost = _syntheticLetterboxdPostFromMyReview(
+      review: widget.review,
+      author: watchSyntheticAuthor,
+      country: c,
+      authorPhotoUrl: widget.authorPhotoUrl,
+      authorUid: widget.authorUid.isNotEmpty ? widget.authorUid : null,
+    );
+    _loadFeedPost();
+  }
+
+  Future<void> _loadFeedPost() async {
+    Post? feed;
+    try {
+      final feedPostId = widget.review.feedPostId?.trim();
+      if (feedPostId != null && feedPostId.isNotEmpty) {
+        feed = await PostService.instance.getPost(feedPostId, widget.locale);
+      }
+      if (feed == null) {
+        final rid = widget.review.id.trim();
+        if (rid.isNotEmpty &&
+            !rid.startsWith('watch_') &&
+            !rid.startsWith('local_')) {
+          feed = await PostService.instance.getPost(rid, widget.locale);
+        }
+      }
+      // Watch-only Recent Activity entries (watch_ prefix) may have no feedPostId
+      // stored. Try to find the latest posts document for this author + drama.
+      // Recent Activity deduplicates so there's no rated counterpart here.
+      if (feed == null &&
+          widget.authorUid.isNotEmpty &&
+          widget.review.dramaId.trim().isNotEmpty) {
+        feed = await PostService.instance.getLatestMyFeedReviewPostForDrama(
+          authorUid: widget.authorUid,
+          dramaId: widget.review.dramaId,
+          locale: widget.locale,
+        );
+      }
+      // If still no posts document (saved before feed-post creation was added
+      // for watch-only entries) and this is the current user's own watch log,
+      // lazily create a posts document so the page becomes interactive.
+      if (feed == null) {
+        final myUid = AuthService.instance.currentUser.value?.uid;
+        if (myUid != null &&
+            myUid.isNotEmpty &&
+            myUid == widget.authorUid &&
+            widget.review.dramaId.trim().isNotEmpty) {
+          try {
+            final sync =
+                await PostService.instance.addDramaWatchActivityFeedPost(
+              dramaId: widget.review.dramaId,
+              dramaTitle: widget.review.dramaTitle,
+              rating: widget.review.rating,
+              comment: '',
+              reviewsTabLabel: 'Reviews',
+              timeSoonLabel: 'just now',
+            );
+            if (sync.postId != null && sync.postId!.isNotEmpty) {
+              feed = await PostService.instance
+                  .getPost(sync.postId!, widget.locale);
+            }
+          } catch (_) {}
+        }
+      }
+    } catch (_) {
+      feed = null;
+    }
+    if (!mounted || feed == null) return;
+    setState(() {
+      _feedPost = feed;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // If the real community post loaded, show it with the like row visible.
+    // Use forceWatchPageTitle to keep "Watch" in the header without hiding the
+    // like row (hideLetterboxdRatingAndLike would suppress both).
+    if (_feedPost != null) {
+      return PostDetailPage(
+        post: _feedPost!,
+        hideBottomDramaFeed: true,
+        forceWatchPageTitle: true,
+      );
+    }
+    if (_syntheticPost != null) {
+      return PostDetailPage(
+        post: _syntheticPost!,
+        hideBottomDramaFeed: true,
+        offlineSyntheticReview: true,
+        forceWatchPageTitle: true,
+      );
+    }
+    // fallback: drama detail page
+    final dramaItem = _dramaItemFromReview(widget.review, widget.country);
+    final detail = DramaListService.instance.buildDetailForItem(
+      dramaItem,
+      widget.country,
+    );
+    return DramaDetailPage(detail: detail);
+  }
+}
+
+/// 타유저 프로필 — FOLLOW / FOLLOWING 버튼 (Optimistic UI + 빠른 배치 쓰기).
+class _OtherProfileFollowButton extends StatefulWidget {
+  const _OtherProfileFollowButton({
+    required this.targetUid,
+    required this.targetNickname,
+    required this.cs,
+    this.targetPhotoUrl,
+  });
+  final String targetUid;
+  final String targetNickname;
+  final String? targetPhotoUrl;
+  final ColorScheme cs;
+
+  @override
+  State<_OtherProfileFollowButton> createState() =>
+      _OtherProfileFollowButtonState();
+}
+
+class _OtherProfileFollowButtonState
+    extends State<_OtherProfileFollowButton> {
+  /// null = 스트림 값 사용. true/false = 낙관적(optimistic) 즉시 반영.
+  bool? _optimisticFollowing;
+
+  String? get _viewerUid =>
+      AuthService.instance.currentUser.value?.uid;
+
+  void _follow() {
+    // 즉시 UI 전환
+    setState(() => _optimisticFollowing = true);
+    unawaited(
+      FollowService.instance.followUserFast(
+        targetUid: widget.targetUid,
+        targetNickname: widget.targetNickname,
+        targetPhotoUrl: widget.targetPhotoUrl,
+        myNickname:
+            UserProfileService.instance.nicknameNotifier.value?.trim() ??
+            'Member',
+        myPhotoUrl: UserProfileService.instance.profileImageUrlNotifier.value,
+      ).catchError((Object e, StackTrace st) {
+        debugPrint('followUserFast failed: $e\n$st');
+        // 실패 시 낙관적 상태 복구
+        if (mounted) setState(() => _optimisticFollowing = null);
+      }),
+    );
+  }
+
+  Future<void> _showUnfollowSheet() async {
+    final nick = widget.targetNickname;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Material(
+                  color: Theme.of(ctx).colorScheme.surfaceContainerHigh,
+                  borderRadius: BorderRadius.circular(14),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(14),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      // 즉시 UI 전환
+                      setState(() => _optimisticFollowing = false);
+                      unawaited(
+                        FollowService.instance
+                            .unfollowUserFast(widget.targetUid)
+                            .catchError((Object e, StackTrace st) {
+                          debugPrint('unfollowUserFast failed: $e\n$st');
+                          // 실패 시 낙관적 상태 복구
+                          if (mounted) setState(() => _optimisticFollowing = null);
+                        }),
+                      );
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: Center(
+                        child: Text(
+                          'Unfollow $nick',
+                          style: GoogleFonts.notoSansKr(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.redAccent,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Material(
+                  color: Theme.of(ctx).colorScheme.surfaceContainerHigh,
+                  borderRadius: BorderRadius.circular(14),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(14),
+                    onTap: () => Navigator.pop(ctx),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: Center(
+                        child: Text(
+                          'Cancel',
+                          style: GoogleFonts.notoSansKr(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.blueAccent,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-      ],
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final viewer = _viewerUid;
+    if (viewer == null || viewer.isEmpty || viewer == widget.targetUid) {
+      return const SizedBox.shrink();
+    }
+    final cs = widget.cs;
+    return StreamBuilder<bool>(
+      stream: FollowService.instance.isFollowingStream(
+        viewer,
+        widget.targetUid,
+      ),
+      builder: (context, snap) {
+        // 스트림에서 실제 값이 오면 낙관적 상태 해제
+        if (snap.hasData && _optimisticFollowing != null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) setState(() => _optimisticFollowing = null);
+          });
+        }
+        final following = _optimisticFollowing ?? (snap.data ?? false);
+        const radius = BorderRadius.all(Radius.circular(4));
+        const pad = EdgeInsets.symmetric(horizontal: 7, vertical: 3);
+        if (following) {
+          const green = Color(0xFF00B020);
+          return Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: _showUnfollowSheet,
+              borderRadius: radius,
+              splashColor: green.withValues(alpha: 0.14),
+              highlightColor: green.withValues(alpha: 0.08),
+              child: Ink(
+                decoration: BoxDecoration(
+                  borderRadius: radius,
+                  border: Border.all(
+                    color: green.withValues(alpha: 0.72),
+                    width: 1,
+                  ),
+                ),
+                padding: pad,
+                child: Text(
+                  'FOLLOWING',
+                  style: GoogleFonts.notoSansKr(
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w700,
+                    height: 1.0,
+                    color: green.withValues(alpha: 0.9),
+                    letterSpacing: 0.15,
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+        return Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: _follow,
+            borderRadius: radius,
+            splashColor: cs.primary.withValues(alpha: 0.12),
+            highlightColor: cs.onSurface.withValues(alpha: 0.06),
+            child: Ink(
+              decoration: BoxDecoration(
+                borderRadius: radius,
+                border: Border.all(
+                  color: cs.onSurface.withValues(alpha: 0.28),
+                  width: 1,
+                ),
+              ),
+              padding: pad,
+              child: Text(
+                'FOLLOW',
+                style: GoogleFonts.notoSansKr(
+                  fontSize: 9.5,
+                  fontWeight: FontWeight.w700,
+                  height: 1.0,
+                  color: cs.onSurface.withValues(alpha: 0.48),
+                  letterSpacing: 0.15,
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -2931,6 +3369,7 @@ class _RecentRatedActivityScopeState extends State<_RecentRatedActivityScope> {
   void initState() {
     super.initState();
     ReviewService.instance.loadIfNeeded();
+    WatchHistoryService.instance.loadIfNeeded();
     DramaListService.instance.loadFromAsset();
   }
 
@@ -3139,13 +3578,14 @@ class _ProfileTile extends StatelessWidget {
 }
 
 /// Recent Activity 썸네일: Firestore 조회를 탭 이후로 미뤄 전환 애니메이션이 바로 시작되게 함.
-class _RecentActivityReviewGate extends StatefulWidget {
-  const _RecentActivityReviewGate({
+class RecentActivityReviewGate extends StatefulWidget {
+  const RecentActivityReviewGate({
     required this.authorUid,
     required this.dramaId,
     required this.locale,
     required this.review,
     required this.country,
+    this.authorPhotoUrl,
   });
 
   final String authorUid;
@@ -3153,95 +3593,91 @@ class _RecentActivityReviewGate extends StatefulWidget {
   final String? locale;
   final MyReviewItem review;
   final String? country;
+  /// 타인 피드 진입 시 해당 유저의 프로필 사진 URL. null이면 현재 로그인 유저 사진.
+  final String? authorPhotoUrl;
 
   @override
-  State<_RecentActivityReviewGate> createState() =>
+  State<RecentActivityReviewGate> createState() =>
       _RecentActivityReviewGateState();
 }
 
-class _RecentActivityReviewGateState extends State<_RecentActivityReviewGate> {
-  bool _loading = true;
+class _RecentActivityReviewGateState extends State<RecentActivityReviewGate> {
   Post? _feedPost;
-  Post? _offlineSyntheticPost;
+  late final Post? _offlineSyntheticPost;
 
   @override
   void initState() {
     super.initState();
-    _load();
+    final raw =
+        (widget.country ??
+                UserProfileService.instance.signupCountryNotifier.value ??
+                'us')
+            .trim()
+            .toLowerCase();
+    final c = raw.isNotEmpty ? raw : 'us';
+    // Use the review's actual author name so the synthetic placeholder shows
+    // the correct nickname from the start (prevents "my nickname → user nickname"
+    // flicker when viewing another user's review in the Watch page).
+    final reviewAuthorRaw = widget.review.authorName?.trim() ?? '';
+    final syntheticAuthor = reviewAuthorRaw.isNotEmpty
+        ? (reviewAuthorRaw.startsWith('u/')
+              ? reviewAuthorRaw
+              : 'u/$reviewAuthorRaw')
+        : _fastSyntheticPostAuthor();
+    _offlineSyntheticPost = _syntheticLetterboxdPostFromMyReview(
+      review: widget.review,
+      author: syntheticAuthor,
+      country: c,
+      authorPhotoUrl: widget.authorPhotoUrl,
+      authorUid: widget.authorUid.isNotEmpty ? widget.authorUid : null,
+    );
+    _loadFeedPost();
   }
 
-  Future<void> _load() async {
+  Future<void> _loadFeedPost() async {
     Post? feed;
     try {
-      final did = widget.dramaId.trim();
-      if (did.isNotEmpty) {
-        feed = await PostService.instance.getLatestMyFeedReviewPostForDrama(
-          authorUid: widget.authorUid,
-          dramaId: did,
-          locale: widget.locale,
-        );
+      // Priority 1: feedPostId links directly to the exact community post for
+      // this specific log entry (e.g. watch+rating vs watch+rating+review for
+      // the same drama are distinct posts with distinct feedPostIds).
+      final feedPostId = widget.review.feedPostId?.trim();
+      if (feedPostId != null && feedPostId.isNotEmpty) {
+        feed = await PostService.instance.getPost(feedPostId, widget.locale);
       }
+      // Priority 2: some older reviews have feedPostId == review.id.
+      if (feed == null) {
+        final rid = widget.review.id.trim();
+        if (rid.isNotEmpty &&
+            !rid.startsWith('watch_') &&
+            !rid.startsWith('local_')) {
+          feed = await PostService.instance.getPost(rid, widget.locale);
+        }
+      }
+      // NOTE: We intentionally do NOT fall back to
+      // getLatestMyFeedReviewPostForDrama here, because when a user has
+      // multiple reviews for the same drama the "latest" query returns the
+      // wrong post and causes the wrong content to flash onto the screen.
     } catch (_) {
       feed = null;
     }
-
-    Post? offline;
-    if (feed == null) {
-      try {
-        await UserProfileService.instance.loadIfNeeded();
-        if (!mounted) return;
-        final author = await UserProfileService.instance.getAuthorForPost();
-        if (!mounted) return;
-        final raw =
-            (widget.country ??
-                    UserProfileService.instance.signupCountryNotifier.value ??
-                    'us')
-                .trim()
-                .toLowerCase();
-        final c = raw.isNotEmpty ? raw : 'us';
-        offline = _syntheticLetterboxdPostFromMyReview(
-          review: widget.review,
-          author: author,
-          country: c,
-        );
-      } catch (_) {
-        offline = null;
-      }
-    }
-
-    if (!mounted) return;
+    if (!mounted || feed == null) return;
     setState(() {
       _feedPost = feed;
-      _offlineSyntheticPost = offline;
-      _loading = false;
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
-      final theme = Theme.of(context);
-      return Scaffold(
-        backgroundColor: theme.scaffoldBackgroundColor,
-        body: Center(
-          child: SizedBox(
-            width: 28,
-            height: 28,
-            child: CircularProgressIndicator(
-              strokeWidth: 2.5,
-              color: Colors.white.withValues(alpha: 0.55),
-            ),
-          ),
-        ),
-      );
-    }
     if (_feedPost != null) {
-      return PostDetailPage(post: _feedPost!, hideBelowLetterboxdLike: true);
+      return PostDetailPage(
+        post: _feedPost!,
+        hideBottomDramaFeed: true,
+      );
     }
     if (_offlineSyntheticPost != null) {
       return PostDetailPage(
         post: _offlineSyntheticPost!,
-        hideBelowLetterboxdLike: true,
+        hideBottomDramaFeed: true,
         offlineSyntheticReview: true,
       );
     }

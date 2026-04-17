@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_theme.dart';
 import '../widgets/country_scope.dart';
+import '../widgets/review_body_lines_indicator.dart';
 import '../services/drama_list_service.dart';
 import '../services/level_service.dart';
 import '../services/post_service.dart';
@@ -62,6 +64,8 @@ class _WriteReviewSheetState extends State<WriteReviewSheet>
     with SingleTickerProviderStateMixin {
   late double _rating;
   late final TextEditingController _controller;
+  final FocusNode _commentFocus = FocusNode();
+  bool _ratingStripFocused = false;
 
   bool get _isEditMode => widget.editingReviewId != null;
   String? _validationMessage;
@@ -69,12 +73,20 @@ class _WriteReviewSheetState extends State<WriteReviewSheet>
   late Animation<Offset> _toastSlideAnim;
   static const _dismissDuration = Duration(milliseconds: 280);
   static const _toastDisplayDuration = Duration(seconds: 2);
+  /// 별점만 있어도 저장 가능 (본문은 선택).
+  bool get _canSave => _rating > 0;
 
   @override
   void initState() {
     super.initState();
     _rating = widget.initialRating ?? 0;
     _controller = TextEditingController(text: widget.initialComment ?? '');
+    _commentFocus.addListener(() {
+      if (mounted) setState(() {});
+    });
+    _controller.addListener(() {
+      if (mounted) setState(() {});
+    });
     _toastAnimController = AnimationController(
       vsync: this,
       duration: _dismissDuration,
@@ -91,6 +103,7 @@ class _WriteReviewSheetState extends State<WriteReviewSheet>
   @override
   void dispose() {
     _toastAnimController.dispose();
+    _commentFocus.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -136,6 +149,8 @@ class _WriteReviewSheetState extends State<WriteReviewSheet>
         await _syncDiaryAfterReviewSave(
           dramaId: dramaId,
           dramaTitle: dramaTitle,
+          rating: _rating,
+          comment: _controller.text.trim(),
           country: country,
         );
         await PostService.instance.syncReviewFeedPostFromDramaDetail(
@@ -156,10 +171,14 @@ class _WriteReviewSheetState extends State<WriteReviewSheet>
           rating: _rating,
           comment: _controller.text.trim(),
           authorName: authorName,
+          authorPhotoUrl:
+              UserProfileService.instance.profileImageUrlNotifier.value,
         );
         await _syncDiaryAfterReviewSave(
           dramaId: dramaId,
           dramaTitle: dramaTitle,
+          rating: _rating,
+          comment: _controller.text.trim(),
           country: country,
         );
         final sync = await PostService.instance.syncReviewFeedPostFromDramaDetail(
@@ -200,6 +219,8 @@ class _WriteReviewSheetState extends State<WriteReviewSheet>
   Future<void> _syncDiaryAfterReviewSave({
     required String dramaId,
     required String dramaTitle,
+    double? rating,
+    String? comment,
     String? country,
   }) async {
     var title = dramaTitle.trim();
@@ -243,12 +264,28 @@ class _WriteReviewSheetState extends State<WriteReviewSheet>
       subtitle: subtitle,
       views: views,
       imageUrl: imageUrl,
+      rating: (rating != null && rating > 0) ? rating : null,
+      comment: (comment != null && comment.trim().isNotEmpty) ? comment.trim() : null,
     );
   }
 
   @override
   Widget build(BuildContext context) {
     final s = CountryScope.of(context).strings;
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final bg = cs.surfaceContainerHigh;
+    final onBg = cs.onSurface;
+    final muted = cs.onSurfaceVariant;
+    final labelLit = onBg.withValues(alpha: 0.9);
+    final labelMuted = muted.withValues(alpha: 0.52);
+    final iconMuted = muted.withValues(alpha: 0.45);
+    final iconLit = labelLit;
+    final inputFocusBorder = muted.withValues(alpha: 0.62);
+    final tapHighlight = onBg.withValues(alpha: 0.08);
+    final headerStarLit = _rating > 0;
+    final headerReviewLit =
+        _commentFocus.hasFocus || _controller.text.trim().isNotEmpty;
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: Stack(
@@ -280,97 +317,265 @@ class _WriteReviewSheetState extends State<WriteReviewSheet>
                       left: 20,
                       right: 20,
                       top: 12,
-                      bottom: MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).padding.bottom + 24,
+                      bottom: MediaQuery.of(context).viewInsets.bottom +
+                          MediaQuery.of(context).padding.bottom +
+                          20,
                     ),
-                    decoration: const BoxDecoration(
-                      color: Color(0xFF1A1A1A),
-                      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                    decoration: BoxDecoration(
+                      color: bg,
+                      borderRadius:
+                          const BorderRadius.vertical(top: Radius.circular(20)),
                     ),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-              // 헤더: X(닫기) | 제출
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.close, color: Colors.white, size: 24),
-                    onPressed: () => Navigator.pop(context),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-                  ),
-                  FilledButton(
-                    onPressed: _submit,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.linkBlue,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    ),
-                    child: Text(
-                      s.get('submit'),
-                      style: GoogleFonts.notoSansKr(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Center(
-                child: Text(
-                  s.get('ratingInstruction'),
-                  textAlign: TextAlign.center,
-                  style: GoogleFonts.notoSansKr(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: List.generate(5, (i) {
-                  final halfValue = i + 0.5;
-                  final fullValue = i + 1.0;
-                  final isFull = _rating >= fullValue;
-                  final isHalf = _rating >= halfValue && _rating < fullValue;
-                  return GestureDetector(
-                    onTapDown: (d) {
-                      final isLeftHalf = d.localPosition.dx < 22;
-                      setState(() => _rating = isLeftHalf ? halfValue : fullValue);
-                    },
-                    behavior: HitTestBehavior.opaque,
-                    child: SizedBox(
-                      width: 44,
-                      child: Icon(
-                        isFull ? Icons.star_rounded : (isHalf ? Icons.star_half_rounded : Icons.star_border_rounded),
-                        size: 36,
-                        color: isFull || isHalf ? AppColors.ratingStar : Colors.grey.shade600,
-                      ),
-                    ),
-                  );
-                }),
-              ),
-              const SizedBox(height: 20),
-              TextField(
-                controller: _controller,
-                maxLines: 5,
-                style: GoogleFonts.notoSansKr(color: Colors.white, fontSize: 15),
-                decoration: InputDecoration(
-                  hintText: s.get('reviewPlaceholderLong'),
-                  hintStyle: GoogleFonts.notoSansKr(color: Colors.grey.shade500, fontSize: 14),
-                  filled: true,
-                  fillColor: const Color(0xFF0D0D0D),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade700),
-                  ),
-                ),
-              ),
-            ],
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                s.get('dramaWatchActivitySheetTitle'),
+                                style: GoogleFonts.notoSansKr(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: labelLit,
+                                ),
+                              ),
+                            ),
+                            FilledButton(
+                              onPressed: _canSave ? _submit : null,
+                              style: FilledButton.styleFrom(
+                                backgroundColor: AppColors.linkBlue,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 6,
+                                ),
+                              ),
+                              child: Text(
+                                'Save',
+                                style: GoogleFonts.notoSansKr(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Expanded(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  Icon(LucideIcons.eye, size: 28, color: iconLit),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    s.get('dramaWatchActivityWatchLabel'),
+                                    textAlign: TextAlign.center,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: GoogleFonts.notoSansKr(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      height: 1.2,
+                                      color: labelLit,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Expanded(
+                              child: Material(
+                                color: Colors.transparent,
+                                borderRadius: BorderRadius.circular(10),
+                                clipBehavior: Clip.antiAlias,
+                                child: InkWell(
+                                  splashColor: tapHighlight,
+                                  highlightColor: tapHighlight,
+                                  borderRadius: BorderRadius.circular(10),
+                                  onTap: () =>
+                                      setState(() => _ratingStripFocused = true),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 6,
+                                      horizontal: 4,
+                                    ),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.center,
+                                      children: [
+                                        Icon(
+                                          Icons.star_rounded,
+                                          size: 28,
+                                          color: headerStarLit
+                                              ? iconLit
+                                              : iconMuted,
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          s.get('dramaWatchActivityHeaderRating'),
+                                          textAlign: TextAlign.center,
+                                          maxLines: 1,
+                                          style: GoogleFonts.notoSansKr(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w500,
+                                            color: (headerStarLit ||
+                                                    _ratingStripFocused)
+                                                ? labelLit
+                                                : labelMuted,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            Expanded(
+                              child: Material(
+                                color: Colors.transparent,
+                                borderRadius: BorderRadius.circular(10),
+                                clipBehavior: Clip.antiAlias,
+                                child: InkWell(
+                                  splashColor: Colors.transparent,
+                                  highlightColor: Colors.transparent,
+                                  borderRadius: BorderRadius.circular(10),
+                                  onTap: () {
+                                    WidgetsBinding.instance
+                                        .addPostFrameCallback((_) {
+                                      if (_commentFocus.canRequestFocus) {
+                                        _commentFocus.requestFocus();
+                                      }
+                                    });
+                                  },
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 6,
+                                      horizontal: 4,
+                                    ),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.center,
+                                      children: [
+                                        SizedBox(
+                                          height: 28,
+                                          child: Center(
+                                            child: ReviewBodyLinesIndicator(
+                                              color: headerReviewLit
+                                                  ? iconLit
+                                                  : iconMuted,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          s.get('dramaWatchActivityHeaderReview'),
+                                          textAlign: TextAlign.center,
+                                          maxLines: 1,
+                                          style: GoogleFonts.notoSansKr(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w500,
+                                            color: headerReviewLit
+                                                ? labelLit
+                                                : labelMuted,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 2,
+                            vertical: 4,
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: List.generate(5, (i) {
+                              const slotW = 30.0;
+                              final halfValue = i + 0.5;
+                              final fullValue = i + 1.0;
+                              final isFull = _rating >= fullValue;
+                              final isHalf =
+                                  _rating >= halfValue && _rating < fullValue;
+                              final emptyOutlineColor =
+                                  _ratingStripFocused ? iconLit : iconMuted;
+                              return GestureDetector(
+                                onTapDown: (d) {
+                                  final isLeftHalf = d.localPosition.dx < slotW / 2;
+                                  final next =
+                                      isLeftHalf ? halfValue : fullValue;
+                                  setState(() {
+                                    _rating = _rating == next ? 0 : next;
+                                    _ratingStripFocused = false;
+                                  });
+                                },
+                                behavior: HitTestBehavior.opaque,
+                                child: SizedBox(
+                                  width: slotW,
+                                  child: Icon(
+                                    isFull
+                                        ? Icons.star_rounded
+                                        : (isHalf
+                                            ? Icons.star_half_rounded
+                                            : Icons.star_border_rounded),
+                                    size: 30,
+                                    color: isFull || isHalf
+                                        ? AppColors.ratingStar
+                                        : emptyOutlineColor,
+                                  ),
+                                ),
+                              );
+                            }),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        TextField(
+                          controller: _controller,
+                          focusNode: _commentFocus,
+                          maxLines: 4,
+                          cursorColor: inputFocusBorder,
+                          style: GoogleFonts.notoSansKr(color: onBg, fontSize: 15),
+                          decoration: InputDecoration(
+                            filled: true,
+                            fillColor: theme.colorScheme.surface,
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(
+                                color: theme.colorScheme.outline
+                                    .withValues(alpha: 0.35),
+                                width: 1.2,
+                              ),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(
+                                color: theme.colorScheme.outline
+                                    .withValues(alpha: 0.35),
+                                width: 1.2,
+                              ),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(
+                                color: inputFocusBorder,
+                                width: 1.5,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),

@@ -89,7 +89,8 @@ class _ListsScreenState extends State<ListsScreen> {
       headerBarBg,
     );
 
-    return AnnotatedRegion<SystemUiOverlayStyle>(
+    return ListsStyleSwipeBack(
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
       value: listAppBarOverlay,
       child: Scaffold(
         backgroundColor: bodyBg,
@@ -129,6 +130,7 @@ class _ListsScreenState extends State<ListsScreen> {
           },
         ),
       ),
+    ),
     );
   }
 
@@ -144,7 +146,7 @@ class _ListsScreenState extends State<ListsScreen> {
     final widgets = <Widget>[];
     for (final custom in customLists) {
       widgets.add(
-        _CustomDramaListCard(
+        CustomDramaListCard(
           data: custom,
           strings: strings,
           isDark: isDark,
@@ -470,8 +472,8 @@ class _CreateListDramaThumb extends StatelessWidget {
   }
 }
 
-class _CustomDramaListCard extends StatelessWidget {
-  const _CustomDramaListCard({
+class CustomDramaListCard extends StatelessWidget {
+  const CustomDramaListCard({
     required this.data,
     required this.strings,
     required this.isDark,
@@ -603,8 +605,13 @@ class _CustomDramaListCard extends StatelessWidget {
 
 /// 리스트 생성·수정 공통 화면. [existingList]가 있으면 수정 모드.
 class DramaListEditorScreen extends StatefulWidget {
-  const DramaListEditorScreen({super.key, this.existingList});
+  const DramaListEditorScreen({
+    super.key,
+    this.existingList,
+    this.initialDramaId,
+  });
   final CustomDramaList? existingList;
+  final String? initialDramaId;
   bool get isEditMode => existingList != null;
 
   @override
@@ -663,6 +670,13 @@ class _DramaListEditorScreenState extends State<DramaListEditorScreen> {
           _coverDramaId = cdi;
           _publishWithoutCover = false;
         }
+      }
+    }
+    if (ex == null) {
+      final seedId = widget.initialDramaId?.trim();
+      if (seedId != null && seedId.isNotEmpty) {
+        final countryGuess = UserProfileService.instance.signupCountryNotifier.value;
+        _selected.add(_dramaItemFromId(seedId, countryGuess));
       }
     }
   }
@@ -916,7 +930,8 @@ class _DramaListEditorScreenState extends State<DramaListEditorScreen> {
     final headerBg = listsStyleSubpageHeaderBackground(theme);
     final listAppBarOverlay = listsStyleSubpageSystemOverlay(theme, headerBg);
 
-    return AnnotatedRegion<SystemUiOverlayStyle>(
+    return ListsStyleSwipeBack(
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
       value: listAppBarOverlay,
       child: Scaffold(
         backgroundColor: theme.scaffoldBackgroundColor,
@@ -1096,6 +1111,7 @@ class _DramaListEditorScreenState extends State<DramaListEditorScreen> {
             ],
           ),
         ),
+      ),
       ),
     );
   }

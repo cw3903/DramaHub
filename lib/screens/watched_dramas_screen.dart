@@ -96,20 +96,49 @@ class _WatchedDramasScreenState extends State<WatchedDramasScreen> {
 
 DramaDetail _detailFromWatched(WatchedDramaItem item) {
   const similarList = [
-    DramaItem(id: 's1', title: '사랑은 시간 뒤에 서다', subtitle: '비밀신분', views: '9.1M', rating: 4.5, isPopular: true),
-    DramaItem(id: 's2', title: '폭풍같은 결혼생활', subtitle: '대여주', views: '45.3M', rating: 4.3, isNew: true),
-    DramaItem(id: 's3', title: '동생이 훔친 사랑', subtitle: '로맨스', views: '2.1M', rating: 4.6, isPopular: true),
-    DramaItem(id: 's4', title: '후회·집착남', subtitle: '독립적인 여성', views: '567K', rating: 3.5, isPopular: true),
+    DramaItem(
+      id: 's1',
+      title: '사랑은 시간 뒤에 서다',
+      subtitle: '비밀신분',
+      views: '9.1M',
+      rating: 4.5,
+      isPopular: true,
+    ),
+    DramaItem(
+      id: 's2',
+      title: '폭풍같은 결혼생활',
+      subtitle: '대여주',
+      views: '45.3M',
+      rating: 4.3,
+      isNew: true,
+    ),
+    DramaItem(
+      id: 's3',
+      title: '동생이 훔친 사랑',
+      subtitle: '로맨스',
+      views: '2.1M',
+      rating: 4.6,
+      isPopular: true,
+    ),
+    DramaItem(
+      id: 's4',
+      title: '후회·집착남',
+      subtitle: '독립적인 여성',
+      views: '567K',
+      rating: 3.5,
+      isPopular: true,
+    ),
   ];
   final dramaItem = DramaItem(
-    id: item.id,
+    id: item.dramaKey,
     title: item.title,
     subtitle: item.subtitle,
     views: item.views,
     rating: 4.7,
     isPopular: false,
   );
-  const fullSynopsis = '태성바이오 창립자 박창욱은 신분을 숨긴 채 청소부로 살아가고, 아들 정훈은 만삭의 아내 미연과 장차 이어질 가족의 행복을 꿈꾼다. 그러나 한 순간의 실수로 모든 것이 바뀌고, 박창욱은 숨겨왔던 진실을 마주하게 된다. 비밀과 진실, 사랑과 복수가 교차하는 드라마틱한 스토리.';
+  const fullSynopsis =
+      '태성바이오 창립자 박창욱은 신분을 숨긴 채 청소부로 살아가고, 아들 정훈은 만삭의 아내 미연과 장차 이어질 가족의 행복을 꿈꾼다. 그러나 한 순간의 실수로 모든 것이 바뀌고, 박창욱은 숨겨왔던 진실을 마주하게 된다. 비밀과 진실, 사랑과 복수가 교차하는 드라마틱한 스토리.';
   const reviews = <DramaReview>[];
   final episodes = [
     const DramaEpisode(number: 1, title: '1화', duration: '45분'),
@@ -132,18 +161,24 @@ class _WatchedDramaCard extends StatelessWidget {
 
   final WatchedDramaItem item;
 
-  static const _placeholderGradient = [
-    Color(0xFF616161),
-    Color(0xFF424242),
-  ];
+  static const _placeholderGradient = [Color(0xFF616161), Color(0xFF424242)];
 
   String? _resolveImageUrl(BuildContext context) {
-    final country = CountryScope.maybeOf(context)?.country ?? CountryService.instance.countryNotifier.value;
-    if (!item.id.startsWith('short-')) {
-      final byId = DramaListService.instance.getDisplayImageUrl(item.id, country);
+    final country =
+        CountryScope.maybeOf(context)?.country ??
+        CountryService.instance.countryNotifier.value;
+    final dramaId = item.dramaKey;
+    if (!dramaId.startsWith('short-')) {
+      final byId = DramaListService.instance.getDisplayImageUrl(
+        dramaId,
+        country,
+      );
       if (byId != null && byId.isNotEmpty) return byId;
     }
-    final byTitle = DramaListService.instance.getDisplayImageUrlByTitle(item.title, country);
+    final byTitle = DramaListService.instance.getDisplayImageUrlByTitle(
+      item.title,
+      country,
+    );
     if (byTitle != null && byTitle.isNotEmpty) return byTitle;
     final url = item.imageUrl?.trim();
     if (url != null && url.isNotEmpty) return url;
@@ -151,12 +186,18 @@ class _WatchedDramaCard extends StatelessWidget {
   }
 
   String _displayTitle(BuildContext context) {
-    final country = CountryScope.maybeOf(context)?.country ?? CountryService.instance.countryNotifier.value;
-    if (!item.id.startsWith('short-')) {
-      final t = DramaListService.instance.getDisplayTitle(item.id, country);
+    final country =
+        CountryScope.maybeOf(context)?.country ??
+        CountryService.instance.countryNotifier.value;
+    final dramaId = item.dramaKey;
+    if (!dramaId.startsWith('short-')) {
+      final t = DramaListService.instance.getDisplayTitle(dramaId, country);
       if (t.isNotEmpty) return t;
     }
-    return DramaListService.instance.getDisplayTitleByTitle(item.title, country);
+    return DramaListService.instance.getDisplayTitleByTitle(
+      item.title,
+      country,
+    );
   }
 
   @override
@@ -220,10 +261,7 @@ class _WatchedDramaCard extends StatelessWidget {
               children: [
                 AspectRatio(
                   aspectRatio: 1 / 1.35,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [imageWidget],
-                  ),
+                  child: Stack(fit: StackFit.expand, children: [imageWidget]),
                 ),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(6, 6, 6, 8),
@@ -256,11 +294,7 @@ class _WatchedDramaCard extends StatelessWidget {
         ),
       ),
       child: Center(
-        child: Icon(
-          LucideIcons.tv,
-          size: 32,
-          color: Colors.grey.shade500,
-        ),
+        child: Icon(LucideIcons.tv, size: 32, color: Colors.grey.shade500),
       ),
     );
   }

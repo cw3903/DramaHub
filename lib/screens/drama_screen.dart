@@ -1,3 +1,5 @@
+import 'dart:async' show unawaited;
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -279,7 +281,7 @@ class _DramaScreenState extends State<DramaScreen> {
         body: SafeArea(
           top: false,
           child: DefaultTabController(
-            length: 3,
+            length: 2,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -425,8 +427,7 @@ class _DramaScreenState extends State<DramaScreen> {
                                       letterSpacing: -0.15,
                                     ),
                                     tabs: [
-                                      Tab(text: s.get('popularRanking')),
-                                      Tab(text: s.get('newReleases')),
+                                      Tab(text: s.get('dramaListTabAll')),
                                       Tab(text: s.get('category')),
                                     ],
                                   ),
@@ -447,7 +448,7 @@ class _DramaScreenState extends State<DramaScreen> {
                       return ListenableBuilder(
                         listenable: controller,
                         builder: (ctx, _) {
-                          if (controller.index != 2) {
+                          if (controller.index != 1) {
                             if (_showFilterPanel)
                               WidgetsBinding.instance.addPostFrameCallback(
                                 (_) => setState(() => _showFilterPanel = false),
@@ -519,8 +520,6 @@ class _DramaScreenState extends State<DramaScreen> {
                           builder: (context, _, __) {
                             final baseList = DramaListService.instance
                                 .getListForCountry(country);
-                            final newList = DramaListService.instance
-                                .getListForCountrySortedByReleaseDate(country);
                             if (baseList.isEmpty) {
                               final scale = dramaGridScreenScale(context);
                               return Center(
@@ -535,15 +534,8 @@ class _DramaScreenState extends State<DramaScreen> {
                             }
                             return TabBarView(
                               children: [
-                                _PopularGrid(
-                                  country: country,
-                                  baseList: baseList,
-                                  viewCounts: viewCounts,
-                                  onTapCard: _openDetail,
-                                  posterPlaceholder: _posterPlaceholder,
-                                ),
                                 _DramaGridWithPagination(
-                                  list: newList,
+                                  list: baseList,
                                   country: country,
                                   viewCounts: viewCounts,
                                   onTapCard: _openDetail,
@@ -596,7 +588,7 @@ class _DramaScreenState extends State<DramaScreen> {
                       builder: (ctx) {
                         if (!_showFilterPanel) return const SizedBox.shrink();
                         final controller = DefaultTabController.of(ctx);
-                        if (controller == null || controller.index != 2)
+                        if (controller == null || controller.index != 1)
                           return const SizedBox.shrink();
                         final scale = dramaGridScreenScale(context);
                         final filterFg = isDark
@@ -796,38 +788,7 @@ class _DramaScreenState extends State<DramaScreen> {
   }
 }
 
-/// 인기 순위 탭: Firebase 총 조회수 기준 정렬 후 그리드 (viewCounts는 상세 페이지와 동일 소스)
-class _PopularGrid extends StatelessWidget {
-  const _PopularGrid({
-    required this.country,
-    required this.baseList,
-    required this.viewCounts,
-    required this.onTapCard,
-    required this.posterPlaceholder,
-  });
-
-  final String? country;
-  final List<DramaItem> baseList;
-  final Map<String, int> viewCounts;
-  final void Function(DramaItem item) onTapCard;
-  final Widget Function(BuildContext context) posterPlaceholder;
-
-  @override
-  Widget build(BuildContext context) {
-    final sorted = [
-      ...baseList,
-    ]..sort((a, b) => (viewCounts[b.id] ?? 0).compareTo(viewCounts[a.id] ?? 0));
-    return _DramaGridWithPagination(
-      list: sorted,
-      country: country,
-      viewCounts: viewCounts,
-      onTapCard: onTapCard,
-      posterPlaceholder: posterPlaceholder,
-    );
-  }
-}
-
-/// 인기/신작/카테고리 공통: 무한 스크롤 드라마 그리드
+/// ALL·카테고리 탭 공통: 무한 스크롤 드라마 그리드
 class _DramaGridWithPagination extends StatefulWidget {
   const _DramaGridWithPagination({
     required this.list,
@@ -853,8 +814,77 @@ class _DramaGridWithPagination extends StatefulWidget {
 class _DramaGridWithPaginationState extends State<_DramaGridWithPagination> {
   static const _pageSize = 12;
 
+  final ScrollController _scrollController = ScrollController();
+
   int _displayCount = _pageSize;
   bool _isLoadingMore = false;
+  /// [visibleList] 단위로 집계 프리패치 1회 — 목록 탭 별점이 상세와 동일 소스가 되도록.
+  String? _ratingPrefetchSig;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _fillUntilScrollableOrEnd());
+  }
+
+  @override
+  void dispose() {
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant _DramaGridWithPagination oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.list != widget.list) {
+      _ratingPrefetchSig = null;
+    }
+  }
+
+  void _maybePrefetchRatingsForVisible(List<DramaItem> visible) {
+    if (visible.isEmpty) return;
+    final sig = visible.map((e) => e.id).join('\u001f');
+    if (sig == _ratingPrefetchSig) return;
+    _ratingPrefetchSig = sig;
+    unawaited(
+      ReviewService.instance
+          .prefetchDramaRatingStats(visible.map((e) => e.id))
+          .then((_) {
+        if (mounted) setState(() {});
+      }),
+    );
+  }
+
+  void _onScroll() {
+    if (!mounted || !_scrollController.hasClients) return;
+    final m = _scrollController.position;
+    if (m.pixels >= m.maxScrollExtent - 250) {
+      unawaited(_loadMore());
+    }
+  }
+
+  /// 4열 등으로 첫 페이지가 화면보다 짧으면 스크롤 이벤트가 안 나와 [hasMore]만 true로 남는 경우 방지.
+  Future<void> _fillUntilScrollableOrEnd() async {
+    if (!mounted) return;
+    var guard = 0;
+    while (mounted && guard < 64) {
+      guard++;
+      final len = widget.list.length;
+      if (_displayCount >= len) return;
+      if (!_scrollController.hasClients) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) unawaited(_fillUntilScrollableOrEnd());
+        });
+        return;
+      }
+      final m = _scrollController.position;
+      if (m.maxScrollExtent > 48) return;
+      await _loadMore();
+      await WidgetsBinding.instance.endOfFrame;
+    }
+  }
 
   Future<void> _loadMore() async {
     if (_isLoadingMore) return;
@@ -868,14 +898,6 @@ class _DramaGridWithPaginationState extends State<_DramaGridWithPagination> {
     });
   }
 
-  bool _onScrollNotification(ScrollNotification n) {
-    if (n is ScrollUpdateNotification) {
-      final m = n.metrics;
-      if (m.pixels >= m.maxScrollExtent - 250) _loadMore();
-    }
-    return false;
-  }
-
   @override
   Widget build(BuildContext context) {
     final list = widget.list;
@@ -884,21 +906,26 @@ class _DramaGridWithPaginationState extends State<_DramaGridWithPagination> {
     final visibleList = list.take(visibleCount).toList();
     final hasMore = visibleCount < list.length;
 
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _maybePrefetchRatingsForVisible(visibleList);
+    });
+
     final cs = Theme.of(context).colorScheme;
     final r = dramaGridScreenScale(context);
-    return NotificationListener<ScrollNotification>(
-      onNotification: _onScrollNotification,
-      child: CustomScrollView(
-      primary: true,
+    final bottomPad = MediaQuery.of(context).padding.bottom;
+    return CustomScrollView(
+      controller: _scrollController,
       slivers: [
         SliverPadding(
-          padding: EdgeInsets.fromLTRB(8 * r, 0, 8 * r, 6 * r),
+          padding: EdgeInsets.fromLTRB(8 * r, 0, 8 * r, 2 * r),
           sliver: SliverGrid(
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 3,
-              childAspectRatio: 0.53,
+              crossAxisCount: 4,
+              // 셀 높이를 카드 본문에 더 맞춰 행 사이 빈 여백 감소.
+              childAspectRatio: 0.52,
               crossAxisSpacing: 8 * r,
-              mainAxisSpacing: 0,
+              mainAxisSpacing: 2 * r,
             ),
             delegate: SliverChildBuilderDelegate((context, index) {
               final item = visibleList[index];
@@ -914,10 +941,10 @@ class _DramaGridWithPaginationState extends State<_DramaGridWithPagination> {
                     widget.country,
                   ) ??
                   item.imageUrl;
-              final rawRating =
-                  ReviewService.instance.getByDramaId(item.id)?.rating ??
-                  item.rating;
-              var rating = rawRating > 0 ? rawRating : 0.0;
+              var rating = ReviewService.instance.ratingForListCard(
+                item.id,
+                catalogRating: item.rating,
+              );
               if (widget.ratingOverrides != null &&
                   widget.ratingOverrides!.containsKey(item.id)) {
                 rating = widget.ratingOverrides![item.id]!;
@@ -929,6 +956,7 @@ class _DramaGridWithPaginationState extends State<_DramaGridWithPagination> {
                 rating: rating,
                 onTap: () => widget.onTapCard(item),
                 posterPlaceholder: widget.posterPlaceholder(context),
+                denseTypography: true,
               );
             }, childCount: visibleList.length),
           ),
@@ -936,22 +964,23 @@ class _DramaGridWithPaginationState extends State<_DramaGridWithPagination> {
         SliverToBoxAdapter(
           child: hasMore
               ? Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 18),
-                  child: Center(
-                    child: SizedBox(
-                      width: 22,
-                      height: 22,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2.2,
-                        color: cs.onSurfaceVariant.withOpacity(0.5),
-                      ),
-                    ),
-                  ),
+                  padding: EdgeInsets.fromLTRB(0, 8, 0, bottomPad + 16),
+                  child: _isLoadingMore
+                      ? Center(
+                          child: SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.2,
+                              color: cs.onSurfaceVariant.withValues(alpha: 0.5),
+                            ),
+                          ),
+                        )
+                      : const SizedBox(height: 6),
                 )
-              : SizedBox(height: MediaQuery.of(context).padding.bottom + 22),
+              : SizedBox(height: bottomPad + 22),
         ),
       ],
-      ),
     );
   }
 }

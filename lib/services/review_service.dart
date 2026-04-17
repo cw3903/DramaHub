@@ -1,3 +1,4 @@
+import 'dart:async' show unawaited;
 import 'dart:convert';
 import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -76,6 +77,15 @@ class ReviewService {
   static const _key = 'my_drama_reviews';
   static const _maxItems = 200;
   static const _collection = 'drama_reviews';
+
+  static String? _trimOrNull(String? s) {
+    final t = s?.trim();
+    if (t == null || t.isEmpty) return null;
+    return t;
+  }
+
+  /// `dramaId`별 전체 리뷰 평균·개수 — 상세 [getDramaRatingStats]·[prefetchDramaRatingStats]로 채움.
+  final Map<String, ({double average, int count})> _dramaAggregateStatsCache = {};
 
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final ValueNotifier<List<MyReviewItem>> listNotifier =
@@ -220,6 +230,7 @@ class ReviewService {
     String? authorName,
     String? documentId,
     String? feedPostId,
+    String? authorPhotoUrl,
   }) async {
     final uid = _uid;
     final id = (documentId != null && documentId.isNotEmpty)
@@ -259,11 +270,17 @@ class ReviewService {
         if (feedPostId != null && feedPostId.isNotEmpty) {
           data['feedPostId'] = feedPostId;
         }
+        final ap = authorPhotoUrl?.trim();
+        if (ap != null && ap.isNotEmpty) {
+          data['authorPhotoUrl'] = ap;
+        }
         await _firestore.collection(_collection).doc(id).set(data);
       } catch (e) {
         debugPrint('ReviewService add Firestore: $e');
       }
     }
+    _invalidateDramaAggregateStats(dramaId);
+    unawaited(prefetchDramaRatingStats([dramaId]));
     return id;
   }
 
@@ -339,6 +356,8 @@ class ReviewService {
         debugPrint('ReviewService update Firestore: $e');
       }
     }
+    _invalidateDramaAggregateStats(old.dramaId);
+    unawaited(prefetchDramaRatingStats([old.dramaId]));
   }
 
   /// DramaFeed 글 id를 리뷰 문서에 연결 (신규 리뷰 저장 직후).
@@ -401,6 +420,8 @@ class ReviewService {
     } catch (e) {
       debugPrint('ReviewService delete Firestore: $e');
     }
+    _invalidateDramaAggregateStats(found.dramaId);
+    unawaited(prefetchDramaRatingStats([found.dramaId]));
 
     final removedIds = <String>[];
     final fp = found.feedPostId?.trim();
@@ -486,8 +507,8 @@ class ReviewService {
     final dramaId = post.dramaId?.trim() ?? '';
     if (dramaId.isEmpty) return;
     final rating = post.rating ?? 0;
-    if (rating <= 0) return;
     final comment = (post.body ?? '').trim();
+    if (comment.isNotEmpty && rating <= 0) return;
     final dramaTitle = (post.dramaTitle?.trim().isNotEmpty == true) ? post.dramaTitle!.trim() : post.title.trim();
     var authorName = post.author.startsWith('u/') ? post.author.substring(2) : post.author;
     if (authorName.isEmpty) authorName = '익명';
@@ -495,7 +516,26 @@ class ReviewService {
     await loadIfNeeded();
     final postId = post.id.trim();
     if (postId.isEmpty) return;
-    final existing = getById(postId);
+    var existing = getById(postId);
+
+    // WriteReviewSheet이 ReviewService.add()로 먼저 저장한 경우 — postId 대신
+    // dramaId가 일치하고 feedPostId가 없는 미연결 리뷰가 있으면 그것을 연결하고 종료.
+    if (existing == null) {
+      final unlinked = listNotifier.value
+          .where(
+            (e) =>
+                e.dramaId == dramaId &&
+                (e.feedPostId == null || e.feedPostId!.trim().isEmpty),
+          )
+          .toList();
+      if (unlinked.isNotEmpty) {
+        final target = unlinked.first;
+        await updateById(id: target.id, rating: rating, comment: comment);
+        await setFeedPostId(reviewId: target.id, feedPostId: postId);
+        return;
+      }
+    }
+
     if (existing != null) {
       await updateById(id: postId, rating: rating, comment: comment);
       final cur = getById(postId);
@@ -512,29 +552,107 @@ class ReviewService {
         authorName: authorName,
         documentId: postId,
         feedPostId: postId,
+        authorPhotoUrl: post.authorPhotoUrl,
       );
+    }
+  }
+
+  void _putDramaAggregateStats(String dramaId, double average, int count) {
+    final id = dramaId.trim();
+    if (id.isEmpty) return;
+    _dramaAggregateStatsCache[id] = (average: average, count: count);
+  }
+
+  void _invalidateDramaAggregateStats(String dramaId) {
+    final id = dramaId.trim();
+    if (id.isEmpty) return;
+    _dramaAggregateStatsCache.remove(id);
+  }
+
+  /// 그리드·검색 카드: 집계 캐시가 있고 유효한 리뷰가 있으면 평균, 아니면 카탈로그 [catalogRating].
+  double ratingForListCard(String dramaId, {required double catalogRating}) {
+    final id = dramaId.trim();
+    if (id.isEmpty) return catalogRating;
+    final c = _dramaAggregateStatsCache[id];
+    if (c != null && c.count > 0) return c.average;
+    return catalogRating;
+  }
+
+  /// 최대 10개씩 `whereIn`으로 배치 조회 후 [_dramaAggregateStatsCache] 갱신.
+  Future<void> prefetchDramaRatingStats(Iterable<String> dramaIds) async {
+    final unique =
+        dramaIds.map((e) => e.trim()).where((e) => e.isNotEmpty).toSet().toList();
+    final missing =
+        unique.where((id) => !_dramaAggregateStatsCache.containsKey(id)).toList();
+    if (missing.isEmpty) return;
+    const chunk = 10;
+    for (var i = 0; i < missing.length; i += chunk) {
+      final end = (i + chunk > missing.length) ? missing.length : i + chunk;
+      final part = missing.sublist(i, end);
+      try {
+        final snap = await _firestore
+            .collection(_collection)
+            .where('dramaId', whereIn: part)
+            .get();
+        final sumBy = <String, double>{};
+        final cntBy = <String, int>{};
+        for (final doc in snap.docs) {
+          final d = doc.data();
+          final did = (d['dramaId'] as String?)?.trim() ?? '';
+          final r = (d['rating'] as num?)?.toDouble() ?? 0;
+          if (did.isEmpty || r <= 0) continue;
+          sumBy[did] = (sumBy[did] ?? 0) + r;
+          cntBy[did] = (cntBy[did] ?? 0) + 1;
+        }
+        for (final id in part) {
+          final c = cntBy[id] ?? 0;
+          _putDramaAggregateStats(
+            id,
+            c > 0 ? (sumBy[id] ?? 0) / c : 0.0,
+            c,
+          );
+        }
+      } catch (e, st) {
+        debugPrint('ReviewService.prefetchDramaRatingStats: $e\n$st');
+        for (final id in part) {
+          if (!_dramaAggregateStatsCache.containsKey(id)) {
+            _putDramaAggregateStats(id, 0.0, 0);
+          }
+        }
+      }
     }
   }
 
   /// 해당 드라마의 전체 유저 리뷰 기준 평균 평점 & 리뷰 수 (상세 페이지 표시용)
   Future<({double average, int count})> getDramaRatingStats(String dramaId) async {
-    if (dramaId.isEmpty) return (average: 0.0, count: 0);
+    final id = dramaId.trim();
+    if (id.isEmpty) return (average: 0.0, count: 0);
     try {
       final snapshot = await _firestore
           .collection(_collection)
-          .where('dramaId', isEqualTo: dramaId)
+          .where('dramaId', isEqualTo: id)
           .get();
-      if (snapshot.docs.isEmpty) return (average: 0.0, count: 0);
+      if (snapshot.docs.isEmpty) {
+        const r = (average: 0.0, count: 0);
+        _putDramaAggregateStats(id, r.average, r.count);
+        return r;
+      }
       double sum = 0;
+      var count = 0;
       for (final doc in snapshot.docs) {
         final r = (doc.data()['rating'] as num?)?.toDouble() ?? 0;
+        if (r <= 0) continue;
         sum += r;
+        count++;
       }
-      final count = snapshot.docs.length;
-      return (average: count > 0 ? sum / count : 0.0, count: count);
+      final r = (average: count > 0 ? sum / count : 0.0, count: count);
+      _putDramaAggregateStats(id, r.average, r.count);
+      return r;
     } catch (e) {
       debugPrint('ReviewService getDramaRatingStats: $e');
-      return (average: 0.0, count: 0);
+      const r = (average: 0.0, count: 0);
+      _putDramaAggregateStats(id, r.average, r.count);
+      return r;
     }
   }
 
@@ -572,8 +690,14 @@ class ReviewService {
           writtenAt: at,
           authorPhotoUrl: d['authorPhotoUrl'] as String?,
           authorUid: d['uid'] as String?,
+          feedPostId: _trimOrNull(d['feedPostId'] as String?),
         ));
       }
+      list.sort((a, b) {
+        final tb = b.writtenAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final ta = a.writtenAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return tb.compareTo(ta);
+      });
       return list;
     } catch (e) {
       debugPrint('ReviewService getDramaReviews: $e');

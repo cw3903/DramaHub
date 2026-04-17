@@ -73,6 +73,9 @@ class _CommunityScreenState extends State<CommunityScreen>
   int _feedPrevTabIndex = 0;
   bool _feedTabListenerArmed = false;
 
+  /// 톡·에스크 피드: false=구분선 목록(기본), true=카드.
+  bool _talkAskUseCardFeedLayout = false;
+
   // 브라우저 히스토리 (community 레벨)
   List<(Post, int)> _navBackStack = [];
   List<(Post, int)> _navForwardStack = [];
@@ -226,6 +229,12 @@ class _CommunityScreenState extends State<CommunityScreen>
         for (final p in page.posts) {
           if (!BlockService.instance.isBlocked(p.author) &&
               !BlockService.instance.isPostBlocked(p.id)) {
+            // 리뷰 게시판은 별점+리뷰글 둘 다 있는 게시글만 표시
+            if (_feedBoards[tabIndex] == 'review') {
+              final hasText = p.body?.trim().isNotEmpty ?? false;
+              final hasRating = (p.rating ?? 0) > 0;
+              if (!hasText || !hasRating) continue;
+            }
             accumulated.add(p);
           }
         }
@@ -413,6 +422,7 @@ class _CommunityScreenState extends State<CommunityScreen>
           initialForwardStack: forwardStack ?? [],
           initialTabIndex: tabIndex,
           initialBoardPosts: _cachedFiltered,
+          dramaFeedTalkAskUseCardFeedLayout: _talkAskUseCardFeedLayout,
           onPostDeleted: (deleted) {
             _removePostFromAllFeeds(deleted.id);
           },
@@ -577,7 +587,7 @@ class _CommunityScreenState extends State<CommunityScreen>
           ),
           actions: [
             Padding(
-              padding: EdgeInsets.only(right: 10 * r),
+              padding: EdgeInsets.only(right: 6 * r),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -611,7 +621,7 @@ class _CommunityScreenState extends State<CommunityScreen>
                           NotificationService.instance.markAllRead();
                         },
                         child: Padding(
-                          padding: EdgeInsets.only(left: 6 * r, right: 8 * r),
+                          padding: EdgeInsets.only(left: 6 * r, right: 6 * r),
                           child: Stack(
                             clipBehavior: Clip.none,
                             children: [
@@ -664,16 +674,18 @@ class _CommunityScreenState extends State<CommunityScreen>
               children: [
                 Row(
                   children: [
-                    ListenableBuilder(
-                      listenable: _tabController,
+                    AnimatedBuilder(
+                      animation: _tabController.animation!,
                       builder: (context, _) {
                         final tabW = 60.0 * r;
                         final tabH = 26.0 * r;
                         final tabGap = 5.0 * r;
                         final leftPad = 14.0 * r;
-                        // animation.value 대신 index(정수)를 써서 즉시 이동
-                        final animValue = _tabController.index.toDouble();
-                        final idx = _tabController.index;
+                        // TabController는 드래그 중 index만으로는 리스너가 안 도므로
+                        // animation을 구독해 스와이프 끝나자마자 칩·글자색이 맞게 갱신.
+                        final animRaw = _tabController.animation!.value;
+                        final animValue = animRaw.clamp(0.0, 2.0).toDouble();
+                        final idx = animRaw.round().clamp(0, 2);
 
                         return Align(
                           alignment: Alignment.centerLeft,
@@ -767,7 +779,49 @@ class _CommunityScreenState extends State<CommunityScreen>
                       },
                     ),
                     const Spacer(),
-                    SizedBox(width: 14 * r),
+                    AnimatedBuilder(
+                      animation: _tabController.animation!,
+                      builder: (context, _) {
+                        final idx =
+                            _tabController.animation!.value.round().clamp(0, 2);
+                        final showLayoutToggle = idx == 1 || idx == 2;
+                        if (!showLayoutToggle) {
+                          return SizedBox(width: 14 * r);
+                        }
+                        final tip = _talkAskUseCardFeedLayout
+                            ? s.get('talkAskFeedLayoutSwitchToList')
+                            : s.get('talkAskFeedLayoutSwitchToCards');
+                        return Padding(
+                          padding: EdgeInsets.only(right: 6 * r),
+                          child: Tooltip(
+                            message: tip,
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: () => setState(
+                                  () => _talkAskUseCardFeedLayout =
+                                      !_talkAskUseCardFeedLayout,
+                                ),
+                                borderRadius: BorderRadius.circular(8 * r),
+                                child: Padding(
+                                  padding: EdgeInsets.symmetric(
+                                    horizontal: 6 * r,
+                                    vertical: 2 * r,
+                                  ),
+                                  child: Icon(
+                                    _talkAskUseCardFeedLayout
+                                        ? LucideIcons.menu
+                                        : LucideIcons.layout_grid,
+                                    size: 14 * r,
+                                    color: cs.onSurfaceVariant,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
                   ],
                 ),
                 SizedBox(height: 10 * r),
@@ -811,6 +865,7 @@ class _CommunityScreenState extends State<CommunityScreen>
                     currentUserAuthor: _currentUserAuthor,
                     onRefresh: _refreshActiveFeedTab,
                     useSimpleFeedLayout: true,
+                    useCardFeedLayout: _talkAskUseCardFeedLayout,
                     feedScrollController: _feedScrollControllers[1],
                     feedLoadingMore: _tabLoadingMore[1],
                     feedHasMore: _tabHasMore[1],
@@ -835,6 +890,7 @@ class _CommunityScreenState extends State<CommunityScreen>
                     currentUserAuthor: _currentUserAuthor,
                     onRefresh: _refreshActiveFeedTab,
                     useSimpleFeedLayout: true,
+                    useCardFeedLayout: _talkAskUseCardFeedLayout,
                     feedScrollController: _feedScrollControllers[2],
                     feedLoadingMore: _tabLoadingMore[2],
                     feedHasMore: _tabHasMore[2],

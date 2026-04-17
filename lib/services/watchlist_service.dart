@@ -122,7 +122,6 @@ class WatchlistService {
   Future<void> add(String dramaId, String? country) async {
     final uid = _uid;
     if (uid == null || dramaId.isEmpty) return;
-    await loadIfNeeded();
     if (isInWatchlist(dramaId)) return;
 
     final svc = DramaListService.instance;
@@ -135,14 +134,16 @@ class WatchlistService {
       imageUrlSnapshot: imageUrl,
     );
 
+    // Optimistic update first — UI responds immediately (same as remove())
+    itemsNotifier.value = [item, ...itemsNotifier.value.where((e) => e.dramaId != dramaId)];
+
     try {
       await _watchlistCol.doc(dramaId).set(item.toFirestoreMap());
     } catch (e, st) {
       debugPrint('WatchlistService.add: $e\n$st');
-      return;
+      // Rollback on Firestore failure
+      itemsNotifier.value = itemsNotifier.value.where((e) => e.dramaId != dramaId).toList();
     }
-
-    itemsNotifier.value = [item, ...itemsNotifier.value.where((e) => e.dramaId != dramaId)];
   }
 
   Future<void> remove(String dramaId) async {
@@ -162,6 +163,27 @@ class WatchlistService {
       await remove(dramaId);
     } else {
       await add(dramaId, country);
+    }
+  }
+
+  /// 모든 유저 중 이 드라마를 워치리스트에 둔 인원 수 (`dramaId` 필드 기준).
+  ///
+  /// collection group에서 [FieldPath.documentId]에 작품 ID만 넣는 질의는
+  /// Firestore가 허용하지 않아(전체 문서 경로 필요) 네이티브 단언 크래시가 난다.
+  /// `null`이면 집계 실패 — UI에서 기존 숫자를 유지할 것.
+  Future<int?> countUsersIncludingDrama(String dramaId) async {
+    final did = dramaId.trim();
+    if (did.isEmpty) return 0;
+    try {
+      final snap = await _firestore
+          .collectionGroup('watchlist')
+          .where('dramaId', isEqualTo: did)
+          .count()
+          .get();
+      return snap.count ?? 0;
+    } catch (e, st) {
+      debugPrint('WatchlistService.countUsersIncludingDrama: $e\n$st');
+      return null;
     }
   }
 

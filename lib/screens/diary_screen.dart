@@ -14,9 +14,11 @@ import '../services/user_profile_service.dart';
 import '../services/watch_history_service.dart';
 import '../widgets/country_scope.dart';
 import '../widgets/feed_review_star_row.dart';
+import '../widgets/review_body_lines_indicator.dart';
 import '../widgets/lists_style_subpage_app_bar.dart';
 import '../widgets/optimized_network_image.dart';
-import 'drama_detail_page.dart';
+import 'profile_screen.dart'
+    show RecentActivityWatchOnlyPage, RecentActivityReviewGate;
 
 const List<String> _kMonthNamesEn = [
   'January',
@@ -80,8 +82,9 @@ String diaryMonthHeaderLabel(String appCountry, int year, int month) {
 }
 
 String? _resolveImageUrl(WatchedDramaItem item, String? country) {
-  if (!item.id.startsWith('short-')) {
-    final byId = DramaListService.instance.getDisplayImageUrl(item.id, country);
+  final dramaId = item.dramaKey;
+  if (!dramaId.startsWith('short-')) {
+    final byId = DramaListService.instance.getDisplayImageUrl(dramaId, country);
     if (byId != null && byId.isNotEmpty) return byId;
   }
   final byTitle =
@@ -93,8 +96,9 @@ String? _resolveImageUrl(WatchedDramaItem item, String? country) {
 }
 
 String _displayTitle(WatchedDramaItem item, String? country) {
-  if (!item.id.startsWith('short-')) {
-    final t = DramaListService.instance.getDisplayTitle(item.id, country);
+  final dramaId = item.dramaKey;
+  if (!dramaId.startsWith('short-')) {
+    final t = DramaListService.instance.getDisplayTitle(dramaId, country);
     if (t.isNotEmpty) return t;
   }
   return DramaListService.instance.getDisplayTitleByTitle(item.title, country);
@@ -107,7 +111,7 @@ bool watchedItemMatchesProfileFavorite(
   String? country,
 ) {
   final fid = f.dramaId.trim();
-  final iid = item.id.trim();
+  final iid = item.dramaKey.trim();
   if (fid.isNotEmpty && iid == fid) return true;
   final itemTitle = _displayTitle(item, country).trim();
   if (itemTitle.isEmpty) return false;
@@ -139,11 +143,12 @@ List<WatchedDramaItem> watchHistoryForFavorite(
 
 /// 프로필 다이어리·즐겨찾기 활동 다이어리 탭 공통 — 시청 줄에서 상세용 [DramaItem].
 DramaItem dramaItemForDiaryEntry(WatchedDramaItem item, String? country) {
+  final dramaId = item.dramaKey;
   for (final it in DramaListService.instance.list) {
-    if (it.id == item.id) return it;
+    if (it.id == dramaId) return it;
   }
   return DramaItem(
-    id: item.id,
+    id: dramaId,
     title: _displayTitle(item, country),
     subtitle: item.subtitle,
     views: item.views,
@@ -152,8 +157,9 @@ DramaItem dramaItemForDiaryEntry(WatchedDramaItem item, String? country) {
 }
 
 String? _releaseYearForWatched(WatchedDramaItem item, String? country) {
-  if (!item.id.startsWith('short-')) {
-    final d = DramaListService.instance.getExtra(item.id)?.releaseDate;
+  final dramaId = item.dramaKey;
+  if (!dramaId.startsWith('short-')) {
+    final d = DramaListService.instance.getExtra(dramaId)?.releaseDate;
     if (d != null) return '${d.year}';
   }
   final t = item.title.trim();
@@ -170,7 +176,7 @@ String? _releaseYearForWatched(WatchedDramaItem item, String? country) {
 }
 
 MyReviewItem? _reviewForWatched(WatchedDramaItem item, String? country) {
-  final byId = ReviewService.instance.getByDramaId(item.id);
+  final byId = ReviewService.instance.getByDramaId(item.dramaKey);
   if (byId != null) return byId;
   final displayTitle = _displayTitle(item, country);
   for (final r in ReviewService.instance.listNotifier.value) {
@@ -285,13 +291,58 @@ class _DiaryScreenState extends State<DiaryScreen> {
   void _openDrama(BuildContext context, WatchedDramaItem item) {
     final country = CountryScope.maybeOf(context)?.country ??
         UserProfileService.instance.signupCountryNotifier.value;
-    final dramaItem = dramaItemForDiaryEntry(item, country);
-    final detail =
-        DramaListService.instance.buildDetailForItem(dramaItem, country);
+    final locale = CountryScope.maybeOf(context)?.country;
+    final uid = AuthService.instance.currentUser.value?.uid ?? '';
+
+    // DiaryEntryRow 표시 로직과 동일: item 직접 → ReviewService 폴백
+    final itemRating = item.rating;
+    final itemComment = item.comment?.trim();
+    final bool hasRating;
+    final bool hasReviewText;
+    final double effectiveRating;
+    final String effectiveComment;
+    if ((itemRating != null && itemRating > 0) ||
+        (itemComment != null && itemComment.isNotEmpty)) {
+      hasRating = (itemRating ?? 0) > 0;
+      hasReviewText = itemComment?.isNotEmpty ?? false;
+      effectiveRating = itemRating ?? 0;
+      effectiveComment = itemComment ?? '';
+    } else {
+      final rv = _reviewForWatched(item, country);
+      hasRating = (rv?.rating ?? 0) > 0;
+      hasReviewText = rv?.comment.trim().isNotEmpty ?? false;
+      effectiveRating = rv?.rating ?? 0;
+      effectiveComment = rv?.comment ?? '';
+    }
+    final isWatchOnly = !hasRating && !hasReviewText;
+
+    // WatchedDramaItem → MyReviewItem 변환
+    final review = MyReviewItem(
+      id: item.id,
+      dramaId: item.dramaKey,
+      dramaTitle: item.title,
+      rating: effectiveRating,
+      comment: effectiveComment,
+      writtenAt: item.watchedAt,
+    );
+
     Navigator.push<void>(
       context,
       CupertinoPageRoute<void>(
-        builder: (_) => DramaDetailPage(detail: detail),
+        builder: (_) => isWatchOnly
+            ? RecentActivityWatchOnlyPage(
+                authorUid: uid,
+                review: review,
+                country: country,
+                locale: locale,
+              )
+            : RecentActivityReviewGate(
+                authorUid: uid,
+                dramaId: item.dramaKey,
+                locale: locale,
+                review: review,
+                country: country,
+              ),
       ),
     );
   }
@@ -318,7 +369,8 @@ class _DiaryScreenState extends State<DiaryScreen> {
         final sortIconColor =
             cs.onSurfaceVariant.withValues(alpha: 0.78);
         final headerBg = listsStyleSubpageHeaderBackground(theme);
-        return AnnotatedRegion<SystemUiOverlayStyle>(
+        return ListsStyleSwipeBack(
+          child: AnnotatedRegion<SystemUiOverlayStyle>(
           value: listsStyleSubpageSystemOverlay(theme, headerBg),
           child: Scaffold(
             backgroundColor: theme.scaffoldBackgroundColor,
@@ -350,6 +402,7 @@ class _DiaryScreenState extends State<DiaryScreen> {
             ),
             body: _buildBody(context, cs, s, appCountry),
           ),
+        ),
         );
       },
     );
@@ -451,6 +504,14 @@ class _DiaryScreenState extends State<DiaryScreen> {
       );
     }
 
+    slivers.add(
+      SliverPadding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.paddingOf(context).bottom + 80,
+        ),
+      ),
+    );
+
     return CustomScrollView(
       primary: false,
       controller: _scrollController,
@@ -532,9 +593,22 @@ class DiaryEntryRow extends StatelessWidget {
     final title = _displayTitle(item, country);
     final year = _releaseYearForWatched(item, country);
     final imageUrl = _resolveImageUrl(item, country);
-    final review = _reviewForWatched(item, country);
-    final rating = review != null && review.rating > 0 ? review.rating : null;
-    final hasReviewText = review?.comment.trim().isNotEmpty ?? false;
+
+    // item 자체에 별점/코멘트가 저장돼 있으면 직접 사용 (워치+별, 워치+별+리뷰).
+    // 없으면 ReviewService로 폴백 (리뷰탭에서 별도 작성한 리뷰와의 매칭용).
+    final double? rating;
+    final bool hasReviewText;
+    final itemRating = item.rating;
+    final itemComment = item.comment?.trim();
+    if ((itemRating != null && itemRating > 0) ||
+        (itemComment != null && itemComment.isNotEmpty)) {
+      rating = (itemRating != null && itemRating > 0) ? itemRating : null;
+      hasReviewText = itemComment?.isNotEmpty ?? false;
+    } else {
+      final review = _reviewForWatched(item, country);
+      rating = review != null && review.rating > 0 ? review.rating : null;
+      hasReviewText = review?.comment.trim().isNotEmpty ?? false;
+    }
 
     return Material(
       color: Colors.transparent,
@@ -609,22 +683,35 @@ class DiaryEntryRow extends StatelessWidget {
                     ),
                     if (rating != null || hasReviewText) ...[
                       const SizedBox(height: 5),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (rating != null) ...[
-                            FeedReviewRatingStars(
-                              rating: rating.clamp(0.0, 5.0),
-                              layoutThumbWidth: 62,
-                            ),
+                      SizedBox(
+                        height: 20,
+                        child: Stack(
+                          clipBehavior: Clip.none,
+                          alignment: Alignment.centerLeft,
+                          children: [
+                            if (rating != null)
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: FeedReviewRatingStars(
+                                  rating: rating.clamp(0.0, 5.0),
+                                  layoutThumbWidth: kFeedReviewRatingThumbWidth,
+                                ),
+                              ),
+                            if (hasReviewText)
+                              Positioned(
+                                left: kFeedReviewRatingThumbWidth + 4,
+                                top: 0,
+                                bottom: 0,
+                                child: Center(
+                                  child: ReviewBodyLinesIndicator(
+                                    color: cs.onSurfaceVariant.withValues(
+                                      alpha: 0.44,
+                                    ),
+                                  ),
+                                ),
+                              ),
                           ],
-                          if (hasReviewText) ...[
-                            if (rating != null) const SizedBox(width: 2),
-                            _DiaryReviewBodyIndicator(
-                              color: cs.onSurfaceVariant.withValues(alpha: 0.44),
-                            ),
-                          ],
-                        ],
+                        ),
                       ),
                     ],
                   ],
@@ -632,46 +719,6 @@ class DiaryEntryRow extends StatelessWidget {
               ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-/// 리뷰 본문 있음 표시 — 얇은 벡터 아이콘보다 살짝 굵은 3줄.
-class _DiaryReviewBodyIndicator extends StatelessWidget {
-  const _DiaryReviewBodyIndicator({required this.color});
-
-  final Color color;
-
-  static const double _w = 12;
-  static const double _stroke = 1.65;
-  static const double _gap = 2.35;
-
-  @override
-  Widget build(BuildContext context) {
-    Widget line(double width) => Container(
-          width: width,
-          height: _stroke,
-          decoration: BoxDecoration(
-            color: color,
-            borderRadius: BorderRadius.circular(_stroke / 2),
-          ),
-        );
-    return SizedBox(
-      height: 15,
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            line(_w),
-            SizedBox(height: _gap),
-            line(_w * 0.9),
-            SizedBox(height: _gap),
-            line(_w * 0.75),
-          ],
         ),
       ),
     );

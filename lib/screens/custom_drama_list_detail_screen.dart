@@ -83,11 +83,10 @@ Future<void> _confirmDeleteList(
   CustomDramaList list,
 ) async {
   final s = CountryScope.of(context).strings;
-  final msg =
-      '${s.get('listDeleteConfirmTitle')}\n\n${s.get('listDeleteConfirmMessage')}';
+  // ?? ??? ??? ??: ?? ?? ?? ? ?(`deletePostConfirm`? ?? ??).
   final confirmed = await showAppDeleteConfirmDialog(
     context,
-    message: msg,
+    message: s.get('listDeleteConfirmTitle'),
     cancelText: s.get('cancel'),
     confirmText: s.get('delete'),
   );

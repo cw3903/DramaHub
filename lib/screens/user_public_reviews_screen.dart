@@ -52,7 +52,8 @@ class _UserPublicReviewsScreenState extends State<UserPublicReviewsScreen> {
     final cs = theme.colorScheme;
     final headerBg = listsStyleSubpageHeaderBackground(theme);
 
-    return AnnotatedRegion<SystemUiOverlayStyle>(
+    return ListsStyleSwipeBack(
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
       value: listsStyleSubpageSystemOverlay(theme, headerBg),
       child: Scaffold(
         backgroundColor: theme.scaffoldBackgroundColor,
@@ -135,6 +136,7 @@ class _UserPublicReviewsScreenState extends State<UserPublicReviewsScreen> {
           },
         ),
       ),
+    ),
     );
   }
 }
