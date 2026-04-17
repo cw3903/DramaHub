@@ -793,7 +793,7 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
                     avatarSize -
                     8 -
                     talkAskLikeColW -
-                    (isReply ? replyArrowW : 0.0))
+                    ((isReply || showLeadingReplyIcon) ? replyArrowW : 0.0))
                 .clamp(1.0, 9999.0);
         final textScaler = MediaQuery.textScalerOf(ctx);
         final textDir = Directionality.of(ctx);
@@ -1059,7 +1059,7 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
     for (var i = 0; i < flat.length; i++) {
       final entry = flat[i];
       final comment = entry.comment;
-      final showLeadingReplyIcon = i == 0;
+      const showLeadingReplyIcon = true;
       while (stack.isNotEmpty && stack.last.depth >= entry.depth) {
         stack.removeLast();
       }
@@ -1128,7 +1128,7 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
         final parentComment = parent.comment;
         final parentExpanded = expandedReplyParents.contains(parentComment.id);
         if (!parentExpanded || parentComment.replies.isEmpty) continue;
-        final parentHasArrow = parent.depth > 0 || parent.flatIndex == 0;
+        const parentHasArrow = true;
         final toggleLeft = toggleLeftFor(parent.depth, parentHasArrow);
         final label = parentComment.replies.length == 1 ? 'reply' : 'replies';
         final metaColor = cs.onSurface.withValues(alpha: 0.44);

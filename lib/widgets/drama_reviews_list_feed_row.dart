@@ -520,7 +520,7 @@ class _DramaReviewsListFeedRowState extends State<DramaReviewsListFeedRow> {
         final innerMaxW = cons.maxWidth;
         final textColumnMaxW =
             (innerMaxW - avatarSize - 8 - talkAskLikeColW -
-                    (isReply ? replyArrowW : 0.0))
+                    ((isReply || showReplyIcon) ? replyArrowW : 0.0))
                 .clamp(1.0, 9999.0);
         final textScaler = MediaQuery.textScalerOf(context);
         final textDir = Directionality.of(context);
@@ -850,7 +850,7 @@ class _DramaReviewsListFeedRowState extends State<DramaReviewsListFeedRow> {
         final parentComment = parent.comment;
         final parentExpanded = _expandedReplyThreads.contains(parentComment.id);
         if (!parentExpanded || parentComment.replies.isEmpty) continue;
-        final parentHasArrow = parent.depth > 0 || parent.flatIndex == 0;
+        const parentHasArrow = true;
         final toggleLeft = (parentHasArrow ? 18.0 : 0.0) +
             kAppUnifiedProfileAvatarSize +
             8.0;
