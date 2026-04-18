@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'user_profile_service.dart';
+import '../profile_stats_refresh.dart';
 
 /// 앱 표시 언어 (EN/한국어/日本語/中文). 회원가입·프로필에서 선택, 전체 UI에 반영.
 class LocaleService {
@@ -105,7 +106,11 @@ class LocaleService {
     }
 
     _runPreLocaleCommitCallbacks();
+    final prevLocale = localeNotifier.value;
     localeNotifier.value = code;
+    if (prevLocale != code) {
+      bumpProfileStatsRefresh();
+    }
 
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid != null) {

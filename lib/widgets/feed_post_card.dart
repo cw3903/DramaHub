@@ -495,7 +495,7 @@ class _FeedPostCardState extends State<FeedPostCard> {
         confirmText: s.get('delete'),
       );
       if (confirmed == true && mounted) {
-        await PostService.instance.deletePost(post.id);
+        await PostService.instance.deletePost(post.id, postIfKnown: post);
         if (mounted) widget.onPostDeleted?.call(post);
       }
     } else if (selected == 'report') {
@@ -615,10 +615,13 @@ class _FeedPostCardState extends State<FeedPostCard> {
         authorUid != null &&
         authorUid.isNotEmpty &&
         authorUid == myUid;
-    final canonicalAuthor =
-        isMineByUid && widget.currentUserAuthor != null
-            ? widget.currentUserAuthor!
-            : post.author;
+    final mineAuthor =
+        UserProfileService.instance.effectiveAuthorLabelForMyPost(
+      isMineByUid: isMineByUid,
+      currentUserAuthor: widget.currentUserAuthor,
+      postAuthor: post.author,
+    );
+    final canonicalAuthor = mineAuthor ?? post.author;
     final displayAuthor = canonicalAuthor.startsWith('u/')
         ? canonicalAuthor.substring(2)
         : canonicalAuthor;
@@ -717,32 +720,121 @@ class _FeedPostCardState extends State<FeedPostCard> {
       ),
     );
 
-    return RepaintBoundary(
-      child: GestureDetector(
-        onTap:
-            widget.onTap ??
-            () {
-              // 영상이 있으면 전환 애니메이션(~300 ms) 동안 preload 병행 실행
-              if (post.hasVideo && post.videoUrl != null && post.videoUrl!.isNotEmpty) {
-                VideoPreloadCache.instance.preload(post.videoUrl!);
-              }
-              Navigator.push<PostDetailResult>(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => PostDetailPage(
-                    post: post,
-                    onPostDeleted: widget.onPostDeleted,
-                    tabName: widget.tabName,
+    void openPostDetail() {
+      if (widget.onTap != null) {
+        widget.onTap!();
+        return;
+      }
+      if (post.hasVideo &&
+          post.videoUrl != null &&
+          post.videoUrl!.isNotEmpty) {
+        VideoPreloadCache.instance.preload(post.videoUrl!);
+      }
+      Navigator.push<PostDetailResult>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => PostDetailPage(
+            post: post,
+            onPostDeleted: widget.onPostDeleted,
+            tabName: widget.tabName,
+          ),
+        ),
+      ).then((result) {
+        final updated = result?.updatedPost;
+        if (updated != null && mounted) {
+          widget.onPostUpdated?.call(updated);
+        }
+      });
+    }
+
+    /// 하트·투표와 부모 [GestureDetector]가 탭을 두지 않게, 상세는 본문·메타 영역만 연다.
+    final trailingMetaForDetailTap = Transform.translate(
+      offset: Offset(compactTalkAskBar ? 0 : -10, 0),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Padding(
+            padding: EdgeInsets.symmetric(
+              vertical: compactTalkAskBar ? 8 : 0,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                if (compactTalkAskBar)
+                  SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: Center(
+                      child: Icon(
+                        LucideIcons.message_circle,
+                        size: 13,
+                        color: feedInlineActionMutedForeground(
+                          cs,
+                        ),
+                      ),
+                    ),
+                  )
+                else
+                  Icon(
+                    LucideIcons.message_circle,
+                    size: 18,
+                    color: _feedMetaGray,
+                  ),
+                if (compactTalkAskBar && post.comments > 0) ...[
+                  SizedBox(width: talkAskIconCountGap),
+                  Text(
+                    formatCompactCount(post.comments),
+                    style: GoogleFonts.notoSansKr(
+                      color: feedInlineActionMutedForeground(cs),
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      height: 1.0,
+                    ),
+                  ),
+                ] else if (!compactTalkAskBar) ...[
+                  const SizedBox(width: 4),
+                  Text(
+                    formatCompactCount(post.comments),
+                    style: GoogleFonts.notoSansKr(
+                      color: _feedMetaGray,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (!compactTalkAskBar) ...[
+            const SizedBox(width: 10),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  LucideIcons.eye,
+                  size: 18,
+                  color: _feedMetaGray,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  formatCompactCount(post.views),
+                  style: GoogleFonts.notoSansKr(
+                    color: _feedMetaGray,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
-              ).then((result) {
-                final updated = result?.updatedPost;
-                if (updated != null && mounted) {
-                  widget.onPostUpdated?.call(updated);
-                }
-              });
-            },
-        child: Container(
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+
+    return RepaintBoundary(
+      child: Container(
           margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(
             color: cardFillColor,
@@ -765,6 +857,12 @@ class _FeedPostCardState extends State<FeedPostCard> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                GestureDetector(
+                  onTap: openPostDetail,
+                  behavior: HitTestBehavior.deferToChild,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                 // 상단: 작성자 (톡·에스크: IntrinsicHeight로 배지·닉 높이 초과 시 오버플로 방지)
                 compactTalkAskBar
                     ? IntrinsicHeight(
@@ -893,11 +991,13 @@ class _FeedPostCardState extends State<FeedPostCard> {
                   ),
                 ],
                 SizedBox(height: compactTalkAskBar ? 7 : 12),
-                // 하단 액션바 (톡·에스크는 본문과 동일 패딩 기준 — 음수 translate 금지)
+                    ],
+                  ),
+                ),
+                // 하단: 하트·투표는 상세로 전파되지 않음 — 댓글·조회수 쪽만 상세 탭
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    // 투표 / 톡·에스크 하트
                     Transform.translate(
                       offset: Offset(compactTalkAskBar ? 0 : -10, 0),
                       child: compactTalkAskBar
@@ -916,89 +1016,14 @@ class _FeedPostCardState extends State<FeedPostCard> {
                             ),
                     ),
                     if (compactTalkAskBar) const SizedBox(width: 4),
-                    // 댓글 (+ TALK/ASK는 조회수 숨김)
-                    Transform.translate(
-                      offset: Offset(compactTalkAskBar ? 0 : -10, 0),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Padding(
-                            padding: EdgeInsets.symmetric(
-                              vertical: compactTalkAskBar ? 8 : 0,
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                if (compactTalkAskBar)
-                                  SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: Center(
-                                      child: Icon(
-                                        LucideIcons.message_circle,
-                                        size: 13,
-                                        color: feedInlineActionMutedForeground(
-                                          cs,
-                                        ),
-                                      ),
-                                    ),
-                                  )
-                                else
-                                  Icon(
-                                    LucideIcons.message_circle,
-                                    size: 18,
-                                    color: _feedMetaGray,
-                                  ),
-                                if (compactTalkAskBar && post.comments > 0) ...[
-                                  SizedBox(width: talkAskIconCountGap),
-                                  Text(
-                                    formatCompactCount(post.comments),
-                                    style: GoogleFonts.notoSansKr(
-                                      color: feedInlineActionMutedForeground(cs),
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w600,
-                                      height: 1.0,
-                                    ),
-                                  ),
-                                ] else if (!compactTalkAskBar) ...[
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    formatCompactCount(post.comments),
-                                    style: GoogleFonts.notoSansKr(
-                                      color: _feedMetaGray,
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                          if (!compactTalkAskBar) ...[
-                            const SizedBox(width: 10),
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  LucideIcons.eye,
-                                  size: 18,
-                                  color: _feedMetaGray,
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  formatCompactCount(post.views),
-                                  style: GoogleFonts.notoSansKr(
-                                    color: _feedMetaGray,
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ],
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: openPostDetail,
+                        behavior: HitTestBehavior.translucent,
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: trailingMetaForDetailTap,
+                        ),
                       ),
                     ),
                   ],
@@ -1007,7 +1032,6 @@ class _FeedPostCardState extends State<FeedPostCard> {
             ),
           ),
         ),
-      ),
     );
   }
 }

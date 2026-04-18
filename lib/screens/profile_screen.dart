@@ -55,8 +55,7 @@ import '../widgets/optimized_network_image.dart';
 import '../services/country_service.dart';
 import '../services/drama_list_service.dart';
 import '../services/locale_service.dart';
-
-final ValueNotifier<int> _profileStatsRefreshNotifier = ValueNotifier(0);
+import '../profile_stats_refresh.dart';
 
 /// RATINGS 히스토그램 — 별 슬롯 순차 등장(슬롯당 구간).
 Widget _profileRatingsRevealSlot({
@@ -207,7 +206,7 @@ class _ProfileLinksMenuState extends State<_ProfileLinksMenu> {
   @override
   void initState() {
     super.initState();
-    _profileStatsRefreshNotifier.addListener(_onLikesRefreshSignal);
+    profileStatsRefreshNotifier.addListener(_onLikesRefreshSignal);
     AuthService.instance.currentUser.addListener(_onLikesRefreshSignal);
     LocaleService.instance.localeNotifier.addListener(_onAppLocaleChanged);
     // 다른 유저 프로필에서는 현재 사용자 서비스 로드 불필요
@@ -226,7 +225,7 @@ class _ProfileLinksMenuState extends State<_ProfileLinksMenu> {
   @override
   void dispose() {
     LocaleService.instance.localeNotifier.removeListener(_onAppLocaleChanged);
-    _profileStatsRefreshNotifier.removeListener(_onLikesRefreshSignal);
+    profileStatsRefreshNotifier.removeListener(_onLikesRefreshSignal);
     AuthService.instance.currentUser.removeListener(_onLikesRefreshSignal);
     super.dispose();
   }
@@ -256,13 +255,22 @@ class _ProfileLinksMenuState extends State<_ProfileLinksMenu> {
         CountryScope.maybeOf(context)?.country ??
         UserProfileService.instance.signupCountryNotifier.value;
     try {
-      final list = await PostService.instance.getPostsLikedByUid(
-        uid,
-        countryForTimeAgo: country,
-      );
+      final results = await Future.wait([
+        PostService.instance.getPostsLikedByUid(
+          uid,
+          countryForTimeAgo: country,
+        ),
+        PostService.instance.getCommentsLikedByUid(
+          uid,
+          countryForTimeAgo: country,
+        ),
+      ]);
       if (!mounted) return;
-      PostService.instance.cacheLikedPostsForLikesScreen(uid, list);
-      setState(() => _likesCount = list.length);
+      final posts = results[0] as List<Post>;
+      final comments =
+          results[1] as List<({Post post, PostComment comment})>;
+      PostService.instance.cacheLikedPostsForLikesScreen(uid, posts);
+      setState(() => _likesCount = posts.length + comments.length);
     } catch (_) {
       if (mounted) setState(() => _likesCount = 0);
     }
@@ -421,9 +429,8 @@ class _ProfileLinksMenuState extends State<_ProfileLinksMenu> {
                 icon: LucideIcons.languages,
                 label: s.get('language'),
                 onTap: () async {
-                  await Navigator.push<bool>(
-                    context,
-                    MaterialPageRoute<bool>(
+                  await Navigator.of(context).push<bool>(
+                    MaterialPageRoute(
                       builder: (_) => LanguageSelectScreen(
                         title: s.get('language'),
                         showCloseButton: true,
@@ -531,71 +538,185 @@ class _ProfileStatRow extends StatefulWidget {
 }
 
 class _ProfileStatRowState extends State<_ProfileStatRow> {
-  late Future<ProfileStatRowData> _statsFuture;
-  // extras가 늦게 도착하면 didUpdateWidget에서 반영
   int? _reviewCountFromExtras;
+  ProfileStatRowData? _statsData;
+  bool _statsLoading = true;
+  String? _lastStatsContextKey;
 
   @override
   void initState() {
     super.initState();
     _reviewCountFromExtras = widget.reviewCountOverride;
-    _statsFuture = _load();
-    _profileStatsRefreshNotifier.addListener(_onRefresh);
+    profileStatsRefreshNotifier.addListener(_onRefresh);
     LocaleService.instance.localeNotifier.addListener(_onLocaleChanged);
+    unawaited(_runStatsLoad(forceServerStats: false));
   }
 
   @override
-  void didUpdateWidget(_ProfileStatRow old) {
-    super.didUpdateWidget(old);
+  void didUpdateWidget(_ProfileStatRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
     final newOverride = widget.reviewCountOverride;
     if (newOverride != null && newOverride != _reviewCountFromExtras) {
       _reviewCountFromExtras = newOverride;
-      // 리뷰 수만 업데이트 — 재쿼리 없이 setState로 build만 갱신
       if (mounted) setState(() {});
+    }
+    if (widget.statsForUid != oldWidget.statsForUid ||
+        widget.statsDisplayNickname != oldWidget.statsDisplayNickname) {
+      _lastStatsContextKey = null;
+      if (mounted) {
+        setState(() {
+          _statsData = null;
+          _statsLoading = true;
+        });
+      }
+      unawaited(_runStatsLoad(forceServerStats: false));
     }
   }
 
   @override
   void dispose() {
-    _profileStatsRefreshNotifier.removeListener(_onRefresh);
+    profileStatsRefreshNotifier.removeListener(_onRefresh);
     LocaleService.instance.localeNotifier.removeListener(_onLocaleChanged);
     super.dispose();
   }
 
+  String _statsContextKey() {
+    final w = widget;
+    final uid = w.statsForUid?.trim() ??
+        AuthService.instance.currentUser.value?.uid.trim() ??
+        '';
+    return '$uid|${LocaleService.instance.locale}';
+  }
+
   void _onLocaleChanged() {
     if (!mounted) return;
-    // 루트 locale 반영으로 첫 프레임이 무거움 → 통계 쿼리는 다음 프레임으로 미룸
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      setState(() => _statsFuture = _load());
+    PostService.instance.clearProfileStatsPendingOwnPost();
+    PostService.instance.clearProfileCommentsByAuthorUidCache();
+    setState(() {
+      _statsData = null;
+      _statsLoading = true;
+      _lastStatsContextKey = null;
     });
+    unawaited(_runStatsLoad(forceServerStats: true));
   }
 
   void _onRefresh() {
-    if (mounted) setState(() => _statsFuture = _load());
+    PostService.instance.clearProfileCommentsByAuthorUidCache();
+    unawaited(_runStatsLoad(forceServerStats: true));
   }
 
-  Future<ProfileStatRowData> _load() async {
+  /// 1단계: 글·팔로·리뷰만(빠름) → 칩 즉시 반영. 2단계: 댓글 전체 스캔 후 합산 보정.
+  Future<void> _runStatsLoad({required bool forceServerStats}) async {
+    final ctxKey = _statsContextKey();
+    final carryComments = !forceServerStats &&
+        _statsData != null &&
+        _lastStatsContextKey == ctxKey;
+    try {
+      final meUid = AuthService.instance.currentUser.value?.uid.trim();
+      if (widget.statsForUid == null &&
+          (meUid == null || meUid.isEmpty)) {
+        final data = await _loadSelfWithoutUidMerge();
+        if (!mounted) return;
+        setState(() {
+          _statsData = data;
+          _statsLoading = false;
+          _lastStatsContextKey = ctxKey;
+        });
+        return;
+      }
+
+      final phase1 = await _buildStatsPhase1(
+        carryCommentItems: carryComments ? _statsData!.commentItems : null,
+        forceServerStats: forceServerStats,
+      );
+      if (!mounted) return;
+      setState(() {
+        _statsData = phase1;
+        _statsLoading = false;
+        _lastStatsContextKey = ctxKey;
+      });
+
+      final phase2 = await _finalizeStatsComments(
+        phase1,
+        forceServerStats: forceServerStats,
+      );
+      if (!mounted || _statsContextKey() != ctxKey) return;
+      setState(() => _statsData = phase2);
+    } catch (_) {
+      if (mounted) setState(() => _statsLoading = false);
+    }
+  }
+
+  Future<ProfileStatRowData> _loadSelfWithoutUidMerge() async {
+    final base = await UserProfileService.instance.getAuthorBaseName();
+    final postAuthor = await UserProfileService.instance.getAuthorForPost();
+    final postsF = PostService.instance.getPostsByAuthor(postAuthor);
+    final commentsF = PostService.instance.getCommentsByAuthor(base);
+    final results = await Future.wait([postsF, commentsF]);
+    final loc = LocaleService.instance.locale;
+    final posts = (results[0] as List<Post>)
+        .where((p) => Post.userScopedLocaleVisible(p.country, loc))
+        .toList();
+    var comments = (results[1] as List<({Post post, PostComment comment})>)
+        .where((e) => Post.userScopedLocaleVisible(e.post.country, loc))
+        .toList();
+    if (comments.isEmpty && base.isNotEmpty) {
+      comments = (await PostService.instance.getCommentsByAuthor(base))
+          .where((e) => Post.userScopedLocaleVisible(e.post.country, loc))
+          .toList();
+    }
+    return ProfileStatRowData(
+      postAuthor: postAuthor,
+      commentAuthor: base,
+      postCount: posts.length,
+      commentCount: comments.length,
+      reviewCount: ReviewService.instance.listNotifier.value.length,
+      followCountOverride: null,
+      viewAuthorUid: null,
+      posts: posts,
+      commentItems: comments,
+    );
+  }
+
+  Future<ProfileStatRowData> _buildStatsPhase1({
+    List<({Post post, PostComment comment})>? carryCommentItems,
+    required bool forceServerStats,
+  }) async {
     final w = widget;
+    final loc = LocaleService.instance.locale;
     final statsUid = w.statsForUid?.trim();
     if (statsUid != null && statsUid.isNotEmpty) {
       final nick = w.statsDisplayNickname?.trim() ?? '';
-
-      // 포스트 수 + 팔로잉 수를 병렬 로드.
-      // 댓글은 UserPostsScreen 진입 시 lazy 로드 (getCommentsByAuthorUid → getPostsAllPages 병목 제거).
-      // 리뷰 수는 extras에서 오거나 직접 fetch.
-      final postsF = PostService.instance.getPostsByAuthorUid(statsUid);
+      final authorKeyForMerge =
+          nick.isNotEmpty && nick != 'Member' ? 'u/$nick' : '';
+      final postsF = PostService.instance.mergePostsForProfileByUid(
+        statsUid,
+        authorKeyForMerge,
+        forceServerFetch: forceServerStats,
+      );
       final fcF = FollowService.instance.getFollowingCountOnce(statsUid);
       final reviewsF = (_reviewCountFromExtras == null)
           ? ReviewService.instance.fetchReviewsForUserUid(statsUid)
           : Future.value(<MyReviewItem>[]);
-
       final parallel = await Future.wait([postsF, fcF, reviewsF]);
-
-      final posts = parallel[0] as List<Post>;
+      var posts = (parallel[0] as List<Post>)
+          .where((p) => Post.userScopedLocaleVisible(p.country, loc))
+          .toList();
+      PostService.instance.applyProfileStatsPendingOwnPost(
+        posts,
+        statsUid,
+        loc,
+      );
+      List<({Post post, PostComment comment})> comments;
+      if (carryCommentItems != null) {
+        comments = carryCommentItems
+            .where((e) => Post.userScopedLocaleVisible(e.post.country, loc))
+            .toList();
+      } else {
+        comments = [];
+      }
       final fc = parallel[1] as int;
       final reviews = parallel[2] as List<MyReviewItem>;
-
       String postAuthor;
       String commentAuthor;
       if (posts.isNotEmpty) {
@@ -610,33 +731,47 @@ class _ProfileStatRowState extends State<_ProfileStatRow> {
         postAuthor = 'u/user';
         commentAuthor = nick.isNotEmpty ? nick : 'user';
       }
-
       return ProfileStatRowData(
         postAuthor: postAuthor,
         commentAuthor: commentAuthor,
         postCount: posts.length,
-        commentCount: 0, // UserPostsScreen 진입 시 authorUid로 lazy 로드
+        commentCount: comments.length,
         reviewCount: _reviewCountFromExtras ?? reviews.length,
         followCountOverride: fc,
         viewAuthorUid: statsUid,
         posts: posts,
-        commentItems: null, // lazy
+        commentItems: comments,
       );
     }
+
     final base = await UserProfileService.instance.getAuthorBaseName();
     final postAuthor = await UserProfileService.instance.getAuthorForPost();
-    final meUid = AuthService.instance.currentUser.value?.uid?.trim();
-
+    final meUid = AuthService.instance.currentUser.value?.uid.trim();
     final postsF = (meUid != null && meUid.isNotEmpty)
-        ? PostService.instance.getPostsByAuthorUid(meUid)
+        ? PostService.instance.mergePostsForProfileByUid(
+            meUid,
+            postAuthor,
+            forceServerFetch: forceServerStats,
+          )
         : PostService.instance.getPostsByAuthor(postAuthor);
-    final commentsF = (meUid != null && meUid.isNotEmpty)
-        ? PostService.instance.getCommentsByAuthorUid(meUid)
-        : PostService.instance.getCommentsByAuthor(base);
-
-    final results = await Future.wait([postsF, commentsF]);
-    final posts = results[0] as List<Post>;
-    final comments = results[1] as List<({Post post, PostComment comment})>;
+    final posts = (await postsF)
+        .where((p) => Post.userScopedLocaleVisible(p.country, loc))
+        .toList();
+    if (meUid != null && meUid.isNotEmpty) {
+      PostService.instance.applyProfileStatsPendingOwnPost(
+        posts,
+        meUid,
+        loc,
+      );
+    }
+    final List<({Post post, PostComment comment})> comments =
+        carryCommentItems != null
+            ? carryCommentItems
+                .where(
+                  (e) => Post.userScopedLocaleVisible(e.post.country, loc),
+                )
+                .toList()
+            : <({Post post, PostComment comment})>[];
     return ProfileStatRowData(
       postAuthor: postAuthor,
       commentAuthor: base,
@@ -650,44 +785,99 @@ class _ProfileStatRowState extends State<_ProfileStatRow> {
     );
   }
 
+  Future<ProfileStatRowData> _finalizeStatsComments(
+    ProfileStatRowData phase1, {
+    required bool forceServerStats,
+  }) async {
+    final w = widget;
+    final loc = LocaleService.instance.locale;
+    final statsUid = w.statsForUid?.trim();
+    if (statsUid != null && statsUid.isNotEmpty) {
+      final nick = w.statsDisplayNickname?.trim() ?? '';
+      var comments = await PostService.instance.getCommentsByAuthorUid(
+        statsUid,
+        forceServerFetch: forceServerStats,
+      );
+      comments = comments
+          .where((e) => Post.userScopedLocaleVisible(e.post.country, loc))
+          .toList();
+      if (comments.isEmpty && nick.isNotEmpty && nick != 'Member') {
+        comments = (await PostService.instance.getCommentsByAuthor(nick))
+            .where((e) => Post.userScopedLocaleVisible(e.post.country, loc))
+            .toList();
+      }
+      return ProfileStatRowData(
+        postAuthor: phase1.postAuthor,
+        commentAuthor: phase1.commentAuthor,
+        postCount: phase1.postCount,
+        commentCount: comments.length,
+        reviewCount: phase1.reviewCount,
+        followCountOverride: phase1.followCountOverride,
+        viewAuthorUid: phase1.viewAuthorUid,
+        posts: phase1.posts,
+        commentItems: comments,
+      );
+    }
+    final meUid = AuthService.instance.currentUser.value?.uid.trim();
+    if (meUid != null && meUid.isNotEmpty) {
+      final base = phase1.commentAuthor;
+      var comments = await PostService.instance.getCommentsByAuthorUid(
+        meUid,
+        forceServerFetch: forceServerStats,
+      );
+      comments = comments
+          .where((e) => Post.userScopedLocaleVisible(e.post.country, loc))
+          .toList();
+      if (comments.isEmpty && base.isNotEmpty) {
+        comments = (await PostService.instance.getCommentsByAuthor(base))
+            .where((e) => Post.userScopedLocaleVisible(e.post.country, loc))
+            .toList();
+      }
+      return ProfileStatRowData(
+        postAuthor: phase1.postAuthor,
+        commentAuthor: phase1.commentAuthor,
+        postCount: phase1.postCount,
+        commentCount: comments.length,
+        reviewCount: phase1.reviewCount,
+        followCountOverride: null,
+        viewAuthorUid: meUid,
+        posts: phase1.posts,
+        commentItems: comments,
+      );
+    }
+    return phase1;
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = widget.cs;
     final s = widget.strings;
     final w = widget;
+    final d = _statsData;
+    final chipLoading = _statsLoading && d == null;
     return Row(
       children: [
-        // ── Reviews ──
         Expanded(
           child: w.statsForUid != null
-              ? FutureBuilder<ProfileStatRowData>(
-                  future: _statsFuture,
-                  builder: (context, snap) {
-                    // extras override가 있으면 우선 사용, 없으면 future 결과
-                    final reviewCount =
-                        _reviewCountFromExtras ??
-                        snap.data?.reviewCount ??
-                        0;
+              ? _StatCard(
+                  icon: LucideIcons.star,
+                  label: s.get('tabReviews'),
+                  count: _reviewCountFromExtras ?? d?.reviewCount ?? 0,
+                  loading: chipLoading,
+                  onTap: () {
                     final uid = w.statsForUid!;
                     final disp = w.statsDisplayNickname?.trim();
-                    return _StatCard(
-                      icon: LucideIcons.star,
-                      label: s.get('tabReviews'),
-                      count: reviewCount,
-                      onTap: () {
-                        Navigator.push<void>(
-                          context,
-                          CupertinoPageRoute<void>(
-                            builder: (_) => UserPublicReviewsScreen(
-                              uid: uid,
-                              ownerDisplayName: disp,
-                            ),
-                          ),
-                        );
-                      },
-                      isLight: true,
+                    Navigator.push<void>(
+                      context,
+                      CupertinoPageRoute<void>(
+                        builder: (_) => UserPublicReviewsScreen(
+                          uid: uid,
+                          ownerDisplayName: disp,
+                        ),
+                      ),
                     );
                   },
+                  isLight: true,
                 )
               : ListenableBuilder(
                   listenable: ReviewService.instance.listNotifier,
@@ -713,59 +903,48 @@ class _ProfileStatRowState extends State<_ProfileStatRow> {
                 ),
         ),
         Container(width: 1, height: 28, color: cs.outline.withOpacity(0.4)),
-        // ── Posts (글 + 댓글 탭) ──
         Expanded(
-          child: FutureBuilder<ProfileStatRowData>(
-            future: _statsFuture,
-            builder: (context, snap) {
-              final postCount = snap.data?.postCount ?? 0;
-              final postAuthor = snap.data?.postAuthor ?? 'u/익명';
-              final viewUid = snap.data?.viewAuthorUid;
-              return _StatCard(
-                icon: LucideIcons.file_text,
-                label: s.get('userPostsTabPosts'),
-                count: postCount,
-                onTap: () {
-                  final nick = snap.data?.commentAuthor ?? '';
-                  final nameForScreen =
-                      nick.trim().isNotEmpty ? nick.trim() : postAuthor;
-                  final effectiveUid =
-                      viewUid ?? AuthService.instance.currentUser.value?.uid;
-                  Navigator.push(
-                    context,
-                    CupertinoPageRoute(
-                      builder: (_) => UserPostsScreen(
-                        authorName: nameForScreen,
-                        authorUid: effectiveUid,
-                        initialPosts: snap.data?.posts,
-                        initialCommentItems: snap.data?.commentItems,
-                      ),
-                    ),
-                  );
-                },
-                isLight: true,
+          child: _StatCard(
+            icon: LucideIcons.file_text,
+            label: s.get('userPostsTabPosts'),
+            count: d?.postsStatChipCount ?? 0,
+            loading: chipLoading,
+            onTap: () {
+              final postAuthor = d?.postAuthor ?? 'u/익명';
+              final nick = d?.commentAuthor ?? '';
+              final nameForScreen =
+                  nick.trim().isNotEmpty ? nick.trim() : postAuthor;
+              final effectiveUid =
+                  d?.viewAuthorUid ??
+                  AuthService.instance.currentUser.value?.uid;
+              Navigator.push(
+                context,
+                CupertinoPageRoute(
+                  builder: (_) => UserPostsScreen(
+                    authorName: nameForScreen,
+                    authorUid: effectiveUid,
+                    initialPosts: d?.posts,
+                    initialCommentItems: d?.commentItems,
+                  ),
+                ),
               );
             },
+            isLight: true,
           ),
         ),
         Container(width: 1, height: 28, color: cs.outline.withOpacity(0.4)),
-        // ── Follow (실시간 notifier) ──
         Expanded(
-          child: FutureBuilder<ProfileStatRowData>(
-            future: _statsFuture,
-            builder: (context, snap) {
-              final w = widget;
-              if (w.statsForUid != null) {
-                final fc = snap.data?.followCountOverride ?? 0;
-                final uid = w.statsForUid!;
-                final disp = w.statsDisplayNickname?.trim().isNotEmpty == true
-                    ? w.statsDisplayNickname!.trim()
-                    : 'Member';
-                return _StatCard(
+          child: w.statsForUid != null
+              ? _StatCard(
                   icon: LucideIcons.user_plus,
                   label: s.get('profileStatFollow'),
-                  count: fc,
+                  count: d?.followCountOverride ?? 0,
+                  loading: chipLoading,
                   onTap: () {
+                    final uid = w.statsForUid!;
+                    final disp = w.statsDisplayNickname?.trim().isNotEmpty == true
+                        ? w.statsDisplayNickname!.trim()
+                        : 'Member';
                     Navigator.push<void>(
                       context,
                       CupertinoPageRoute<void>(
@@ -777,47 +956,45 @@ class _ProfileStatRowState extends State<_ProfileStatRow> {
                     );
                   },
                   isLight: true,
-                );
-              }
-              return ValueListenableBuilder<int>(
-                valueListenable: FollowService.instance.followingCountNotifier,
-                builder: (context, followCount, _) {
-                  return _StatCard(
-                    icon: LucideIcons.user_plus,
-                    label: s.get('profileStatFollow'),
-                    count: followCount,
-                    onTap: () async {
-                      await UserProfileService.instance.loadIfNeeded();
-                      if (!context.mounted) return;
-                      final uid = AuthService.instance.currentUser.value?.uid;
-                      if (uid == null) return;
-                      final nick = UserProfileService
-                          .instance
-                          .nicknameNotifier
-                          .value
-                          ?.trim();
-                      final disp = nick != null && nick.isNotEmpty
-                          ? nick
-                          : (AuthService.instance.currentUser.value?.displayName
-                                    ?.trim() ??
-                                'Member');
-                      if (!context.mounted) return;
-                      Navigator.push<void>(
-                        context,
-                        CupertinoPageRoute<void>(
-                          builder: (_) => FollowScreen(
-                            networkOwnerUid: uid,
-                            ownerDisplayName: disp,
+                )
+              : ValueListenableBuilder<int>(
+                  valueListenable: FollowService.instance.followingCountNotifier,
+                  builder: (context, followCount, _) {
+                    return _StatCard(
+                      icon: LucideIcons.user_plus,
+                      label: s.get('profileStatFollow'),
+                      count: followCount,
+                      loading: false,
+                      onTap: () async {
+                        await UserProfileService.instance.loadIfNeeded();
+                        if (!context.mounted) return;
+                        final uid = AuthService.instance.currentUser.value?.uid;
+                        if (uid == null) return;
+                        final nick = UserProfileService
+                            .instance
+                            .nicknameNotifier
+                            .value
+                            ?.trim();
+                        final disp = nick != null && nick.isNotEmpty
+                            ? nick
+                            : (AuthService.instance.currentUser.value?.displayName
+                                      ?.trim() ??
+                                  'Member');
+                        if (!context.mounted) return;
+                        Navigator.push<void>(
+                          context,
+                          CupertinoPageRoute<void>(
+                            builder: (_) => FollowScreen(
+                              networkOwnerUid: uid,
+                              ownerDisplayName: disp,
+                            ),
                           ),
-                        ),
-                      );
-                    },
-                    isLight: true,
-                  );
-                },
-              );
-            },
-          ),
+                        );
+                      },
+                      isLight: true,
+                    );
+                  },
+                ),
         ),
       ],
     );
@@ -1193,7 +1370,7 @@ class _MyProfileScreen extends StatelessWidget {
       body: SafeArea(
         child: RefreshIndicator(
           onRefresh: () async {
-            _profileStatsRefreshNotifier.value++;
+            profileStatsRefreshNotifier.value++;
             await Future.wait([
               UserProfileService.instance.loadIfNeeded(),
               SavedService.instance.loadIfNeeded(),
@@ -1870,7 +2047,7 @@ class _ProfileRatingsSectionState extends State<_ProfileRatingsSection> {
   void initState() {
     super.initState();
     _loadHistogram();
-    _profileStatsRefreshNotifier.addListener(_onHistogramRefresh);
+    profileStatsRefreshNotifier.addListener(_onHistogramRefresh);
     LocaleService.instance.localeNotifier.addListener(_onLocaleHistogramDeferred);
     // 자신의 프로필일 때만 리뷰 목록 변화 감지
     if (widget.ratingsUid == null) {
@@ -1880,7 +2057,7 @@ class _ProfileRatingsSectionState extends State<_ProfileRatingsSection> {
 
   @override
   void dispose() {
-    _profileStatsRefreshNotifier.removeListener(_onHistogramRefresh);
+    profileStatsRefreshNotifier.removeListener(_onHistogramRefresh);
     LocaleService.instance.localeNotifier.removeListener(
       _onLocaleHistogramDeferred,
     );
@@ -2699,19 +2876,24 @@ List<MyReviewItem> _ratedReviewsForProfileRecentActivityFromList(
 }
 
 /// Recent Activity(내 프로필): 별점 리뷰 + watch-only(eye만 저장) 합산.
-/// 별점/리뷰가 이미 있는 드라마의 워치기록은 중복 제외.
+///
+/// 같은 작품에 워치만 저장 후 워치+별점을 또 저장해도 **서로 다른 시청**이므로
+/// dramaId만 보고 워치-only를 숨기지 않는다(이전에는 별점이 생기면 눈만 행이 빠짐).
+///
+/// 워치만 저장 시 [PostService.addPost] → [syncDramaReviewFromFeedPost]가
+/// `drama_reviews`에만 먼저 쌓일 수 있고, 다이어리(`watch_history`)는 한 박자 늦거나
+/// 로드 전이면 기존 로직만으로는 슬롯이 비므로, 피드와 연결된 0별·빈본문 행도
+/// 동일 슬롯으로 합친다(다이어리와 id `watch_feed_<postId>`가 같으면 한 건만).
 List<MyReviewItem> _recentActivitiesForMyProfile() {
   final rated = _ratedReviewsForProfileRecentActivity();
-  // 별점/리뷰가 있는 dramaId 셋 — 워치기록 중복 방지
-  final ratedDramaIds = rated.map((r) => r.dramaId.trim()).toSet();
-  final watchOnly = WatchHistoryService.instance.list
+
+  final fromHistory = WatchHistoryService.instance.list
       .where(_profileRecentActivityWatchVisible)
       .where(
         (e) =>
             (e.rating == null || e.rating! <= 0) &&
             (e.comment?.trim().isEmpty ?? true) &&
-            e.dramaKey.trim().isNotEmpty &&
-            !ratedDramaIds.contains(e.dramaKey.trim()),
+            e.dramaKey.trim().isNotEmpty,
       )
       .map(
         (e) => MyReviewItem(
@@ -2723,8 +2905,42 @@ List<MyReviewItem> _recentActivitiesForMyProfile() {
           writtenAt: e.watchedAt,
           appLocale: e.appLocale,
         ),
-      )
-      .toList();
+      );
+
+  final fromFeedWatchShaped = ReviewService.instance.list
+      .where(_profileRecentActivityMyReviewVisible)
+      .where((r) {
+        final fp = r.feedPostId?.trim() ?? '';
+        if (fp.isEmpty) return false;
+        if (r.dramaId.trim().isEmpty) return false;
+        if (r.rating > 0) return false;
+        if (r.comment.trim().isNotEmpty) return false;
+        return true;
+      })
+      .map(
+        (r) => MyReviewItem(
+          id:
+              'watch_${WatchHistoryService.entryIdForLinkedFeedReview(r.feedPostId!)}',
+          dramaId: r.dramaId.trim(),
+          dramaTitle: r.dramaTitle,
+          rating: 0,
+          comment: '',
+          writtenAt: r.writtenAt,
+          authorName: r.authorName,
+          feedPostId: r.feedPostId,
+          appLocale: r.appLocale,
+        ),
+      );
+
+  final byId = <String, MyReviewItem>{};
+  for (final w in fromFeedWatchShaped) {
+    byId[w.id.trim()] = w;
+  }
+  for (final w in fromHistory) {
+    byId.putIfAbsent(w.id.trim(), () => w);
+  }
+  final watchOnly = byId.values.toList();
+
   final merged = <MyReviewItem>[...rated, ...watchOnly];
   merged.sort((a, b) => b.writtenAt.compareTo(a.writtenAt));
   return merged;
@@ -3102,6 +3318,29 @@ bool _myReviewLogMatchesCurrentViewerLocale(MyReviewItem r) {
   );
 }
 
+/// Recent Activity → Letterboxd 상세에서 삭제 후: `watch_*` 시청 로그 제거 또는
+/// 피드 글 없이 합성만 있을 때 [ReviewService] 리뷰 문서 삭제.
+Future<void> cleanupRecentActivityAfterLetterboxdDelete({
+  required String authorUid,
+  required MyReviewItem review,
+  required bool hadFirestoreFeedPost,
+}) async {
+  final me = AuthService.instance.currentUser.value?.uid.trim();
+  if (me == null || me.isEmpty || me != authorUid.trim()) return;
+  final rid = review.id.trim();
+  if (rid.startsWith('watch_')) {
+    if (rid.length > 6) {
+      await WatchHistoryService.instance.remove(rid.substring(6));
+    }
+    return;
+  }
+  if (!hadFirestoreFeedPost &&
+      rid.isNotEmpty &&
+      !rid.startsWith('local_')) {
+    await ReviewService.instance.deleteById(rid);
+  }
+}
+
 class RecentActivityWatchOnlyPage extends StatefulWidget {
   const RecentActivityWatchOnlyPage({
     required this.authorUid,
@@ -3242,6 +3481,15 @@ class _RecentActivityWatchOnlyPageState
         post: _feedPost!,
         hideBottomDramaFeed: true,
         forceWatchPageTitle: true,
+        onPostDeleted: (_) {
+          unawaited(
+            cleanupRecentActivityAfterLetterboxdDelete(
+              authorUid: widget.authorUid,
+              review: widget.review,
+              hadFirestoreFeedPost: true,
+            ),
+          );
+        },
       );
     }
     if (_syntheticPost != null &&
@@ -3251,6 +3499,15 @@ class _RecentActivityWatchOnlyPageState
         hideBottomDramaFeed: true,
         offlineSyntheticReview: true,
         forceWatchPageTitle: true,
+        onPostDeleted: (_) {
+          unawaited(
+            cleanupRecentActivityAfterLetterboxdDelete(
+              authorUid: widget.authorUid,
+              review: widget.review,
+              hadFirestoreFeedPost: false,
+            ),
+          );
+        },
       );
     }
     return FutureBuilder<DramaDetail>(
@@ -3777,7 +4034,8 @@ class _RecentActivityReviewGateState extends State<RecentActivityReviewGate> {
         final rid = widget.review.id.trim();
         if (rid.isNotEmpty &&
             !rid.startsWith('watch_') &&
-            !rid.startsWith('local_')) {
+            !rid.startsWith('local_') &&
+            !rid.startsWith('feed_')) {
           feed = await PostService.instance.getPost(rid, widget.locale);
         }
       }
@@ -3804,6 +4062,15 @@ class _RecentActivityReviewGateState extends State<RecentActivityReviewGate> {
       return PostDetailPage(
         post: _feedPost!,
         hideBottomDramaFeed: true,
+        onPostDeleted: (_) {
+          unawaited(
+            cleanupRecentActivityAfterLetterboxdDelete(
+              authorUid: widget.authorUid,
+              review: widget.review,
+              hadFirestoreFeedPost: true,
+            ),
+          );
+        },
       );
     }
     if (_offlineSyntheticPost != null &&
@@ -3812,6 +4079,15 @@ class _RecentActivityReviewGateState extends State<RecentActivityReviewGate> {
         post: _offlineSyntheticPost!,
         hideBottomDramaFeed: true,
         offlineSyntheticReview: true,
+        onPostDeleted: (_) {
+          unawaited(
+            cleanupRecentActivityAfterLetterboxdDelete(
+              authorUid: widget.authorUid,
+              review: widget.review,
+              hadFirestoreFeedPost: false,
+            ),
+          );
+        },
       );
     }
     return FutureBuilder<DramaDetail>(

@@ -57,7 +57,9 @@ class CustomDramaListService {
         snapshot = await _listCol.get();
       }
       final lists = snapshot.docs
-          .where((d) => Post.userScopedFirestoreDocVisibleForLocale(d.data(), loc))
+          .where(
+            (d) => Post.documentVisibleInCountryFeed(d.data(), loc),
+          )
           .map((d) => CustomDramaList.fromDoc(d.id, d.data()))
           .where((e) => e.title.trim().isNotEmpty && e.dramaIds.isNotEmpty)
           .toList();
@@ -233,11 +235,13 @@ class CustomDramaListService {
         ? cover
         : null;
 
+    final loc = LocaleService.instance.locale;
     final update = <String, dynamic>{
       'title': cleanTitle,
       'description': cleanDesc,
       'dramaIds': cleanIds,
       'updatedAt': FieldValue.serverTimestamp(),
+      'country': loc,
     };
 
     if (clearAllCovers) {
@@ -269,7 +273,7 @@ class CustomDramaListService {
         coverImageUrl: clearAllCovers ? null : (validImg ?? e.coverImageUrl),
         likeCount: e.likeCount,
         likedBy: e.likedBy,
-        appLocale: e.appLocale,
+        appLocale: e.appLocale ?? loc,
       );
     }).toList();
     listsNotifier.value = updated;
@@ -313,7 +317,7 @@ class CustomDramaListService {
       }
       final loc = LocaleService.instance.locale;
       return snap.docs
-          .where((d) => Post.userScopedFirestoreDocVisibleForLocale(d.data(), loc))
+          .where((d) => Post.documentVisibleInCountryFeed(d.data(), loc))
           .map((d) => CustomDramaList.fromDoc(d.id, d.data()))
           .where((e) => e.title.trim().isNotEmpty && e.dramaIds.isNotEmpty)
           .toList();

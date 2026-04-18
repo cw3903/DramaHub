@@ -231,6 +231,8 @@ class AppStrings {
       'loginErrorWrongPassword': 'Wrong password.',
       'loginErrorEmailNotRegistered': 'No account found with this email.',
       'loginErrorGeneric': 'Login failed. Please try again.',
+      'loginTimeout':
+          'Connection timed out. Check your network or VPN and try again.',
       'enterNickname': 'Please enter a nickname',
       'nicknameMin': 'Nickname must be at least 2 characters',
       'soon': 'Soon',
@@ -681,6 +683,8 @@ class AppStrings {
       'loginErrorWrongPassword': '비밀번호가 틀렸어요.',
       'loginErrorEmailNotRegistered': '가입된 이메일이 없어요.',
       'loginErrorGeneric': '로그인에 실패했어요. 다시 시도해 주세요.',
+      'loginTimeout':
+          '연결 시간이 초과되었어요. 네트워크·VPN을 확인한 뒤 다시 시도해 주세요.',
       'enterNickname': '닉네임을 입력해주세요',
       'nicknameMin': '닉네임은 2자 이상이어야 합니다',
       'soon': '곧',
@@ -1127,6 +1131,7 @@ class AppStrings {
       'loginErrorWrongPassword': '密码错误。',
       'loginErrorEmailNotRegistered': '没有找到该邮箱的账号。',
       'loginErrorGeneric': '登录失败，请重试。',
+      'loginTimeout': '连接超时。请检查网络或 VPN 后重试。',
       'enterNickname': '请输入昵称',
       'nicknameMin': '昵称至少2个字符',
       'soon': '即将',
@@ -1576,6 +1581,8 @@ class AppStrings {
       'loginErrorWrongPassword': 'パスワードが違います。',
       'loginErrorEmailNotRegistered': 'このメールで登録されたアカウントがありません。',
       'loginErrorGeneric': 'ログインに失敗しました。もう一度お試しください。',
+      'loginTimeout':
+          '接続がタイムアウトしました。ネットワークやVPNを確認して、もう一度お試しください。',
       'enterNickname': 'ニックネームを入力してください',
       'nicknameMin': 'ニックネームは2文字以上にしてください',
       'soon': 'もうすぐ',

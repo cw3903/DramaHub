@@ -1,4 +1,4 @@
-import 'dart:async' show unawaited;
+import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -399,30 +399,69 @@ class UserProfileService {
   }
 
   /// 글/댓글 작성 및 조회 시 사용하는 작성자 이름.
-  /// 원칙: Firestore 닉네임 우선. 닉네임 미확인 시 users/{uid}를 한 번 더 직접 조회.
-  /// 그래도 없으면 `익명`으로 처리(이메일/displayName fallback 저장 방지).
+  /// 메모리 → Firestore 로컬 캐시 → 서버 순. 없으면 `익명`.
   Future<String> getAuthorBaseName() async {
-    await loadIfNeeded();
-    final nickname = nicknameNotifier.value?.trim();
-    if (nickname != null && nickname.isNotEmpty) return nickname;
+    final cached = nicknameNotifier.value?.trim();
+    if (cached != null && cached.isNotEmpty) return cached;
 
-    // loadIfNeeded 실패/지연 대비: users 문서를 직접 재조회
+    final uid = AuthService.instance.currentUser.value?.uid;
+    if (uid == null) return '익명';
+
     try {
-      final uid = AuthService.instance.currentUser.value?.uid;
-      if (uid != null && uid.isNotEmpty) {
-        final doc = await _firestore.collection('users').doc(uid).get();
-        final data = doc.data();
-        final nickFromDoc = (data?['nickname'] as String?)?.trim();
-        if (nickFromDoc != null && nickFromDoc.isNotEmpty) {
-          nicknameNotifier.value = nickFromDoc;
-          return nickFromDoc;
-        }
+      final doc = await _firestore
+          .collection('users')
+          .doc(uid)
+          .get(const GetOptions(source: Source.cache));
+      final name = (doc.data()?['nickname'] as String?)?.trim();
+      if (name != null && name.isNotEmpty) {
+        nicknameNotifier.value = name;
+        return name;
       }
-    } catch (e, st) {
-      debugPrint('getAuthorBaseName direct user fetch: $e\n$st');
-    }
+    } catch (_) {}
 
-    return '익명';
+    try {
+      final doc = await _firestore
+          .collection('users')
+          .doc(uid)
+          .get()
+          .timeout(const Duration(seconds: 5));
+      final name = (doc.data()?['nickname'] as String?)?.trim();
+      if (name != null && name.isNotEmpty) {
+        nicknameNotifier.value = name;
+        return name;
+      }
+    } catch (_) {}
+
+    return nicknameNotifier.value?.trim().isNotEmpty == true
+        ? nicknameNotifier.value!
+        : '익명';
+  }
+
+  /// `익명` / `u/익명` / 공백 — 피드에서 본인 표시 보강용.
+  bool isAnonymousAuthorLabel(String author) {
+    final t = author.trim();
+    if (t.isEmpty) return true;
+    return t == '익명' || t == 'u/익명';
+  }
+
+  /// 내 글([isMineByUid])인데 [currentUserAuthor]나 글의 [postAuthor]가 익명으로 남았을 때
+  /// [nicknameNotifier]에 닉이 있으면 `u/닉네임`을 쓴다. (프로필 로드가 피드보다 늦을 때)
+  String? effectiveAuthorLabelForMyPost({
+    required bool isMineByUid,
+    required String? currentUserAuthor,
+    required String postAuthor,
+  }) {
+    if (!isMineByUid) return null;
+    final nick = nicknameNotifier.value?.trim();
+    if (nick == null || nick.isEmpty) return currentUserAuthor;
+    final fromProfile = 'u/$nick';
+    if (currentUserAuthor == null || isAnonymousAuthorLabel(currentUserAuthor)) {
+      return fromProfile;
+    }
+    if (isAnonymousAuthorLabel(postAuthor)) {
+      return fromProfile;
+    }
+    return currentUserAuthor;
   }
 
   /// 글 작성자 (u/ 접두사)

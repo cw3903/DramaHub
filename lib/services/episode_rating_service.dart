@@ -25,7 +25,7 @@ class EpisodeRatingService {
   String? get _uid => AuthService.instance.currentUser.value?.uid;
 
   static bool _docVisibleInCurrentLocale(Map<String, dynamic> data) =>
-      Post.userScopedFirestoreDocVisibleForLocale(
+      Post.documentVisibleInCountryFeed(
         data,
         LocaleService.instance.locale,
       );

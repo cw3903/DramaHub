@@ -1,3 +1,5 @@
+import 'dart:async' show unawaited;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -57,7 +59,19 @@ class _DramaReviewsListScreenState extends State<DramaReviewsListScreen> {
     // Start meta fetch in parallel with _refresh() to catch any reviews
     // not covered by initialPostMeta (e.g. reviews added since last load).
     if (_reviews.isNotEmpty) _fetchPostMetaBatch(_reviews);
+    ReviewService.instance.listNotifier.addListener(_onMyReviewsListChanged);
     _refresh();
+  }
+
+  @override
+  void dispose() {
+    ReviewService.instance.listNotifier.removeListener(_onMyReviewsListChanged);
+    super.dispose();
+  }
+
+  void _onMyReviewsListChanged() {
+    if (!mounted) return;
+    unawaited(_refresh());
   }
 
   Future<void> _refresh() async {
@@ -198,6 +212,11 @@ class _DramaReviewsListScreenState extends State<DramaReviewsListScreen> {
                           return DramaReviewsListFeedRow(
                             key: ValueKey<String>(r.id ?? 'idx-$i'),
                             review: r,
+                            dramaId: widget.dramaId,
+                            dramaTitle: widget.dramaTitle,
+                            onReviewMutated: () {
+                              if (mounted) unawaited(_refresh());
+                            },
                             displayLikeCountOverride: meta?.likeCount,
                             displayCommentCountOverride: meta?.commentCount,
                             initialIsLiked: meta?.isLiked,

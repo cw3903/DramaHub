@@ -115,7 +115,10 @@ class _CommunityScreenState extends State<CommunityScreen>
       _loadFeedTabPage(0, reset: true);
       if (AuthService.instance.isLoggedIn.value) {
         unawaited(
-          UserProfileService.instance.loadUserProfile().catchError((e, st) {
+          UserProfileService.instance.loadUserProfile().then((_) async {
+            if (!mounted) return;
+            await _loadCurrentUserAuthor();
+          }).catchError((e, st) {
             if (kDebugMode) {
               debugPrint('CommunityScreen loadUserProfile: $e\n$st');
             }
@@ -182,8 +185,7 @@ class _CommunityScreenState extends State<CommunityScreen>
     _loadFeedTabPage(tabIndex, reset: false);
   }
 
-  /// DramaFeed 상대 시간·기타 표시용: **앱 표시 언어**를 피드 국가 키로 정규화한다.
-  /// (피드 문서 로드 시 국가 필터는 쓰지 않고, Firestore `country`와 불일치해도 글이 보이게 한다.)
+  /// DramaFeed [getPosts]의 국가 필터·상대 시간: **앱 표시 언어**를 us/kr/jp/cn 키로 정규화한다.
   String _viewerLanguageForFeed() {
     final raw = LocaleService.instance.locale;
     final t = raw.trim();
@@ -226,12 +228,12 @@ class _CommunityScreenState extends State<CommunityScreen>
       var pageHasMore = _tabHasMore[tabIndex];
 
       // 클라이언트 필터로 비는 페이지가 많을 수 있어 여러 번 시도하되, 상한으로 지연 방지.
-      // DramaFeed 홈은 [getPosts]의 국가 필터를 쓰지 않음(Firestore country·앱 언어 불일치로 목록이 통째로 비는 경우 방지).
+      // DramaFeed 홈: 현재 앱 언어([viewerLanguage])로 [getPosts] 국가 필터 — 레거시(country 없음) 글은 그대로 포함.
       // 톡은 최근 N개가 리뷰 위주일 때 스킵이 많이 필요함.
       final maxFilterSkips = _feedBoards[tabIndex] == 'review' ? 48 : 64;
       for (var attempt = 0; attempt < maxFilterSkips; attempt++) {
         final page = await PostService.instance.getPosts(
-          country: null,
+          country: viewerLanguage,
           timeAgoLocale: viewerLanguage,
           type: _feedBoards[tabIndex],
           lastDocument: cursor,
@@ -386,7 +388,10 @@ class _CommunityScreenState extends State<CommunityScreen>
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _refreshActiveFeedTab();
         unawaited(
-          UserProfileService.instance.loadUserProfile().catchError((e, st) {
+          UserProfileService.instance.loadUserProfile().then((_) async {
+            if (!mounted) return;
+            await _loadCurrentUserAuthor();
+          }).catchError((e, st) {
             if (kDebugMode) {
               debugPrint('CommunityScreen auth loadUserProfile: $e\n$st');
             }
@@ -520,35 +525,9 @@ class _CommunityScreenState extends State<CommunityScreen>
         ),
       );
       LevelService.instance.addPoints(5);
-      // Firestore 저장: 백그라운드에서 재시도(1초→2초→4초→8초) until 성공
-      _savePostInBackground(post);
+      // 글은 WritePostPage.createPost → addPost에서 이미 Firestore에 저장됨.
+      // 여기서 addPostWithRetry를 또 호출하면 동일 내용 문서가 중복 생성됨.
     }
-  }
-
-  /// 백그라운드에서 글 저장 재시도. 성공 시 목록을 서버 id로 갱신, 전부 실패 시 실제 오류 메시지 표시.
-  void _savePostInBackground(Post post) {
-    PostService.instance.addPostWithRetry(post).then((result) {
-      final (saved, errorMsg) = result;
-      if (!mounted) return;
-      if (saved != null) {
-        _freeBoardPosts.removeWhere((p) => p.id == post.id);
-        for (final list in _tabFeedPosts) {
-          list.removeWhere((p) => p.id == post.id);
-        }
-        _syncPostInFeeds(saved);
-      } else {
-        final msg = errorMsg?.trim().isNotEmpty == true
-            ? errorMsg!
-            : CountryScope.of(context).strings.get('postSyncFailed');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(msg, style: GoogleFonts.notoSansKr()),
-            behavior: SnackBarBehavior.floating,
-            duration: const Duration(seconds: 5),
-          ),
-        );
-      }
-    });
   }
 
   @override

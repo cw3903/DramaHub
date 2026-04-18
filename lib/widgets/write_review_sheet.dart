@@ -146,14 +146,7 @@ class _WriteReviewSheetState extends State<WriteReviewSheet>
           comment: _controller.text.trim(),
         );
         final item = ReviewService.instance.getById(rid);
-        await _syncDiaryAfterReviewSave(
-          dramaId: dramaId,
-          dramaTitle: dramaTitle,
-          rating: _rating,
-          comment: _controller.text.trim(),
-          country: country,
-        );
-        await PostService.instance.syncReviewFeedPostFromDramaDetail(
+        final sync = await PostService.instance.syncReviewFeedPostFromDramaDetail(
           dramaId: dramaId,
           dramaTitle: dramaTitle,
           rating: _rating,
@@ -162,6 +155,19 @@ class _WriteReviewSheetState extends State<WriteReviewSheet>
           timeSoonLabel: s.get('soon'),
           existingFeedPostId: item?.feedPostId,
           forceNewPost: false,
+        );
+        final link = (sync.postId?.trim().isNotEmpty == true)
+            ? sync.postId!.trim()
+            : (item?.feedPostId?.trim().isNotEmpty == true
+                ? item!.feedPostId!.trim()
+                : null);
+        await _syncDiaryAfterReviewSave(
+          dramaId: dramaId,
+          dramaTitle: dramaTitle,
+          rating: _rating,
+          comment: _controller.text.trim(),
+          country: country,
+          linkedFeedPostId: link,
         );
       } else {
         final authorName = await UserProfileService.instance.getAuthorBaseName();
@@ -174,13 +180,6 @@ class _WriteReviewSheetState extends State<WriteReviewSheet>
           authorPhotoUrl:
               UserProfileService.instance.profileImageUrlNotifier.value,
         );
-        await _syncDiaryAfterReviewSave(
-          dramaId: dramaId,
-          dramaTitle: dramaTitle,
-          rating: _rating,
-          comment: _controller.text.trim(),
-          country: country,
-        );
         final sync = await PostService.instance.syncReviewFeedPostFromDramaDetail(
           dramaId: dramaId,
           dramaTitle: dramaTitle,
@@ -190,7 +189,7 @@ class _WriteReviewSheetState extends State<WriteReviewSheet>
           timeSoonLabel: s.get('soon'),
           forceNewPost: true,
         );
-        final pid = sync.postId;
+        final pid = sync.postId?.trim();
         if (pid != null && pid.isNotEmpty) {
           await ReviewService.instance.setFeedPostId(
             reviewId: reviewId,
@@ -200,6 +199,15 @@ class _WriteReviewSheetState extends State<WriteReviewSheet>
         if (sync.createdNewPost) {
           LevelService.instance.addPoints(5);
         }
+        await _syncDiaryAfterReviewSave(
+          dramaId: dramaId,
+          dramaTitle: dramaTitle,
+          rating: _rating,
+          comment: _controller.text.trim(),
+          country: country,
+          linkedFeedPostId:
+              (pid != null && pid.isNotEmpty) ? pid : null,
+        );
       }
     }
 
@@ -222,6 +230,7 @@ class _WriteReviewSheetState extends State<WriteReviewSheet>
     double? rating,
     String? comment,
     String? country,
+    String? linkedFeedPostId,
   }) async {
     var title = dramaTitle.trim();
     if (dramaId.isNotEmpty && !dramaId.startsWith('short-')) {
@@ -266,6 +275,7 @@ class _WriteReviewSheetState extends State<WriteReviewSheet>
       imageUrl: imageUrl,
       rating: (rating != null && rating > 0) ? rating : null,
       comment: (comment != null && comment.trim().isNotEmpty) ? comment.trim() : null,
+      linkedFeedPostId: linkedFeedPostId,
     );
   }
 
@@ -334,7 +344,7 @@ class _WriteReviewSheetState extends State<WriteReviewSheet>
                           children: [
                             Expanded(
                               child: Text(
-                                s.get('dramaWatchActivitySheetTitle'),
+                                s.get('writeReview'),
                                 style: GoogleFonts.notoSansKr(
                                   fontSize: 16,
                                   fontWeight: FontWeight.w700,
@@ -347,16 +357,23 @@ class _WriteReviewSheetState extends State<WriteReviewSheet>
                               style: FilledButton.styleFrom(
                                 backgroundColor: AppColors.linkBlue,
                                 foregroundColor: Colors.white,
+                                disabledBackgroundColor: muted.withValues(
+                                  alpha: 0.28,
+                                ),
+                                disabledForegroundColor: onBg.withValues(
+                                  alpha: 0.45,
+                                ),
                                 padding: const EdgeInsets.symmetric(
                                   horizontal: 14,
                                   vertical: 6,
                                 ),
                               ),
                               child: Text(
-                                'Save',
+                                s.get('save'),
                                 style: GoogleFonts.notoSansKr(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 0.2,
                                 ),
                               ),
                             ),
@@ -546,7 +563,11 @@ class _WriteReviewSheetState extends State<WriteReviewSheet>
                           focusNode: _commentFocus,
                           maxLines: 4,
                           cursorColor: inputFocusBorder,
-                          style: GoogleFonts.notoSansKr(color: onBg, fontSize: 15),
+                          style: GoogleFonts.notoSansKr(
+                            color: onBg,
+                            fontSize: 12,
+                            height: 1.35,
+                          ),
                           decoration: InputDecoration(
                             filled: true,
                             fillColor: theme.colorScheme.surface,

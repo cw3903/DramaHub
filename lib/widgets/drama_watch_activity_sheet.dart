@@ -231,28 +231,33 @@ class _DramaWatchActivitySheetState extends State<DramaWatchActivitySheet> {
           return;
         }
       } else {
-        // 별점만 or 워치로그만: drama_reviews에도 저장 → 워치페이지에 표시되도록
-        try {
-          await UserProfileService.instance.loadIfNeeded();
-          final rawAuthor =
-              await UserProfileService.instance.getAuthorForPost();
-          final authorName = rawAuthor.startsWith('u/')
-              ? rawAuthor.substring(2)
-              : rawAuthor;
-          await ReviewService.instance.add(
-            dramaId: widget.dramaId,
-            dramaTitle: widget.dramaTitle,
-            rating: _rating,
-            comment: '',
-            authorName: authorName.isNotEmpty ? authorName : '익명',
-            authorPhotoUrl:
-                UserProfileService.instance.profileImageUrlNotifier.value,
-            feedPostId: sync.postId,
-          );
-        } catch (e) {
-          debugPrint('DramaWatchActivitySheet ReviewService.add: $e');
+        // 피드 글 저장 성공 시 [PostService.addPost]가 이미
+        // [ReviewService.syncDramaReviewFromFeedPost]로 drama_reviews를 맞춤.
+        // 여기서 ReviewService.add를 또 호출하면 Watch 탭에 같은 사용자 2줄이 생김.
+        final pid = sync.postId?.trim() ?? '';
+        if (pid.isEmpty) {
+          try {
+            await UserProfileService.instance.loadIfNeeded();
+            final rawAuthor =
+                await UserProfileService.instance.getAuthorForPost();
+            final authorName = rawAuthor.startsWith('u/')
+                ? rawAuthor.substring(2)
+                : rawAuthor;
+            await ReviewService.instance.add(
+              dramaId: widget.dramaId,
+              dramaTitle: widget.dramaTitle,
+              rating: _rating,
+              comment: '',
+              authorName: authorName.isNotEmpty ? authorName : '익명',
+              authorPhotoUrl:
+                  UserProfileService.instance.profileImageUrlNotifier.value,
+              feedPostId: null,
+            );
+          } catch (e) {
+            debugPrint('DramaWatchActivitySheet ReviewService.add: $e');
+          }
+          if (!mounted) return;
         }
-        if (!mounted) return;
       }
 
       if (!mounted) return;
@@ -267,6 +272,7 @@ class _DramaWatchActivitySheetState extends State<DramaWatchActivitySheet> {
           ) ??
           widget.dramaItem.imageUrl;
 
+      final feedId = sync.postId?.trim() ?? '';
       await WatchHistoryService.instance.add(
         id: widget.dramaId,
         title: title,
@@ -275,6 +281,7 @@ class _DramaWatchActivitySheetState extends State<DramaWatchActivitySheet> {
         imageUrl: imgUrl,
         rating: _rating > 0 ? _rating : null,
         comment: trimmed.isNotEmpty ? trimmed : null,
+        linkedFeedPostId: feedId.isNotEmpty ? feedId : null,
       );
 
       if (!mounted) return;
@@ -365,10 +372,11 @@ class _DramaWatchActivitySheetState extends State<DramaWatchActivitySheet> {
                             ),
                           )
                         : Text(
-                            'Save',
+                            s.get('save'),
                             style: GoogleFonts.notoSansKr(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.2,
                             ),
                           ),
                   ),
@@ -556,7 +564,11 @@ class _DramaWatchActivitySheetState extends State<DramaWatchActivitySheet> {
                 focusNode: _commentFocus,
                 maxLines: 4,
                 cursorColor: inputFocusBorder,
-                style: GoogleFonts.notoSansKr(fontSize: 15, color: onBg),
+                style: GoogleFonts.notoSansKr(
+                  fontSize: 12,
+                  height: 1.35,
+                  color: onBg,
+                ),
                 decoration: InputDecoration(
                   filled: true,
                   fillColor: theme.colorScheme.surface,

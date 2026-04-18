@@ -274,7 +274,54 @@ class WatchHistoryService {
     }
   }
 
+  /// 리뷰 게시판 글과 1:1로 묶는 다이어리 행 id ([write_post_page] ↔ [PostService.deletePost]).
+  static String entryIdForLinkedFeedReview(String feedPostId) {
+    final p = feedPostId.trim();
+    return p.isEmpty ? '' : 'feed_$p';
+  }
+
+  /// 리뷰 게시판에서 생긴 다이어리 행 제거. 없으면 무시.
+  Future<void> removeLinkedFeedReviewPost(String feedPostId) async {
+    final eid = entryIdForLinkedFeedReview(feedPostId);
+    if (eid.isEmpty) return;
+    await remove(eid);
+  }
+
+  /// [WriteReviewSheet] 구버전처럼 `linkedFeedPostId` 없이 쌓인 `{dramaId}_{timestamp}` 다이어리 행 1건 제거.
+  /// 별점·본문·시각이 리뷰와 가장 가까운 항목만 골라 지운다.
+  Future<void> removeLegacyReviewDiaryRowIfMatches({
+    required String dramaId,
+    required double rating,
+    required String comment,
+    required DateTime reviewAt,
+  }) async {
+    final did = dramaId.trim();
+    if (did.isEmpty) return;
+    final rx = RegExp('^${RegExp.escape(did)}_\\d+\$');
+    final c = comment.trim();
+    bool ratingMatches(double? a, double b) =>
+        ((a ?? 0.0) - b).abs() < 1e-6;
+    WatchedDramaItem? pick;
+    var bestAbsMs = 1 << 62;
+    for (final e in listNotifier.value) {
+      if (e.dramaKey != did) continue;
+      if (e.id.startsWith('feed_')) continue;
+      if (!rx.hasMatch(e.id)) continue;
+      if (!ratingMatches(e.rating, rating)) continue;
+      if ((e.comment ?? '').trim() != c) continue;
+      final d = (e.watchedAt.difference(reviewAt)).inMilliseconds.abs();
+      if (d < bestAbsMs) {
+        bestAbsMs = d;
+        pick = e;
+      }
+    }
+    if (pick != null) {
+      await remove(pick.id);
+    }
+  }
+
   /// 숏폼 시청 시 호출. 같은 작품이라도 저장할 때마다 새 다이어리 엔트리를 쌓는다.
+  /// [linkedFeedPostId]: 리뷰 게시글 `posts` 문서 id — 지정 시 다이어리 행 id가 `feed_<id>`로 고정되어 삭제 시 제거 가능.
   Future<void> add({
     required String id,
     required String title,
@@ -283,11 +330,14 @@ class WatchHistoryService {
     String? imageUrl,
     double? rating,
     String? comment,
+    String? linkedFeedPostId,
   }) async {
     final now = DateTime.now();
     final dramaId = id.trim();
     if (dramaId.isEmpty) return;
-    final entryId = '${dramaId}_${now.microsecondsSinceEpoch}';
+    final link = linkedFeedPostId?.trim() ?? '';
+    final entryId =
+        link.isNotEmpty ? entryIdForLinkedFeedReview(link) : '${dramaId}_${now.microsecondsSinceEpoch}';
     final loc = LocaleService.instance.locale;
     final item = WatchedDramaItem(
       id: entryId,
@@ -302,6 +352,7 @@ class WatchHistoryService {
       appLocale: loc,
     );
     var list = List<WatchedDramaItem>.from(listNotifier.value);
+    list.removeWhere((e) => e.id == entryId);
     list.insert(0, item);
     if (list.length > _maxItems) {
       list = list.sublist(0, _maxItems);

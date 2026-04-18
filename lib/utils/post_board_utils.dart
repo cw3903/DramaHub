@@ -8,6 +8,12 @@ String postDisplayType(Post p) {
   return 'talk';
 }
 
+/// 피드 리뷰 게시판과 동기화·삭제 정리 대상 (`type` 누락·레거시 `category`만 있는 글 포함).
+bool postIsReviewBoardFeedPost(Post p) {
+  if (postDisplayType(p) == 'review') return true;
+  return postMatchesFeedFilter(p, 'review');
+}
+
 bool postInTrendFeed(Post p) =>
     p.votes >= 10 || p.views >= 100 || postDisplayType(p) == 'trend';
 

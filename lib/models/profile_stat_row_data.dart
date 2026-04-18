@@ -26,4 +26,7 @@ class ProfileStatRowData {
   final List<Post>? posts;
   /// Comments 탭 즉시 표시용 — 프로필 통계 로드 시 함께 받은 댓글 목록.
   final List<({Post post, PostComment comment})>? commentItems;
+
+  /// 프로필 Posts 칩에 표시: Posts 탭 건수 + Comments 탭 건수 ([UserPostsScreen] 합계와 맞춤).
+  int get postsStatChipCount => postCount + commentCount;
 }

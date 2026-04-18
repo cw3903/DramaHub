@@ -1,3 +1,5 @@
+import 'dart:async' show unawaited;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -72,7 +74,19 @@ class _DramaWatchersScreenState extends State<DramaWatchersScreen> {
     _reviews = List<DramaReview>.from(widget.initialReviews);
     WatchHistoryService.instance.loadIfNeeded();
     if (_reviews.isNotEmpty) _fetchPostMetaBatch(_reviews);
+    ReviewService.instance.listNotifier.addListener(_onMyReviewsListChanged);
     _refresh();
+  }
+
+  @override
+  void dispose() {
+    ReviewService.instance.listNotifier.removeListener(_onMyReviewsListChanged);
+    super.dispose();
+  }
+
+  void _onMyReviewsListChanged() {
+    if (!mounted) return;
+    unawaited(_refresh());
   }
 
   Future<void> _openWatchActivitySheet() async {

@@ -141,20 +141,44 @@ class _LikesTabBodyState extends State<_LikesTabBody> {
   /// 포스트 쿼리 대기 중이고 화면에 캐시도 없을 때만 상단 바 표시.
   bool _postsLoading = false;
   int _loadGen = 0;
-  String _lastKickoffLocale = '';
+  /// null이면 아직 한 번도 로드하지 않았거나, 로케일 변경으로 재로드 대기.
+  String? _lastKickoffLocale;
+
+  @override
+  void initState() {
+    super.initState();
+    LocaleService.instance.localeNotifier.addListener(_onLocaleChanged);
+  }
+
+  @override
+  void dispose() {
+    LocaleService.instance.localeNotifier.removeListener(_onLocaleChanged);
+    super.dispose();
+  }
+
+  void _onLocaleChanged() {
+    if (!mounted) return;
+    _lastKickoffLocale = null;
+    _kickoffLoad();
+  }
 
   String _timeLocaleForFetch(BuildContext context) {
     return CountryScope.maybeOf(context)?.country ??
         LocaleService.instance.locale;
   }
 
+  void _kickoffLoad() {
+    if (!mounted) return;
+    final loc = _timeLocaleForFetch(context);
+    if (_lastKickoffLocale != null && _lastKickoffLocale == loc) return;
+    _lastKickoffLocale = loc;
+    unawaited(_loadLikesData(loc, usePeekCache: true));
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final loc = _timeLocaleForFetch(context);
-    if (_lastKickoffLocale == loc) return;
-    _lastKickoffLocale = loc;
-    unawaited(_loadLikesData(loc, usePeekCache: true));
+    _kickoffLoad();
   }
 
   /// 포스트는 즉시 그리고, 댓글은 `getCommentsLikedByUid`(전체 글 스캔) 끝나면 탭만 갱신.

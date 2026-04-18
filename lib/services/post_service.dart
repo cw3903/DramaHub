@@ -1,4 +1,4 @@
-import 'dart:async' show unawaited;
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' show min;
 import 'dart:typed_data';
@@ -20,6 +20,8 @@ import 'level_service.dart';
 import 'notification_service.dart';
 import 'review_service.dart';
 import 'user_profile_service.dart';
+import 'watch_history_service.dart';
+import '../profile_stats_refresh.dart';
 
 // ── compute() 격리 실행용 top-level 함수 ────────────────────────────────────
 // (compute()는 top-level 또는 static 함수만 허용)
@@ -68,6 +70,51 @@ class PostService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseStorage _storage = FirebaseStorage.instance;
 
+  /// 프로필 Posts 칩: `authorUid` 쿼리가 한 박자 늦을 때 방금 저장한 글을 개수·목록에 반영.
+  Post? _profileStatsPendingOwnPost;
+
+  void setProfileStatsPendingOwnPost(Post post) {
+    final uid = AuthService.instance.currentUser.value?.uid.trim();
+    final au = post.authorUid?.trim();
+    if (uid == null || uid.isEmpty || au != uid) return;
+    _profileStatsPendingOwnPost = post;
+  }
+
+  void _clearProfileStatsPendingOwnPostIfId(String postId) {
+    final p = _profileStatsPendingOwnPost;
+    final t = postId.trim();
+    if (p != null && p.id.trim() == t) {
+      _profileStatsPendingOwnPost = null;
+    }
+  }
+
+  /// 언어 전환 등으로 통계를 다시 집계할 때, 다른 로케일용 pending이 남지 않도록 비움.
+  void clearProfileStatsPendingOwnPost() {
+    _profileStatsPendingOwnPost = null;
+  }
+
+  /// [statsUid]가 본인 프로필 통계일 때만: 쿼리 [posts]에 없으면 pending을 붙이고, 있으면 pending 제거.
+  void applyProfileStatsPendingOwnPost(
+    List<Post> posts,
+    String statsUid,
+    String viewerLocale,
+  ) {
+    final me = AuthService.instance.currentUser.value?.uid.trim();
+    if (me == null || me.isEmpty || me != statsUid.trim()) return;
+    final pending = _profileStatsPendingOwnPost;
+    if (pending == null) return;
+    if (pending.authorUid?.trim() != statsUid.trim()) return;
+    if (!Post.userScopedLocaleVisible(pending.country, viewerLocale)) {
+      _profileStatsPendingOwnPost = null;
+      return;
+    }
+    if (posts.any((p) => p.id == pending.id)) {
+      _profileStatsPendingOwnPost = null;
+      return;
+    }
+    posts.add(pending);
+  }
+
   /// [getPostsLikedByUid] 결과 — 프로필에서 미리 로드 시 [cacheLikedPostsForLikesScreen],
   /// 좋아요 화면은 [peekCachedLikedPostsForLikesScreen]으로 첫 프레임을 바로 채움.
   String? _likedPostsScreenCacheKey;
@@ -92,6 +139,51 @@ class PostService {
   void clearLikedPostsScreenCache() {
     _likedPostsScreenCacheKey = null;
     _likedPostsScreenCache = null;
+  }
+
+  /// [getCommentsByAuthorUid]는 전체 posts 스캔이 무겁다 — 프로필 Posts 칩·[UserPostsScreen]이 TTL 내 재사용.
+  static const Duration _profileCommentsByUidCacheTtl = Duration(seconds: 35);
+  String? _profileCommentsByUidCacheKey;
+  List<({Post post, PostComment comment})>? _profileCommentsByUidCache;
+  DateTime? _profileCommentsByUidCacheAt;
+
+  void clearProfileCommentsByAuthorUidCache() {
+    _profileCommentsByUidCacheKey = null;
+    _profileCommentsByUidCache = null;
+    _profileCommentsByUidCacheAt = null;
+  }
+
+  /// 캐시가 유효하면 복사본. 없거나 만료·로케일 불일치면 null.
+  List<({Post post, PostComment comment})>? peekProfileCommentsByAuthorUid(
+    String uid,
+  ) {
+    final u = uid.trim();
+    if (u.isEmpty) return null;
+    final key = '${u}_${LocaleService.instance.locale}';
+    if (_profileCommentsByUidCacheKey != key ||
+        _profileCommentsByUidCache == null ||
+        _profileCommentsByUidCacheAt == null) {
+      return null;
+    }
+    if (DateTime.now().difference(_profileCommentsByUidCacheAt!) >
+        _profileCommentsByUidCacheTtl) {
+      return null;
+    }
+    return List<({Post post, PostComment comment})>.from(
+      _profileCommentsByUidCache!,
+    );
+  }
+
+  void _storeProfileCommentsByAuthorUidCache(
+    String uid,
+    List<({Post post, PostComment comment})> items,
+  ) {
+    final u = uid.trim();
+    if (u.isEmpty) return;
+    _profileCommentsByUidCacheKey = '${u}_${LocaleService.instance.locale}';
+    _profileCommentsByUidCache =
+        List<({Post post, PostComment comment})>.from(items);
+    _profileCommentsByUidCacheAt = DateTime.now();
   }
 
   static String _contentTypeForExtension(String ext) {
@@ -332,7 +424,8 @@ class PostService {
     return post;
   }
 
-  /// Firestore에 넣을 수 있는 타입만 남기기 (직렬화 오류 방지)
+  /// Firestore에 넣을 수 있는 타입만 남기기 (직렬화 오류 방지).
+  /// [FieldValue]는 서버 타임스탬프·increment 등 Firestore 전용이라 그대로 통과.
   static Map<String, dynamic> _sanitizeMap(Map<String, dynamic> map) {
     final out = <String, dynamic>{};
     for (final e in map.entries) {
@@ -345,6 +438,8 @@ class PostService {
       } else if (v is int || v is double) {
         out[k] = v;
       } else if (v is Timestamp) {
+        out[k] = v;
+      } else if (v is FieldValue) {
         out[k] = v;
       } else if (v is List) {
         out[k] = v.map((x) => _sanitizeValue(x)).toList();
@@ -360,7 +455,14 @@ class PostService {
 
   static dynamic _sanitizeValue(dynamic x) {
     if (x == null) return null;
-    if (x is bool || x is String || x is int || x is double || x is Timestamp) return x;
+    if (x is bool ||
+        x is String ||
+        x is int ||
+        x is double ||
+        x is Timestamp ||
+        x is FieldValue) {
+      return x;
+    }
     if (x is List) return x.map((e) => _sanitizeValue(e)).toList();
     if (x is Map) return _sanitizeMap(Map<String, dynamic>.from(x));
     return null;
@@ -373,29 +475,38 @@ class PostService {
       return (null, '로그인이 필요해요.');
     }
     var map = post.toMap();
+    final countryForFs = post.country?.trim().isNotEmpty == true
+        ? post.country!.trim()
+        : LocaleService.instance.locale;
+    map['country'] = Post.normalizeFeedCountry(countryForFs);
     map['type'] = (post.type != null && post.type!.trim().isNotEmpty) ? post.type!.trim() : 'talk';
-    map['createdAt'] = FieldValue.serverTimestamp();
     if (!map.containsKey('likedBy')) map['likedBy'] = [];
     if (!map.containsKey('dislikedBy')) map['dislikedBy'] = [];
     if (!map.containsKey('likeCount')) map['likeCount'] = 0;
     if (!map.containsKey('dislikeCount')) map['dislikeCount'] = 0;
     map['authorUid'] = uid;
+    // toMap() 등에 FieldValue가 들어와도 _sanitizeMap이 유지함. createdAt은 sanitize 뒤에만 세팅.
     map = _sanitizeMap(map);
     map['createdAt'] = FieldValue.serverTimestamp();
 
     for (var attempt = 0; attempt < 2; attempt++) {
       try {
+        debugPrint('addPost: Firestore add 시작');
         final docRef = await _col.add(map);
+        debugPrint('addPost: Firestore add 완료 id=${docRef.id}');
         final saved = post.copyWith(id: docRef.id, authorUid: uid);
+        setProfileStatsPendingOwnPost(saved);
+        debugPrint('addPost: syncDramaReview 시작');
         try {
           await ReviewService.instance.syncDramaReviewFromFeedPost(saved);
+          debugPrint('addPost: syncDramaReview 완료');
         } catch (e, st) {
           debugPrint('syncDramaReviewFromFeedPost: $e\n$st');
         }
+        bumpProfileStatsRefreshAfterNewPost();
         return (saved, null);
-      } catch (e, st) {
+      } catch (e) {
         debugPrint('addPost 실패 (attempt ${attempt + 1}): $e');
-        debugPrint('$st');
         if (attempt == 0) {
           await Future.delayed(const Duration(milliseconds: 800));
           continue;
@@ -404,6 +515,12 @@ class PostService {
       }
     }
     return (null, null);
+  }
+
+  Future<Post?> createPost(Post post) async {
+    final (saved, error) = await addPost(post);
+    if (error != null) debugPrint('createPost 실패: $error');
+    return saved;
   }
 
   /// addPost를 최대 10번 재시도 (즉시, 1초, 2초, 4초, 8초, 8초…). 서버 저장 확실히 시도.
@@ -481,12 +598,17 @@ class PostService {
       if (post.videoUrl != null) updateData['videoUrl'] = post.videoUrl;
       if (post.videoThumbnailUrl != null) updateData['videoThumbnailUrl'] = post.videoThumbnailUrl;
       if (post.isGif != null) updateData['isGif'] = post.isGif;
+      final countryForFs = post.country?.trim().isNotEmpty == true
+          ? post.country!.trim()
+          : LocaleService.instance.locale;
+      updateData['country'] = Post.normalizeFeedCountry(countryForFs);
       await docRef.update(updateData);
-      try {
-        await ReviewService.instance.syncDramaReviewFromFeedPost(post);
-      } catch (e, st) {
-        debugPrint('syncDramaReviewFromFeedPost: $e\n$st');
-      }
+      unawaited(
+        ReviewService.instance.syncDramaReviewFromFeedPost(post).catchError(
+          (Object e, StackTrace st) =>
+              debugPrint('syncDramaReviewFromFeedPost: $e\n$st'),
+        ),
+      );
       return post;
     } catch (e, st) {
       debugPrint('updatePost 실패: $e');
@@ -496,10 +618,44 @@ class PostService {
   }
 
   /// 글 삭제. 성공 시 true, 실패 시 false.
-  Future<bool> deletePost(String postId) async {
+  /// [postIfKnown]이 있으면 Firestore 읽기 없이 리뷰 연동 정리에 사용한다.
+  Future<bool> deletePost(String postId, {Post? postIfKnown}) async {
     if (postId.isEmpty) return false;
     try {
-      await _col.doc(postId).delete();
+      final docRef = _col.doc(postId);
+      Post? reviewPostForCleanup;
+      if (postIfKnown != null && postIfKnown.id.trim() == postId.trim()) {
+        if (postIsReviewBoardFeedPost(postIfKnown)) {
+          reviewPostForCleanup = postIfKnown;
+        }
+      } else {
+        final snap = await docRef.get();
+        if (snap.exists && snap.data() != null) {
+          final data = Map<String, dynamic>.from(snap.data()!);
+          data['id'] = snap.id;
+          final post = Post.fromMap(_normalizePostMap(data));
+          if (postIsReviewBoardFeedPost(post)) {
+            reviewPostForCleanup = post;
+          }
+        }
+      }
+      await docRef.delete();
+      if (reviewPostForCleanup != null) {
+        try {
+          await ReviewService.instance.removeSyncedReviewForDeletedFeedPost(
+            reviewPostForCleanup,
+          );
+        } catch (e, st) {
+          debugPrint('removeSyncedReviewForDeletedFeedPost: $e\n$st');
+        }
+      }
+      try {
+        await WatchHistoryService.instance.removeLinkedFeedReviewPost(postId);
+      } catch (e, st) {
+        debugPrint('removeLinkedFeedReviewPost: $e\n$st');
+      }
+      _clearProfileStatsPendingOwnPostIfId(postId);
+      bumpProfileStatsRefresh();
       return true;
     } catch (e, st) {
       debugPrint('deletePost 실패: $e');
@@ -544,13 +700,33 @@ class PostService {
       final post = Post.fromMap(_normalizePostMap(data));
       final parent = PostService.findCommentById(post.commentsList, parentCommentId);
       if (parent == null) return '댓글을 찾을 수 없어요.';
+      final commentCountryRaw = post.country?.trim().isNotEmpty == true
+          ? post.country!.trim()
+          : LocaleService.instance.locale;
+      final commentCountry = Post.normalizeFeedCountry(commentCountryRaw);
+      final replyWithCountry = PostComment(
+        id: newReply.id,
+        author: newReply.author,
+        timeAgo: newReply.timeAgo,
+        text: newReply.text,
+        votes: newReply.votes,
+        replies: newReply.replies,
+        likedBy: newReply.likedBy,
+        dislikedBy: newReply.dislikedBy,
+        authorPhotoUrl: newReply.authorPhotoUrl,
+        authorAvatarColorIndex: newReply.authorAvatarColorIndex,
+        createdAtDate: newReply.createdAtDate,
+        imageUrl: newReply.imageUrl,
+        authorUid: newReply.authorUid,
+        country: commentCountry,
+      );
       final updatedParent = PostComment(
         id: parent.id,
         author: parent.author,
         timeAgo: parent.timeAgo,
         text: parent.text,
         votes: parent.votes,
-        replies: [...parent.replies, newReply],
+        replies: [...parent.replies, replyWithCountry],
         likedBy: parent.likedBy,
         dislikedBy: parent.dislikedBy,
         authorPhotoUrl: parent.authorPhotoUrl,
@@ -558,9 +734,13 @@ class PostService {
         createdAtDate: parent.createdAtDate,
         imageUrl: parent.imageUrl,
         authorUid: parent.authorUid,
+        country: parent.country,
       );
       final newList = PostService.replaceCommentById(post.commentsList, parentCommentId, updatedParent);
-      final newCommentsList = _commentListToMapsWithCreatedAt(newList, addCreatedAtForId: newReply.id);
+      final newCommentsList = _commentListToMapsWithCreatedAt(
+        newList,
+        addCreatedAtForId: newReply.id,
+      );
       await docRef.update({
         'commentsList': newCommentsList,
         'comments': FieldValue.increment(1),
@@ -575,6 +755,7 @@ class PostService {
           postId: postId,
           postTitle: post.title,
           commentText: newReply.text,
+          country: post.country,
         );
       }
       return null;
@@ -600,7 +781,11 @@ class PostService {
         debugPrint('addComment: 문서 없음 postId=$postId');
         return '글이 더 이상 없어요.';
       }
+      final commentCountry = post.country?.trim().isNotEmpty == true
+          ? post.country!.trim()
+          : LocaleService.instance.locale;
       final commentMap = newComment.toMap();
+      commentMap['country'] = Post.normalizeFeedCountry(commentCountry);
       commentMap['createdAt'] = Timestamp.now();
       await docRef.update({
         'commentsList': FieldValue.arrayUnion([commentMap]),
@@ -623,6 +808,7 @@ class PostService {
           postId: postId,
           postTitle: post.title,
           commentText: newComment.text,
+          country: post.country,
         );
       }
       return null;
@@ -974,6 +1160,7 @@ class PostService {
     String? notifyUid = postAuthorUid?.trim();
     String? notifyTitle = postTitle;
     String? authorLabelForNotify;
+    String? notifyCountry;
     try {
       await _firestore.runTransaction((transaction) async {
         final postRef = _col.doc(postId);
@@ -987,6 +1174,10 @@ class PostService {
         final likeSnap = await transaction.get(likeRef);
         final dislikeSnap = await transaction.get(dislikeRef);
         final data = postSnap.data()!;
+        final rawPostCountry = (data['country'] as String?)?.trim();
+        notifyCountry = (rawPostCountry != null && rawPostCountry.isNotEmpty)
+            ? rawPostCountry
+            : null;
         authorLabelForNotify = data['author'] as String?;
         final au = (data['authorUid'] as String?)?.trim();
         final prevNotify = notifyUid;
@@ -1052,11 +1243,16 @@ class PostService {
                 fromUser: myNickname,
                 postId: postId,
                 postTitle: notifyTitle ?? '',
+                country: notifyCountry,
               )
               .catchError((Object e, StackTrace st) {
                 debugPrint('postLike notify: $e\n$st');
               }),
         );
+      }
+      if (nowLiked != null) {
+        clearLikedPostsScreenCache();
+        bumpProfileStatsRefresh();
       }
       return nowLiked;
     } catch (e, st) {
@@ -1126,6 +1322,10 @@ class PostService {
           nowDisliked = true;
         }
       });
+      if (nowDisliked != null) {
+        clearLikedPostsScreenCache();
+        bumpProfileStatsRefresh();
+      }
       return nowDisliked;
     } catch (e, st) {
       debugPrint('togglePostDislike 실패: $e');
@@ -1174,6 +1374,7 @@ class PostService {
         createdAtDate: found.createdAtDate,
         imageUrl: found.imageUrl,
         authorUid: found.authorUid,
+        country: found.country,
       );
       final newList = replaceCommentById(list, commentId, newComment);
       final newCommentsList = newList.map((c) => c.toMap()).toList();
@@ -1193,9 +1394,12 @@ class PostService {
             postId: postId,
             postTitle: post.title,
             commentText: found.text,
+            country: post.country,
           );
         }
       }
+      clearLikedPostsScreenCache();
+      bumpProfileStatsRefresh();
       return post.copyWith(commentsList: newList);
     } catch (e, st) {
       debugPrint('toggleCommentLike 실패: $e');
@@ -1244,10 +1448,13 @@ class PostService {
         createdAtDate: found.createdAtDate,
         imageUrl: found.imageUrl,
         authorUid: found.authorUid,
+        country: found.country,
       );
       final newList = replaceCommentById(list, commentId, newComment);
       final newCommentsList = newList.map((c) => c.toMap()).toList();
       await docRef.update({'commentsList': newCommentsList});
+      clearLikedPostsScreenCache();
+      bumpProfileStatsRefresh();
       return post.copyWith(commentsList: newList);
     } catch (e, st) {
       debugPrint('toggleCommentDislike 실패: $e');
@@ -1282,6 +1489,7 @@ class PostService {
         createdAtDate: c.createdAtDate,
         imageUrl: c.imageUrl,
         authorUid: c.authorUid,
+        country: c.country,
       );
     }).toList();
   }
@@ -1310,36 +1518,109 @@ class PostService {
         .toList();
   }
 
+  Future<List<Post>> _hydratePostsFromMatchingDocs(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) async {
+    final loc = LocaleService.instance.locale;
+    final out = <({Post post, DateTime sortAt})>[];
+    for (final doc in docs) {
+      try {
+        final data = Map<String, dynamic>.from(doc.data());
+        if (!Post.documentVisibleInCountryFeed(data, loc)) {
+          continue;
+        }
+        data['id'] = doc.id;
+        final createdAt = data['createdAt'];
+        final sortAt = createdAt is Timestamp
+            ? createdAt.toDate()
+            : DateTime.fromMillisecondsSinceEpoch(0);
+        final normalized = _normalizePostMap(data);
+        normalized['timeAgo'] = formatTimeAgo(sortAt);
+        final post = Post.fromMap(normalized);
+        out.add((post: post, sortAt: sortAt));
+      } catch (e, st) {
+        debugPrint('_hydratePostsFromMatchingDocs parse fail ${doc.id}: $e\n$st');
+      }
+    }
+    out.sort((a, b) => b.sortAt.compareTo(a.sortAt));
+    final posts = out.map((e) => e.post).toList();
+    return await hydratePostsViewerVotes(posts);
+  }
+
+  /// `author` 필드가 정확히 [author]인 문서만 조회 (레거시 글·`authorUid` 누락 보완용).
+  Future<List<Post>> getPostsByAuthorAuthorField(
+    String author, {
+    bool forceServerFetch = false,
+  }) async {
+    final a = author.trim();
+    if (a.isEmpty) return [];
+    try {
+      final snap = await _col.where('author', isEqualTo: a).get(
+            forceServerFetch
+                ? const GetOptions(source: Source.server)
+                : const GetOptions(),
+          );
+      return _hydratePostsFromMatchingDocs(snap.docs);
+    } catch (e, st) {
+      debugPrint('getPostsByAuthorAuthorField: $e\n$st');
+      return [];
+    }
+  }
+
+  /// 프로필 Posts 칩·[UserPostsScreen]과 동일 집합: `authorUid` 일치 + (같은 표시 `author`이면서 uid 없음·본인 uid) 글.
+  Future<List<Post>> mergePostsForProfileByUid(
+    String uid,
+    String postAuthor, {
+    bool forceServerFetch = false,
+  }) async {
+    final u = uid.trim();
+    final author = postAuthor.trim();
+    if (u.isEmpty) {
+      if (author.isEmpty) return [];
+      return getPostsByAuthor(author);
+    }
+    final results = await Future.wait<List<Post>>([
+      getPostsByAuthorUid(u, forceServerFetch: forceServerFetch),
+      author.isNotEmpty
+          ? getPostsByAuthorAuthorField(author, forceServerFetch: forceServerFetch)
+          : Future<List<Post>>.value(<Post>[]),
+    ]);
+    final byUid = results[0];
+    final byAuthor = results[1];
+    final map = <String, Post>{for (final p in byUid) p.id: p};
+    for (final p in byAuthor) {
+      final au = p.authorUid?.trim();
+      if (au == null || au.isEmpty || au == u) {
+        map.putIfAbsent(p.id, () => p);
+      }
+    }
+    final list = map.values.toList();
+    list.sort((a, b) {
+      final ta = a.createdAt;
+      final tb = b.createdAt;
+      if (ta == null && tb == null) return 0;
+      if (ta == null) return 1;
+      if (tb == null) return -1;
+      return tb.compareTo(ta);
+    });
+    return list;
+  }
+
   /// `authorUid`가 일치하는 게시글 (타인 프로필 통계·글 목록용).
-  Future<List<Post>> getPostsByAuthorUid(String uid) async {
+  /// [forceServerFetch]: true면 캐시 대신 서버에서 읽어 방금 작성한 글이 통계에 반영되게 함.
+  Future<List<Post>> getPostsByAuthorUid(
+    String uid, {
+    bool forceServerFetch = false,
+  }) async {
     final u = uid.trim();
     if (u.isEmpty) return [];
     try {
-      final snap = await _col.where('authorUid', isEqualTo: u).get();
-      final loc = LocaleService.instance.locale;
-      final out = <({Post post, DateTime sortAt})>[];
-      for (final doc in snap.docs) {
-        try {
-          final data = Map<String, dynamic>.from(doc.data());
-          if (!Post.documentVisibleInCountryFeed(data, loc)) {
-            continue;
-          }
-          data['id'] = doc.id;
-          final createdAt = data['createdAt'];
-          final sortAt = createdAt is Timestamp
-              ? createdAt.toDate()
-              : DateTime.fromMillisecondsSinceEpoch(0);
-          final normalized = _normalizePostMap(data);
-          normalized['timeAgo'] = formatTimeAgo(sortAt);
-          final post = Post.fromMap(normalized);
-          out.add((post: post, sortAt: sortAt));
-        } catch (e, st) {
-          debugPrint('getPostsByAuthorUid parse fail ${doc.id}: $e\n$st');
-        }
-      }
-      out.sort((a, b) => b.sortAt.compareTo(a.sortAt));
-      final posts = out.map((e) => e.post).toList();
-      return await hydratePostsViewerVotes(posts);
+      final snap = await _col.where('authorUid', isEqualTo: u).get(
+            forceServerFetch
+                ? const GetOptions(source: Source.server)
+                : const GetOptions(),
+          );
+      return _hydratePostsFromMatchingDocs(snap.docs);
     } catch (e, st) {
       debugPrint('getPostsByAuthorUid: $e\n$st');
       return [];
@@ -1347,11 +1628,18 @@ class PostService {
   }
 
   /// 댓글/답글 작성자의 `authorUid`가 [uid]와 일치하는 항목 (구 데이터는 `authorUid` 없을 수 있음).
-  Future<List<({Post post, PostComment comment})>> getCommentsByAuthorUid(String uid) async {
+  Future<List<({Post post, PostComment comment})>> getCommentsByAuthorUid(
+    String uid, {
+    bool forceServerFetch = false,
+  }) async {
     final u = uid.trim();
     if (u.isEmpty) return [];
     try {
-      final posts = await getPostsAllPages();
+      if (!forceServerFetch) {
+        final cached = peekProfileCommentsByAuthorUid(u);
+        if (cached != null) return cached;
+      }
+      final posts = await getPostsAllPages(forceServerFetch: forceServerFetch);
       final loc = LocaleService.instance.locale;
       final result = <({Post post, PostComment comment})>[];
       for (final post in posts) {
@@ -1369,6 +1657,7 @@ class PostService {
         }
         collect(post.commentsList);
       }
+      _storeProfileCommentsByAuthorUidCache(u, result);
       return result;
     } catch (e, st) {
       debugPrint('getCommentsByAuthorUid: $e\n$st');
@@ -1537,6 +1826,7 @@ class PostService {
     String? type,
     DocumentSnapshot<Map<String, dynamic>>? lastDocument,
     int limit = 20,
+    bool forceServerFetch = false,
   }) async {
     try {
       final countryEq = country?.trim();
@@ -1546,7 +1836,12 @@ class PostService {
       // 국가는 클라이언트 필터만 사용. 서버 where(country)는 필드 없는 문서를 완전히 누락시킴.
       final Query<Map<String, dynamic>> q =
           _col.orderBy('createdAt', descending: true).limit(limit);
-      final snapshot = await (lastDocument != null ? q.startAfterDocument(lastDocument) : q).get();
+      final getOpts = forceServerFetch
+          ? const GetOptions(source: Source.server)
+          : const GetOptions();
+      final snapshot =
+          await (lastDocument != null ? q.startAfterDocument(lastDocument) : q)
+              .get(getOpts);
       debugPrint('getPosts: page ${snapshot.docs.length} docs (limit $limit)');
       final board = type?.trim().toLowerCase();
       final out = <Post>[];
@@ -1600,6 +1895,7 @@ class PostService {
     String? timeAgoLocale,
     String? type,
     int pageSize = 100,
+    bool forceServerFetch = false,
   }) async {
     final acc = <Post>[];
     final seen = <String>{};
@@ -1611,6 +1907,7 @@ class PostService {
         type: type,
         lastDocument: last,
         limit: pageSize,
+        forceServerFetch: forceServerFetch,
       );
       for (final p in r.posts) {
         if (seen.add(p.id)) acc.add(p);
@@ -1655,6 +1952,7 @@ class PostService {
       createdAtDate: c.createdAtDate,
       imageUrl: c.imageUrl,
       authorUid: c.authorUid,
+      country: c.country,
     );
   }
 
@@ -1672,6 +1970,16 @@ class PostService {
       void collect(Post post, List<PostComment> list) {
         for (final c in list) {
           if (c.likedBy.contains(uid)) {
+            final loc = LocaleService.instance.locale;
+            final m = <String, dynamic>{};
+            final ccntry = c.country?.trim();
+            if (ccntry != null && ccntry.isNotEmpty) {
+              m['country'] = ccntry;
+            } else {
+              final pc = post.country?.trim();
+              if (pc != null && pc.isNotEmpty) m['country'] = pc;
+            }
+            if (!Post.documentVisibleInCountryFeed(m, loc)) continue;
             final sortAt =
                 c.createdAtDate ?? DateTime.fromMillisecondsSinceEpoch(0);
             final cc = _commentWithLocaleTimeAgo(c, countryForTimeAgo);

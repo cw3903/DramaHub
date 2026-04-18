@@ -292,6 +292,12 @@ class DramaListService {
   bool _loaded = false;
   bool get isLoaded => _loaded;
 
+  /// 에셋에서 다시 읽어 목록·extra 갱신 (당겨서 새로고침 등).
+  Future<void> reloadFromAsset() async {
+    _loaded = false;
+    await loadFromAsset();
+  }
+
   /// JSON 로드. rootBundle은 main isolate에서만 접근 가능하므로 문자열 로드 후
   /// compute()로 별도 isolate에서 파싱해 첫 프레임 드롭 방지.
   Future<void> loadFromAsset() async {

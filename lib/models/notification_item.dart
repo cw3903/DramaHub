@@ -12,6 +12,7 @@ class NotificationItem {
     required this.createdAt,
     this.commentText,
     this.isRead = false,
+    this.country,
   });
 
   final String id;
@@ -22,6 +23,9 @@ class NotificationItem {
   final String? commentText;
   final DateTime createdAt;
   final bool isRead;
+
+  /// Firestore `country` (us/kr/jp/cn). null이면 레거시.
+  final String? country;
 
   static NotificationType _typeFromString(String s) {
     switch (s) {
@@ -57,6 +61,9 @@ class NotificationItem {
     if (ct != null && ct.isNotEmpty) {
       m['commentText'] = ct;
     }
+    if (country != null) {
+      m['country'] = country;
+    }
     return m;
   }
 
@@ -71,6 +78,7 @@ class NotificationItem {
       commentText: map['commentText'] as String?,
       isRead: map['isRead'] as bool? ?? false,
       createdAt: createdAt is Timestamp ? createdAt.toDate() : DateTime.now(),
+      country: map['country'] as String?,
     );
   }
 
@@ -83,5 +91,6 @@ class NotificationItem {
     commentText: commentText,
     createdAt: createdAt,
     isRead: isRead ?? this.isRead,
+    country: country,
   );
 }

@@ -223,10 +223,13 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
         myUid != null &&
         myUid.isNotEmpty &&
         post.authorUid?.trim() == myUid;
-    final canonicalAuthor =
-        isMineByUid && currentUserAuthor != null
-            ? currentUserAuthor!
-            : post.author;
+    final mineAuthor =
+        UserProfileService.instance.effectiveAuthorLabelForMyPost(
+      isMineByUid: isMineByUid,
+      currentUserAuthor: currentUserAuthor,
+      postAuthor: post.author,
+    );
+    final canonicalAuthor = mineAuthor ?? post.author;
     final bool isMyReview =
         isMineByUid ||
         (currentUserAuthor != null && post.author == currentUserAuthor);
@@ -477,7 +480,10 @@ class FeedReviewLetterboxdTile extends StatelessWidget {
                     confirmText: s.get('delete'),
                   );
                   if (confirmed != true || !context.mounted) return;
-                  final ok = await PostService.instance.deletePost(post.id);
+                  final ok = await PostService.instance.deletePost(
+                    post.id,
+                    postIfKnown: post,
+                  );
                   if (!context.mounted) return;
                   if (ok) onPostDeleted!(post);
                 },

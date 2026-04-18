@@ -92,15 +92,11 @@ class LanguageSelectScreen extends StatelessWidget {
                           child: InkWell(
                             onTap: () async {
                               final chosen = code;
+                              final nav = Navigator.of(context);
                               await LocaleService.instance.setLocale(chosen);
-                              if (!context.mounted) return;
-                              await WidgetsBinding.instance.endOfFrame;
-                              if (!context.mounted) return;
-                              EpisodeRatingService.instance
-                                  .invalidateAllEpisodeCaches();
-                              EpisodeReviewService.instance
-                                  .clearAllEpisodeNotifiers();
-                              popListsStyleSubpage(context, true);
+                              EpisodeRatingService.instance.invalidateAllEpisodeCaches();
+                              EpisodeReviewService.instance.clearAllEpisodeNotifiers();
+                              nav.pop(true);
                             },
                             borderRadius: BorderRadius.circular(18),
                             child: Padding(

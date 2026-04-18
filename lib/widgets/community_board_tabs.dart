@@ -9,6 +9,7 @@ import '../models/post.dart';
 import '../services/auth_service.dart';
 import '../services/post_service.dart';
 import '../services/user_profile_service.dart';
+import '../services/locale_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/format_utils.dart';
 import '../widgets/country_scope.dart';
@@ -437,6 +438,9 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
     final author = await UserProfileService.instance.getAuthorBaseName();
     if (!mounted) return;
     final p = _latestPost(post);
+    final ctry = p.country?.trim().isNotEmpty == true
+        ? p.country!.trim()
+        : LocaleService.instance.locale;
     final newComment = PostComment(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       author: author,
@@ -449,6 +453,7 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
           UserProfileService.instance.avatarColorNotifier.value,
       createdAtDate: DateTime.now(),
       authorUid: AuthService.instance.currentUser.value?.uid,
+      country: Post.normalizeFeedCountry(ctry),
     );
 
     final parentId = _inlineReplyingToCommentId[id];
@@ -485,6 +490,7 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
           createdAtDate: parent.createdAtDate,
           imageUrl: parent.imageUrl,
           authorUid: parent.authorUid,
+          country: parent.country,
         );
         newComments = PostService.replaceCommentById(
           p.commentsList,

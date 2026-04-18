@@ -1,4 +1,4 @@
-import 'dart:async' show unawaited;
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -25,12 +25,10 @@ import 'video_select_page.dart';
 import '../widgets/lists_style_subpage_app_bar.dart';
 import '../widgets/optimized_network_image.dart';
 import '../widgets/review_arrow_tag_chip.dart';
+import '../theme/app_theme.dart';
 
 const int _maxTitleLength = 80;
 const int _maxPhotos = 4;
-
-/// 하단 만들기 FAB·강조 액션과 동일 계열
-const Color _kWriteAccentOrange = Color(0xFFFF4500);
 
 /// DramaFeed 리뷰 탭 별과 동일 톤
 const Color _kWriteStarYellow = Color(0xFFFFB020);
@@ -106,9 +104,19 @@ class _WritePostPageState extends State<WritePostPage> {
 
   bool get _isReviewLayout => _boardKind == 'review' && !_isVideoMode;
 
+  /// 신규 글 `Post.country` / Firestore `country`: 가입 구역 notifier 값 우선, 비면 앱 로케일.
+  String _countryForNewPost() {
+    final raw = UserProfileService.instance.signupCountryNotifier.value?.trim();
+    if (raw != null && raw.isNotEmpty) {
+      return Post.normalizeFeedCountry(raw);
+    }
+    return Post.normalizeFeedCountry(LocaleService.instance.locale);
+  }
+
   @override
   void initState() {
     super.initState();
+    _isSubmitting = false; // 혹시 이전 상태 남아있을 경우 초기화
     DramaListService.instance.loadFromAsset();
     _videoPathForUpload = widget.initialVideoPath;
     if (widget.initialVideoPath != null) {
@@ -139,9 +147,11 @@ class _WritePostPageState extends State<WritePostPage> {
         _tagsController.clear();
       }
     } else {
-      _boardKind = widget.initialBoard ??
+      final raw = widget.initialBoard ??
           (widget.initialCategory == 'question' ? 'ask' : 'review');
-      _selectedCategory = _boardKind == 'ask' ? 'question' : 'free';
+      // 신규 글쓰기에서는 ask 탭을 숨김 — ask로 열리면 톡으로 폴백
+      _boardKind = raw == 'ask' ? 'talk' : raw;
+      _selectedCategory = 'free';
     }
     _reviewBodyController.addListener(_onReviewFieldChanged);
     _dramaSearchController.addListener(_onReviewFieldChanged);
@@ -175,6 +185,7 @@ class _WritePostPageState extends State<WritePostPage> {
 
   @override
   void dispose() {
+    _isSubmitting = false; // 제출 중 뒤로가기·pop 시 플래그 정리
     if (_videoThumbPath != null) {
       try { File(_videoThumbPath!).deleteSync(); } catch (_) {}
     }
@@ -447,9 +458,11 @@ class _WritePostPageState extends State<WritePostPage> {
     }
   }
 
-  /// 리뷰 게시글 저장 시 다이어리(시청기록)도 함께 동기화.
-  Future<void> _syncReviewWatchHistory() async {
+  /// 리뷰 게시글 저장 시 다이어리(시청기록)도 함께 동기화. [feedPostId]는 Firestore `posts` 문서 id.
+  Future<void> _syncReviewWatchHistory(String feedPostId) async {
     if (_boardKind != 'review') return;
+    final fp = feedPostId.trim();
+    if (fp.isEmpty) return;
     final dramaId = (_pickDramaId ?? '').trim();
     if (dramaId.isEmpty) return;
 
@@ -488,11 +501,14 @@ class _WritePostPageState extends State<WritePostPage> {
       subtitle: subtitle,
       views: views,
       imageUrl: imageUrl,
+      linkedFeedPostId: fp,
     );
   }
 
   Future<void> _submit() async {
+    debugPrint('_submit 호출됨 isSubmitting=$_isSubmitting');
     if (_isSubmitting) return;
+    debugPrint('_submit 진행 중 - isVideoMode=$_isVideoMode');
     _titleFocus.unfocus();
     _bodyFocus.unfocus();
     if (!_isReviewLayout) {
@@ -529,7 +545,9 @@ class _WritePostPageState extends State<WritePostPage> {
       _flushPendingTagInput();
     }
 
+    debugPrint('_submit 편집모드=$_isEditMode');
     setState(() => _isSubmitting = true);
+    debugPrint('_submit: isSubmitting=true 설정됨');
 
     try {
     // 영상/GIF 업로드 모드 (클립 조정에서 진입)
@@ -673,7 +691,12 @@ class _WritePostPageState extends State<WritePostPage> {
       if (contentUriTempPath != null) { try { await File(contentUriTempPath).delete(); } catch (_) {} }
       if (!mounted) { setState(() => _isSubmitting = false); return; }
 
-      final postAuthor = await UserProfileService.instance.getAuthorForPost();
+      final postAuthor = await UserProfileService.instance.getAuthorForPost().timeout(
+        const Duration(seconds: 3),
+        onTimeout: () => UserProfileService.instance.nicknameNotifier.value?.trim().isNotEmpty == true
+            ? 'u/${UserProfileService.instance.nicknameNotifier.value!.trim()}'
+            : 'u/익명',
+      );
       final linkTrimmed = _linkController.text.trim();
       final post = Post(
         id: DateTime.now().millisecondsSinceEpoch.toString(),
@@ -700,14 +723,30 @@ class _WritePostPageState extends State<WritePostPage> {
         allowReply: true,
         authorPhotoUrl: UserProfileService.instance.profileImageUrlNotifier.value,
         authorAvatarColorIndex: UserProfileService.instance.avatarColorNotifier.value,
-        country: Post.normalizeFeedCountry(
-          UserProfileService.instance.signupCountryNotifier.value ??
-              LocaleService.instance.locale,
-        ),
+        country: _countryForNewPost(),
       );
+      debugPrint('_submit: Post 객체 생성 완료 id=${post.id}');
       if (!mounted) return;
-      setState(() => _isSubmitting = false);
-      Navigator.pop(context, post);
+      debugPrint('_submit: createPost 호출 시작');
+      final created = await PostService.instance.createPost(post);
+      debugPrint('_submit: createPost 완료 created=${created?.id}');
+      if (!mounted) return;
+      if (created == null) {
+        setState(() => _isSubmitting = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '글 등록에 실패했습니다.',
+              style: GoogleFonts.notoSansKr(),
+            ),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+      unawaited(_syncReviewWatchHistory(created.id).catchError((_) {}));
+      if (!mounted) return;
+      Navigator.pop(context, created);
       return;
     }
 
@@ -716,6 +755,7 @@ class _WritePostPageState extends State<WritePostPage> {
     final authorFuture = _isEditMode
         ? Future.value('')
         : UserProfileService.instance.getAuthorForPost();
+    debugPrint('_submit: authorFuture 생성됨');
 
     List<String> imageUrls = [];
     List<List<int>>? imageDimensions;
@@ -743,7 +783,14 @@ class _WritePostPageState extends State<WritePostPage> {
     }
 
     // 이미지 업로드 완료 후 author 결과 수령 (병렬로 이미 실행 중이었으므로 대기 최소)
-    final postAuthor = await authorFuture;
+    debugPrint('_submit: authorFuture await 시작');
+    final postAuthor = await authorFuture.timeout(
+      const Duration(seconds: 3),
+      onTimeout: () => UserProfileService.instance.nicknameNotifier.value?.trim().isNotEmpty == true
+          ? 'u/${UserProfileService.instance.nicknameNotifier.value!.trim()}'
+          : 'u/익명',
+    );
+    debugPrint('_submit: authorFuture 완료 postAuthor=$postAuthor');
 
     final linkTrimmed = _linkController.text.trim();
     if (_isEditMode && widget.initialPost != null) {
@@ -768,11 +815,14 @@ class _WritePostPageState extends State<WritePostPage> {
         isFirstWatch: _boardKind == 'review' ? _isFirstWatch : base.isFirstWatch,
         tags: _boardKind == 'review' ? _reviewTagsForPost() : base.tags,
         allowReply: _boardKind == 'review' ? _allowReply : base.allowReply,
+        country: (base.country?.trim().isNotEmpty == true)
+            ? base.country
+            : _countryForNewPost(),
       );
       final result = await PostService.instance.updatePost(updated);
       if (!mounted) return;
       if (result != null) {
-        unawaited(_syncReviewWatchHistory().catchError((_) {}));
+        unawaited(_syncReviewWatchHistory(result.id).catchError((_) {}));
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(s.get('postEditSuccess'), style: GoogleFonts.notoSansKr()), behavior: SnackBarBehavior.floating),
         );
@@ -813,16 +863,30 @@ class _WritePostPageState extends State<WritePostPage> {
       allowReply: _boardKind == 'review' ? _allowReply : true,
       authorPhotoUrl: UserProfileService.instance.profileImageUrlNotifier.value,
       authorAvatarColorIndex: UserProfileService.instance.avatarColorNotifier.value,
-      country: Post.normalizeFeedCountry(
-        UserProfileService.instance.signupCountryNotifier.value ??
-            LocaleService.instance.locale,
-      ),
+      country: _countryForNewPost(),
     );
+    debugPrint('_submit: Post 객체 생성 완료 id=${post.id}');
 
-    unawaited(_syncReviewWatchHistory().catchError((_) {}));
-
+    debugPrint('_submit: createPost 호출 시작');
+    final created = await PostService.instance.createPost(post);
+    debugPrint('_submit: createPost 완료 created=${created?.id}');
     if (!mounted) return;
-    Navigator.pop(context, post);
+    if (created == null) {
+      setState(() => _isSubmitting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '글 등록에 실패했습니다.',
+            style: GoogleFonts.notoSansKr(),
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    unawaited(_syncReviewWatchHistory(created.id).catchError((_) {}));
+    if (!mounted) return;
+    Navigator.pop(context, created);
     } catch (e, st) {
       debugPrint('_submit 예외: $e\n$st');
       if (mounted) {
@@ -859,31 +923,48 @@ class _WritePostPageState extends State<WritePostPage> {
             title: _isEditMode ? s.get('editPost') : s.get('writePost'),
             onBack: () => popListsStyleSubpage(context),
             trailing: _isSubmitting
-                ? const SizedBox(
-                    width: 28,
-                    height: 28,
-                    child: Padding(
-                      padding: EdgeInsets.all(2),
+                ? FilledButton(
+                    onPressed: null,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.linkBlue,
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: AppColors.linkBlue,
+                      disabledForegroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 7,
+                      ),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const SizedBox(
+                      width: 16,
+                      height: 16,
                       child: CircularProgressIndicator(
                         strokeWidth: 2,
-                        color: _kWriteAccentOrange,
+                        color: Colors.white,
                       ),
                     ),
                   )
-                : TextButton(
+                : FilledButton(
                     onPressed: _submit,
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.linkBlue,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 7,
+                      ),
                       minimumSize: Size.zero,
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
                     child: Text(
-                      _isEditMode ? s.get('edit') : s.get('postSubmit'),
+                      _isEditMode ? s.get('edit') : s.get('save'),
                       style: GoogleFonts.notoSansKr(
-                        fontSize: 15,
+                        fontSize: 11,
                         fontWeight: FontWeight.w700,
-                        color: _kWriteAccentOrange,
-                        letterSpacing: 0.2,
+                        letterSpacing: 0.11,
+                        height: 1.12,
                       ),
                     ),
                   ),
@@ -898,7 +979,7 @@ class _WritePostPageState extends State<WritePostPage> {
                 padding: EdgeInsets.fromLTRB(20, 12, 20, bottomPadding + 24),
                 keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
                 children: [
-            // 게시판 선택 (리뷰 / 톡 / 질문)
+            // 게시판 선택 (리뷰 / 톡) — ask 탭 비표시
             if (!_isEditMode)
               Padding(
                 padding: const EdgeInsets.only(bottom: 16),
@@ -925,25 +1006,6 @@ class _WritePostPageState extends State<WritePostPage> {
                           onTap: () => setState(() {
                             _boardKind = 'talk';
                             _selectedCategory = 'free';
-                            _pickDramaId = null;
-                            _pickDramaTitle = null;
-                            _pickDramaThumb = null;
-                            _reviewRating = null;
-                            _noSpoilers = true;
-                            _reviewDramaLiked = false;
-                            _isFirstWatch = true;
-                            _allowReply = true;
-                          }),
-                          cs: cs,
-                        ),
-                        const SizedBox(width: 8),
-                        _CategoryPill(
-                          label: s.get('tabQnA'),
-                          icon: LucideIcons.message_circle,
-                          selected: _boardKind == 'ask',
-                          onTap: () => setState(() {
-                            _boardKind = 'ask';
-                            _selectedCategory = 'question';
                             _pickDramaId = null;
                             _pickDramaTitle = null;
                             _pickDramaThumb = null;
@@ -1269,7 +1331,7 @@ class _WritePostPageState extends State<WritePostPage> {
     InputDecoration deco(String hint) => InputDecoration(
           hintText: hint,
           hintStyle: GoogleFonts.notoSansKr(
-            fontSize: 15,
+            fontSize: 12,
             color: cs.onSurfaceVariant.withValues(alpha: 0.62),
           ),
           filled: true,
@@ -1294,7 +1356,7 @@ class _WritePostPageState extends State<WritePostPage> {
             borderRadius: BorderRadius.circular(10),
             borderSide: BorderSide(color: cs.outline.withValues(alpha: 0.55), width: 1.35),
           ),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
         );
 
     return Padding(
@@ -1349,9 +1411,31 @@ class _WritePostPageState extends State<WritePostPage> {
             focusNode: _dramaSearchFocus,
             onTap: () => setState(() => _dramaSearchExpanded = true),
             decoration: deco(s.get('reviewDramaSearchHint')).copyWith(
-              prefixIcon: Icon(LucideIcons.search, size: 20, color: cs.onSurfaceVariant),
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 11,
+                vertical: 9,
+              ),
+              prefixIconConstraints: const BoxConstraints(
+                minWidth: 36,
+                minHeight: 34,
+                maxHeight: 34,
+              ),
+              prefixIcon: Icon(
+                LucideIcons.search,
+                size: 17,
+                color: cs.onSurfaceVariant,
+              ),
+              hintStyle: GoogleFonts.notoSansKr(
+                fontSize: 12,
+                color: cs.onSurfaceVariant.withValues(alpha: 0.62),
+              ),
             ),
-            style: GoogleFonts.notoSansKr(fontSize: 15, color: cs.onSurface),
+            style: GoogleFonts.notoSansKr(
+              fontSize: 12,
+              height: 1.2,
+              color: cs.onSurface,
+            ),
           ),
           // AnimatedSize + GridView in ListView는 SliverMultiBoxAdaptor assertion을 유발할 수 있어
           // 조건부 표시만 사용 (애니메이션 생략).
@@ -1369,8 +1453,8 @@ class _WritePostPageState extends State<WritePostPage> {
                       shrinkWrap: true,
                       physics: const ClampingScrollPhysics(),
                       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 3,
-                        childAspectRatio: 0.68,
+                        crossAxisCount: 4,
+                        childAspectRatio: 0.62,
                         crossAxisSpacing: 8,
                         mainAxisSpacing: 8,
                       ),
@@ -1430,7 +1514,11 @@ class _WritePostPageState extends State<WritePostPage> {
             maxLines: 12,
             textCapitalization: TextCapitalization.sentences,
             decoration: deco(s.get('reviewPlaceholder')),
-            style: GoogleFonts.notoSansKr(fontSize: 16, height: 1.45, color: cs.onSurface),
+            style: GoogleFonts.notoSansKr(
+              fontSize: 12,
+              height: 1.45,
+              color: cs.onSurface,
+            ),
           ),
           const SizedBox(height: 12),
           TextField(
@@ -1439,7 +1527,11 @@ class _WritePostPageState extends State<WritePostPage> {
             textInputAction: TextInputAction.done,
             onSubmitted: _onReviewTagFieldSubmitted,
             decoration: deco(s.get('reviewTagInputHint')),
-            style: GoogleFonts.notoSansKr(fontSize: 15, color: cs.onSurface),
+            style: GoogleFonts.notoSansKr(
+              fontSize: 12,
+              height: 1.2,
+              color: cs.onSurface,
+            ),
           ),
           if (_reviewTags.isNotEmpty) ...[
             const SizedBox(height: 10),

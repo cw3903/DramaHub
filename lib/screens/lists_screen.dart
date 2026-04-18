@@ -16,6 +16,7 @@ import '../models/watchlist_item.dart';
 import '../services/auth_service.dart';
 import '../services/custom_drama_list_service.dart';
 import '../services/drama_list_service.dart';
+import '../services/locale_service.dart';
 import '../services/user_profile_service.dart';
 import '../widgets/country_scope.dart';
 import '../widgets/optimized_network_image.dart';
@@ -58,9 +59,21 @@ class _ListsScreenState extends State<ListsScreen> {
   @override
   void initState() {
     super.initState();
+    LocaleService.instance.localeNotifier.addListener(_onLocaleChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       CustomDramaListService.instance.loadIfNeeded(force: true);
     });
+  }
+
+  void _onLocaleChanged() {
+    if (!mounted) return;
+    CustomDramaListService.instance.loadIfNeeded(force: true);
+  }
+
+  @override
+  void dispose() {
+    LocaleService.instance.localeNotifier.removeListener(_onLocaleChanged);
+    super.dispose();
   }
 
   Future<void> _openCreateList(BuildContext context, dynamic s) async {
@@ -106,6 +119,7 @@ class _ListsScreenState extends State<ListsScreen> {
         ),
         body: AnimatedBuilder(
           animation: Listenable.merge([
+            LocaleService.instance.localeNotifier,
             CustomDramaListService.instance.listsNotifier,
             DramaListService.instance.extraNotifier,
             UserProfileService.instance.nicknameNotifier,

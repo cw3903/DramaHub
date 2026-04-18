@@ -100,9 +100,9 @@ class _StatsBarWatchlistButton extends StatelessWidget {
   /// surfaceContainerHighest 대비 구분되는 선명한 인디고 슬레이트.
   static const Color _kBackground = Color(0xFF404B63);
 
-  /// 워치리스트 미담김: 배지 채움 + 플러스.
-  static const Color _kWatchlistBadgePlusFill = Color(0xFFB0BEC5);
-  static const Color _kWatchlistBadgePlusGlyph = Color(0xFF263238);
+  /// 워치리스트 미담김: 배지 채움 + 플러스 (파란 배경 + 밝은 글리프).
+  static const Color _kWatchlistBadgePlusFill = Color(0xFF1E88E5);
+  static const Color _kWatchlistBadgePlusGlyph = Color(0xFFFFFFFF);
 
   /// 워치리스트 담김: 빨간 배지 + 마이너스.
   static const Color _kWatchlistBadgeMinusFill = Color(0xFFE53935);
@@ -540,6 +540,12 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
   int? _liveViews;
   int _watchlistUserCount = 0;
 
+  /// [itemsNotifier]와 전역 집계가 어긋나지 않게: 초기 [loadIfNeeded] 이후에만 델타 반영.
+  bool _watchlistListenerPrimed = false;
+
+  /// 이 드라마가 내 워치리스트에 있는지(다른 화면에서 삭제·추가 시 델타용).
+  bool _wlHadCurrentDrama = false;
+
   /// feedPostId → (likeCount, commentCount) from posts collection.
   /// Overrides the potentially-stale likeCount stored in drama_reviews docs.
   Map<String, ({int likeCount, int commentCount, bool isLiked})>
@@ -572,14 +578,15 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
     nav.pop(resultToPass);
   }
 
-  Future<void> _loadRatingStats() async {
+  Future<void> _loadRatingStats({bool ignoreDetailCache = false}) async {
     final dramaId = widget.detail.item.id;
     final country = mounted
         ? (CountryScope.maybeOf(context)?.country ??
               UserProfileService.instance.signupCountryNotifier.value)
         : UserProfileService.instance.signupCountryNotifier.value;
     try {
-      final preloaded = widget.detail.reviews.isNotEmpty;
+      final preloaded =
+          widget.detail.reviews.isNotEmpty && !ignoreDetailCache;
 
       if (preloaded) {
         // [DramaDetail]에 리뷰가 이미 채워져 있음 → drama_reviews 재조회 생략.
@@ -603,6 +610,10 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
           _liveCount = widget.detail.ratingCount;
           _liveReviews = widget.detail.reviews;
           _watchlistUserCount = wlCount;
+          if (_watchlistListenerPrimed) {
+            _wlHadCurrentDrama =
+                WatchlistService.instance.isInWatchlist(dramaId);
+          }
         });
         final ids = _reviewPostIds(widget.detail.reviews);
         if (ids.isNotEmpty) {
@@ -638,6 +649,10 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
         _liveCount = bundle.count;
         _liveReviews = bundle.reviews;
         _watchlistUserCount = wlCount;
+        if (_watchlistListenerPrimed) {
+          _wlHadCurrentDrama =
+              WatchlistService.instance.isInWatchlist(dramaId);
+        }
       });
       final ids = _reviewPostIds(bundle.reviews);
       if (ids.isNotEmpty) {
@@ -734,10 +749,14 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
     LocaleService.instance.localeNotifier.addListener(
       _reloadEpisodeRatingsForLocaleChange,
     );
+    ReviewService.instance.listNotifier.addListener(_onMyReviewsListChanged);
+    WatchlistService.instance.itemsNotifier.addListener(
+      _onWatchlistItemsChanged,
+    );
     // 리뷰·워치리스트 집계는 즉시 시작. posts 메타는 [_kickBatchReviewPostMeta]에서 비동기만.
     unawaited(_loadRatingStats().catchError((_) {}));
     // 첫 프레임·전환 애니메이션 후에 나머지 네트워크·서비스 로드 → 탭 직후 멈춤 체감 완화
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       final id = widget.detail.item.id;
       if (id.isNotEmpty) {
@@ -747,7 +766,13 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
       unawaited(_updateViewCount().catchError((_) {}));
       unawaited(WatchHistoryService.instance.loadIfNeeded());
       unawaited(CustomDramaListService.instance.loadIfNeeded());
-      unawaited(WatchlistService.instance.loadIfNeeded());
+      await WatchlistService.instance.loadIfNeeded();
+      if (!mounted) return;
+      final did = id.trim();
+      _wlHadCurrentDrama = did.isNotEmpty &&
+          AuthService.instance.isLoggedIn.value &&
+          WatchlistService.instance.isInWatchlist(did);
+      _watchlistListenerPrimed = true;
       if (widget.scrollToRatings) {
         WidgetsBinding.instance.addPostFrameCallback((__) {
           if (!mounted) return;
@@ -761,6 +786,25 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
     });
   }
 
+  void _onWatchlistItemsChanged() {
+    if (!mounted || !_watchlistListenerPrimed) return;
+    final did = widget.detail.item.id.trim();
+    if (did.isEmpty || !AuthService.instance.isLoggedIn.value) return;
+    final has = WatchlistService.instance.isInWatchlist(did);
+    if (has == _wlHadCurrentDrama) return;
+    final was = _wlHadCurrentDrama;
+    _wlHadCurrentDrama = has;
+    setState(() {
+      if (was && !has) {
+        _watchlistUserCount =
+            _watchlistUserCount > 0 ? _watchlistUserCount - 1 : 0;
+      } else if (!was && has) {
+        _watchlistUserCount += 1;
+      }
+    });
+    unawaited(_loadWatchlistUserCount());
+  }
+
   void _reloadEpisodeRatingsForLocaleChange() {
     final id = widget.detail.item.id.trim();
     if (id.isEmpty) return;
@@ -770,8 +814,19 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
     unawaited(EpisodeRatingService.instance.loadEpisodeAverageRatings(id));
   }
 
+  void _onMyReviewsListChanged() {
+    if (!mounted) return;
+    unawaited(_loadRatingStats(ignoreDetailCache: true).catchError((_) {}));
+  }
+
   @override
   void dispose() {
+    WatchlistService.instance.itemsNotifier.removeListener(
+      _onWatchlistItemsChanged,
+    );
+    ReviewService.instance.listNotifier.removeListener(
+      _onMyReviewsListChanged,
+    );
     LocaleService.instance.localeNotifier.removeListener(
       _reloadEpisodeRatingsForLocaleChange,
     );
@@ -870,6 +925,9 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
     final id = detail.item.id;
     final currentlyInList = WatchlistService.instance.isInWatchlist(id);
 
+    // [remove]/[add]가 동기로 notifier를 갱신하기 전에 맞춰 두어 [_onWatchlistItemsChanged]가 이중 반영하지 않게 함.
+    _wlHadCurrentDrama = !currentlyInList;
+
     // Optimistic UI: 즉시 카운트 반영 (Firestore 응답 기다리지 않음)
     setState(() {
       _watchlistUserCount = currentlyInList
@@ -948,8 +1006,11 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
               popListsStyleSubpage(context, _buildViewCountResult()),
           child: Scaffold(
           backgroundColor: theme.scaffoldBackgroundColor,
-          body: CustomScrollView(
+          body: RefreshIndicator(
+            onRefresh: () => _loadRatingStats(ignoreDetailCache: true),
+            child: CustomScrollView(
             keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            physics: const AlwaysScrollableScrollPhysics(),
             slivers: [
               // 상단: 포스터 + 제목 (조회수는 목록 갱신용으로만 서버 반영, UI 비표시)
               SliverToBoxAdapter(
@@ -1019,7 +1080,12 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
                           onReviewsListTap: () =>
                               _openDramaReviewsList(context, detail),
                           onReviewsChanged: () {
-                            if (mounted) _loadRatingStats();
+                            if (mounted) {
+                              unawaited(
+                                _loadRatingStats(ignoreDetailCache: true)
+                                    .catchError((_) {}),
+                              );
+                            }
                           },
                         ),
                       ),
@@ -1041,7 +1107,8 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
               ),
             ],
           ),
-        ),
+            ),
+          ),
         ),
       ),
     );
@@ -2604,12 +2671,15 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
                         final r = e.value;
                         final card = _ReviewCard(
                           review: r,
+                          dramaId: widget.dramaId,
+                          dramaTitle: widget.dramaTitle,
                           likeCount: _displayLikeCount(r),
                           commentCountOverride: _displayCommentCount(r),
                           isLiked: _likedIds.contains(_reviewKey(r)),
                           onLikeTap: () => _toggleLike(r),
                           strings: s,
                           embeddedInMergedSection: true,
+                          onReviewsChanged: widget.onReviewsChanged,
                         );
                         if (i == 0) return [card];
                         return [
@@ -3026,6 +3096,8 @@ class _ReviewAvatar extends StatelessWidget {
 class _ReviewCard extends StatefulWidget {
   const _ReviewCard({
     required this.review,
+    required this.dramaId,
+    required this.dramaTitle,
     required this.likeCount,
     required this.isLiked,
     required this.onLikeTap,
@@ -3038,9 +3110,12 @@ class _ReviewCard extends StatefulWidget {
 
     /// true: 평점 요약과 같은 큰 카드 안 — 개별 그림자·배경 카드 제거.
     this.embeddedInMergedSection = false,
+    this.onReviewsChanged,
   });
 
   final DramaReview review;
+  final String dramaId;
+  final String dramaTitle;
   final int likeCount;
   final bool isLiked;
   final VoidCallback onLikeTap;
@@ -3053,6 +3128,9 @@ class _ReviewCard extends StatefulWidget {
   /// When non-null, overrides the replies.length used as comment count display.
   final int? commentCountOverride;
   final bool embeddedInMergedSection;
+
+  /// 수정·삭제 후 상세 평점·리뷰 블록 갱신.
+  final VoidCallback? onReviewsChanged;
 
   @override
   State<_ReviewCard> createState() => _ReviewCardState();
@@ -3400,6 +3478,9 @@ class _ReviewCardState extends State<_ReviewCard> {
               review.id ?? '${review.userName}_${review.timeAgo}',
             ),
             review: review,
+            dramaId: widget.dramaId,
+            dramaTitle: widget.dramaTitle,
+            onReviewMutated: widget.onReviewsChanged,
             displayLikeCountOverride: widget.likeCount,
             displayCommentCountOverride: widget.commentCountOverride,
             initialIsLiked: widget.isLiked,

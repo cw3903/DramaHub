@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
@@ -157,7 +159,9 @@ class _LoginFormContentState extends State<LoginFormContent> {
       final s = CountryScope.of(context).strings;
       final p = _LoginPalette.of(context);
       String msg = s.get('loginErrorGeneric');
-      if (e is FirebaseAuthException && e.code == 'invalid-credential') {
+      if (e is TimeoutException) {
+        msg = s.get('loginTimeout');
+      } else if (e is FirebaseAuthException && e.code == 'invalid-credential') {
         try {
           final methods = await AuthService.instance.fetchSignInMethodsForEmail(email);
           msg = methods.isEmpty
@@ -191,10 +195,11 @@ class _LoginFormContentState extends State<LoginFormContent> {
       if (!mounted) return;
       setState(() => _isLoading = false);
       if (!context.mounted) return;
+      final msg = e is TimeoutException ? s.get('loginTimeout') : '${s.get('loginPreparing')}: $e';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            '${s.get('loginPreparing')}: $e',
+            msg,
             style: GoogleFonts.notoSansKr(color: Colors.white),
           ),
           behavior: SnackBarBehavior.floating,

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -12,13 +13,17 @@ import '../theme/app_theme.dart';
 import '../screens/login_page.dart';
 import '../services/auth_service.dart';
 import '../services/post_service.dart';
+import '../services/review_service.dart';
 import '../services/user_profile_service.dart';
+import '../services/locale_service.dart';
 import '../utils/format_utils.dart';
+import 'app_delete_confirm_dialog.dart';
 import 'country_scope.dart';
 import 'drama_review_feed_tile.dart';
 import 'feed_inline_action_colors.dart';
 import 'optimized_network_image.dart';
 import 'review_card_tap_highlight.dart';
+import 'write_review_sheet.dart';
 
 /// [community_board_tabs]의 `reviewInlineActionHitTarget`과 동일 — 터치 영역만 확장.
 Widget _dramaReviewsListActionHitTarget({
@@ -77,6 +82,10 @@ class DramaReviewsListFeedRow extends StatefulWidget {
   const DramaReviewsListFeedRow({
     super.key,
     required this.review,
+    /// 수정 시트·삭제 후 갱신용. 리뷰 목록 화면은 [dramaId]/[dramaTitle] 권장.
+    this.dramaId,
+    this.dramaTitle,
+    this.onReviewMutated,
     /// [Post] 로드 전까지 타일·하트 숫자에 쓸 값(예: 상세 카드 낙관적 좋아요).
     this.displayLikeCountOverride,
     /// [Post] 로드 전까지 댓글 수에 쓸 값 (배치 조회 결과 전달용).
@@ -88,6 +97,9 @@ class DramaReviewsListFeedRow extends StatefulWidget {
   });
 
   final DramaReview review;
+  final String? dramaId;
+  final String? dramaTitle;
+  final VoidCallback? onReviewMutated;
   final int? displayLikeCountOverride;
   final int? displayCommentCountOverride;
   final bool? initialIsLiked;
@@ -139,6 +151,89 @@ class _DramaReviewsListFeedRowState extends State<DramaReviewsListFeedRow> {
         behavior: SnackBarBehavior.floating,
       ),
     );
+  }
+
+  /// `drama_reviews` 문서 id. 동기화 글은 문서 id가 피드 post id와 같을 수 있음.
+  String? get _reviewFirestoreDocId {
+    final a = widget.review.id?.trim();
+    if (a != null && a.isNotEmpty) return a;
+    final b = widget.review.feedPostId?.trim();
+    if (b != null && b.isNotEmpty) return b;
+    return null;
+  }
+
+  bool get _showMyReviewEditDelete {
+    final docId = _reviewFirestoreDocId;
+    if (docId == null || docId.isEmpty) return false;
+    final me = AuthService.instance.currentUser.value?.uid.trim() ?? '';
+    final au = widget.review.authorUid?.trim() ?? '';
+    return me.isNotEmpty && au.isNotEmpty && me == au;
+  }
+
+  Future<void> _openEditReview() async {
+    final docId = _reviewFirestoreDocId;
+    if (docId == null || docId.isEmpty) return;
+    if (!AuthService.instance.isLoggedIn.value) {
+      await Navigator.push<void>(
+        context,
+        MaterialPageRoute<void>(builder: (_) => const LoginPage()),
+      );
+      if (!mounted) return;
+      if (!AuthService.instance.isLoggedIn.value) return;
+    }
+    HapticFeedback.lightImpact();
+    await ReviewService.instance.loadIfNeeded();
+    if (!mounted) return;
+    final item = ReviewService.instance.getById(docId);
+    final wid = widget.dramaId?.trim() ?? '';
+    final did = wid.isNotEmpty ? wid : (item?.dramaId.trim() ?? '');
+    final wt = widget.dramaTitle?.trim() ?? '';
+    final title = wt.isNotEmpty ? wt : (item?.dramaTitle.trim() ?? '');
+    if (did.isEmpty) {
+      _snack(CountryScope.of(context).strings.get('postSaveFailed'));
+      return;
+    }
+    await WriteReviewSheet.show(
+      context,
+      dramaId: did,
+      dramaTitle: title,
+      editingReviewId: docId,
+      initialRating: item?.rating ?? widget.review.rating,
+      initialComment: item?.comment ?? widget.review.comment,
+    );
+    if (!mounted) return;
+    widget.onReviewMutated?.call();
+    await _refreshPost();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _confirmDeleteReview() async {
+    final docId = _reviewFirestoreDocId;
+    if (docId == null || docId.isEmpty) return;
+    if (!AuthService.instance.isLoggedIn.value) {
+      await Navigator.push<void>(
+        context,
+        MaterialPageRoute<void>(builder: (_) => const LoginPage()),
+      );
+      if (!mounted) return;
+      if (!AuthService.instance.isLoggedIn.value) return;
+    }
+    final s = CountryScope.of(context).strings;
+    final ok = await showAppDeleteConfirmDialog(
+      context,
+      message: s.get('deleteReviewConfirm'),
+      cancelText: s.get('cancel'),
+      confirmText: s.get('delete'),
+    );
+    if (ok != true || !mounted) return;
+    HapticFeedback.lightImpact();
+    await ReviewService.instance.deleteById(docId);
+    if (!mounted) return;
+    widget.onReviewMutated?.call();
+    setState(() {
+      _post = null;
+      _expanded = false;
+    });
   }
 
   Future<void> _loadPost() async {
@@ -278,6 +373,9 @@ class _DramaReviewsListFeedRowState extends State<DramaReviewsListFeedRow> {
     final author = await UserProfileService.instance.getAuthorBaseName();
     if (!mounted) return;
     final p = _post!;
+    final rawCountry = p.country.trim();
+    final ctry =
+        rawCountry.isNotEmpty ? rawCountry : LocaleService.instance.locale;
     final newComment = PostComment(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       author: author,
@@ -290,6 +388,7 @@ class _DramaReviewsListFeedRowState extends State<DramaReviewsListFeedRow> {
           UserProfileService.instance.avatarColorNotifier.value,
       createdAtDate: DateTime.now(),
       authorUid: AuthService.instance.currentUser.value?.uid,
+      country: Post.normalizeFeedCountry(ctry),
     );
 
     final parentId = _replyingToCommentId;
@@ -325,6 +424,7 @@ class _DramaReviewsListFeedRowState extends State<DramaReviewsListFeedRow> {
           createdAtDate: parent.createdAtDate,
           imageUrl: parent.imageUrl,
           authorUid: parent.authorUid,
+          country: parent.country,
         );
         newComments = PostService.replaceCommentById(p.commentsList, parentId, updated);
       } else {
@@ -944,6 +1044,8 @@ class _DramaReviewsListFeedRowState extends State<DramaReviewsListFeedRow> {
         : (widget.initialIsLiked ?? false);
     const iconSize = 13.0;
     final actionFg = feedInlineActionMutedForeground(cs);
+    final s = CountryScope.of(context).strings;
+    final showMine = _showMyReviewEditDelete;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 0, 14, 6),
@@ -1012,6 +1114,45 @@ class _DramaReviewsListFeedRowState extends State<DramaReviewsListFeedRow> {
               ),
             ),
           ),
+          if (showMine) ...[
+            const SizedBox(width: 6),
+            ReviewCardSuppressParentTap(
+              child: _dramaReviewsListActionHitTarget(
+                onTap: () => unawaited(_openEditReview()),
+                outsets: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+                visual: Padding(
+                  padding: const EdgeInsets.fromLTRB(0, 2, 2, 2),
+                  child: Text(
+                    s.get('edit'),
+                    style: GoogleFonts.notoSansKr(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      height: 1.0,
+                      color: actionFg,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            ReviewCardSuppressParentTap(
+              child: _dramaReviewsListActionHitTarget(
+                onTap: () => unawaited(_confirmDeleteReview()),
+                outsets: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+                visual: Padding(
+                  padding: const EdgeInsets.fromLTRB(2, 2, 0, 2),
+                  child: Text(
+                    s.get('delete'),
+                    style: GoogleFonts.notoSansKr(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      height: 1.0,
+                      color: kAppDeleteActionColor,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );

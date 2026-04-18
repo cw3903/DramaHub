@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:google_sign_in/google_sign_in.dart';
@@ -7,6 +9,9 @@ class AuthService {
   AuthService._();
 
   static final AuthService instance = AuthService._();
+
+  /// Firebase Auth 네트워크 호출 상한(무한 대기 방지).
+  static const Duration authNetworkTimeout = Duration(seconds: 22);
 
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final GoogleSignIn _googleSignIn = GoogleSignIn();
@@ -28,16 +33,20 @@ class AuthService {
 
   /// 해당 이메일로 가입된 로그인 수단 조회 (invalid-credential 시 원인 구분용)
   Future<List<String>> fetchSignInMethodsForEmail(String email) async {
-    return _auth.fetchSignInMethodsForEmail(email);
+    return _auth
+        .fetchSignInMethodsForEmail(email)
+        .timeout(const Duration(seconds: 12));
   }
 
   /// 이메일/비밀번호 로그인
   Future<User?> signInWithEmailAndPassword(String email, String password) async {
     try {
-      final result = await _auth.signInWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
+      final result = await _auth
+          .signInWithEmailAndPassword(
+            email: email,
+            password: password,
+          )
+          .timeout(authNetworkTimeout);
       isLoggedIn.value = true;
       currentUser.value = result.user;
       return result.user;
@@ -50,10 +59,12 @@ class AuthService {
   /// 이메일/비밀번호 회원가입
   Future<User?> signUpWithEmailAndPassword(String email, String password) async {
     try {
-      final result = await _auth.createUserWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
+      final result = await _auth
+          .createUserWithEmailAndPassword(
+            email: email,
+            password: password,
+          )
+          .timeout(authNetworkTimeout);
       isLoggedIn.value = true;
       currentUser.value = result.user;
       return result.user;
@@ -75,7 +86,9 @@ class AuthService {
         idToken: googleAuth.idToken,
       );
 
-      final UserCredential result = await _auth.signInWithCredential(credential);
+      final UserCredential result = await _auth
+          .signInWithCredential(credential)
+          .timeout(authNetworkTimeout);
       isLoggedIn.value = true;
       currentUser.value = result.user;
       return result.user;

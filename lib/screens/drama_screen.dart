@@ -27,9 +27,22 @@ class DramaScreen extends StatefulWidget {
 }
 
 class _DramaScreenState extends State<DramaScreen> {
-  /// [build]마다 새 [Future]를 만들면 [FutureBuilder]가 조회를 반복 호출함 → 한 번만.
-  late final Future<Map<String, int>> _allViewCountsFuture =
+  /// [build]마다 새 [Future]를 만들면 [FutureBuilder]가 조회를 반복 호출함 → 갱신 시에만 교체.
+  Future<Map<String, int>> _viewCountsFuture =
       DramaViewService.instance.getAllViewCounts();
+
+  /// 당김 새로고침 시 그리드 페이지네이션 상태 리셋용.
+  int _dramaGridRefreshKey = 0;
+
+  Future<void> _refreshDramaList() async {
+    await DramaListService.instance.reloadFromAsset();
+    final counts = await DramaViewService.instance.getAllViewCounts();
+    if (!mounted) return;
+    setState(() {
+      _viewCountsFuture = Future.value(counts);
+      _dramaGridRefreshKey++;
+    });
+  }
 
   /// 카테고리 탭 타깃 필터. null 또는 '전체'면 전체.
   String? _categoryTargetFilter;
@@ -513,7 +526,7 @@ class _DramaScreenState extends State<DramaScreen> {
                     children: [
                   Positioned.fill(
                     child: FutureBuilder<Map<String, int>>(
-                      future: _allViewCountsFuture,
+                      future: _viewCountsFuture,
                       builder: (context, viewSnapshot) {
                         final viewCounts = viewSnapshot.data ?? {};
                         return ValueListenableBuilder<List<DramaItem>>(
@@ -537,11 +550,15 @@ class _DramaScreenState extends State<DramaScreen> {
                             return TabBarView(
                               children: [
                                 _DramaGridWithPagination(
+                                  key: ValueKey<String>(
+                                    'drama_all_$_dramaGridRefreshKey',
+                                  ),
                                   list: baseList,
                                   country: country,
                                   viewCounts: viewCounts,
                                   onTapCard: _openDetail,
                                   posterPlaceholder: _posterPlaceholder,
+                                  onRefresh: _refreshDramaList,
                                 ),
                                 () {
                                   final categoryList = _getCategorySortedList(
@@ -567,11 +584,15 @@ class _DramaScreenState extends State<DramaScreen> {
                                         }
                                       : viewCounts;
                                   return _DramaGridWithPagination(
+                                    key: ValueKey<String>(
+                                      'drama_cat_$_dramaGridRefreshKey',
+                                    ),
                                     list: listToUse,
                                     country: country,
                                     viewCounts: effectiveViewCounts,
                                     onTapCard: _openDetail,
                                     posterPlaceholder: _posterPlaceholder,
+                                    onRefresh: _refreshDramaList,
                                     ratingOverrides:
                                         isJpGenre && listToUse.isNotEmpty
                                         ? _jpGenreRatingOverlayFor(listToUse)
@@ -789,11 +810,13 @@ class _DramaScreenState extends State<DramaScreen> {
 /// ALL·카테고리 탭 공통: 무한 스크롤 드라마 그리드
 class _DramaGridWithPagination extends StatefulWidget {
   const _DramaGridWithPagination({
+    super.key,
     required this.list,
     required this.country,
     required this.viewCounts,
     required this.onTapCard,
     required this.posterPlaceholder,
+    required this.onRefresh,
     this.ratingOverrides,
   });
 
@@ -802,6 +825,7 @@ class _DramaGridWithPagination extends StatefulWidget {
   final Map<String, int> viewCounts;
   final void Function(DramaItem item) onTapCard;
   final Widget Function(BuildContext context) posterPlaceholder;
+  final Future<void> Function() onRefresh;
   final Map<String, double>? ratingOverrides;
 
   @override
@@ -924,9 +948,15 @@ class _DramaGridWithPaginationState extends State<_DramaGridWithPagination> {
     final cs = Theme.of(context).colorScheme;
     final r = dramaGridScreenScale(context);
     final bottomPad = MediaQuery.of(context).padding.bottom;
-    return CustomScrollView(
-      controller: _scrollController,
-      slivers: [
+    return RefreshIndicator.adaptive(
+      onRefresh: widget.onRefresh,
+      edgeOffset: 8 * r,
+      child: CustomScrollView(
+        controller: _scrollController,
+        physics: const AlwaysScrollableScrollPhysics(
+          parent: BouncingScrollPhysics(),
+        ),
+        slivers: [
         SliverPadding(
           padding: EdgeInsets.fromLTRB(8 * r, 0, 8 * r, 2 * r),
           sliver: SliverGrid(
@@ -991,6 +1021,7 @@ class _DramaGridWithPaginationState extends State<_DramaGridWithPagination> {
               : SizedBox(height: bottomPad + 22),
         ),
       ],
+      ),
     );
   }
 }

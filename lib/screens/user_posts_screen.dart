@@ -176,7 +176,10 @@ class _UserPostsScreenState extends State<UserPostsScreen> {
       if (uidFilter != null && uidFilter.isNotEmpty) {
         // posts + comments 병렬 로드
         final results = await Future.wait([
-          PostService.instance.getPostsByAuthorUid(uidFilter),
+          PostService.instance.mergePostsForProfileByUid(
+            uidFilter,
+            _postAuthor,
+          ),
           PostService.instance.getCommentsByAuthorUid(uidFilter),
         ]);
         var posts = results[0] as List<Post>;

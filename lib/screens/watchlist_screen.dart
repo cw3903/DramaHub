@@ -84,9 +84,21 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
   @override
   void initState() {
     super.initState();
+    LocaleService.instance.localeNotifier.addListener(_onLocaleChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       WatchlistService.instance.loadIfNeeded(force: true);
     });
+  }
+
+  void _onLocaleChanged() {
+    if (!mounted) return;
+    WatchlistService.instance.loadIfNeeded(force: true);
+  }
+
+  @override
+  void dispose() {
+    LocaleService.instance.localeNotifier.removeListener(_onLocaleChanged);
+    super.dispose();
   }
 
   @override

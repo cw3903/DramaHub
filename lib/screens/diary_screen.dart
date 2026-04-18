@@ -1,3 +1,5 @@
+import 'dart:async' show unawaited;
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -5,7 +7,6 @@ import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../models/drama.dart';
-import '../models/post.dart';
 import '../models/profile_favorite.dart';
 import '../services/auth_service.dart';
 import '../services/country_service.dart';
@@ -19,6 +20,9 @@ import '../widgets/feed_review_star_row.dart';
 import '../widgets/review_body_lines_indicator.dart';
 import '../widgets/lists_style_subpage_app_bar.dart';
 import '../widgets/optimized_network_image.dart';
+import '../widgets/write_review_sheet.dart';
+import 'drama_search_screen.dart';
+import 'login_page.dart';
 import 'profile_screen.dart'
     show RecentActivityWatchOnlyPage, RecentActivityReviewGate;
 
@@ -190,6 +194,33 @@ MyReviewItem? _reviewForWatched(WatchedDramaItem item, String? country) {
   return null;
 }
 
+/// [WatchHistoryService.entryIdForLinkedFeedReview] 역변환.
+String? _feedPostIdFromWatchHistoryEntryId(String entryId) {
+  const prefix = 'feed_';
+  final t = entryId.trim();
+  if (!t.startsWith(prefix)) return null;
+  final rest = t.substring(prefix.length).trim();
+  return rest.isEmpty ? null : rest;
+}
+
+/// 다이어리 행 → 피드 상세([RecentActivityReviewGate])용 [MyReviewItem] 매칭.
+MyReviewItem? _myReviewForDiaryEntry(WatchedDramaItem item, String? country) {
+  var matched = _reviewForWatched(item, country);
+  final fp = _feedPostIdFromWatchHistoryEntryId(item.id);
+  if (fp != null) {
+    if (matched?.feedPostId?.trim() != fp) {
+      matched = null;
+      for (final r in ReviewService.instance.listNotifier.value) {
+        if (r.feedPostId?.trim() == fp) {
+          matched = r;
+          break;
+        }
+      }
+    }
+  }
+  return matched;
+}
+
 /// Letterboxd Diary — 월별 고정 헤더 + 일·포스터·제목·메타 아이콘
 class DiaryScreen extends StatefulWidget {
   const DiaryScreen({super.key});
@@ -207,6 +238,7 @@ class _DiaryScreenState extends State<DiaryScreen> {
   @override
   void initState() {
     super.initState();
+    LocaleService.instance.localeNotifier.addListener(_onLocaleChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       WatchHistoryService.instance.refresh();
       DramaListService.instance.loadFromAsset();
@@ -215,10 +247,54 @@ class _DiaryScreenState extends State<DiaryScreen> {
     });
   }
 
+  void _onLocaleChanged() {
+    if (!mounted) return;
+    WatchHistoryService.instance.refresh();
+    ReviewService.instance.loadIfNeeded();
+  }
+
   @override
   void dispose() {
+    LocaleService.instance.localeNotifier.removeListener(_onLocaleChanged);
     _scrollController.dispose();
     super.dispose();
+  }
+
+  /// 프로필 다이어리 헤더 `+` — 작품 검색 후 드라마 상세 리뷰 탭과 동일 [WriteReviewSheet].
+  Future<void> _openAddDiaryReview(BuildContext context, dynamic s) async {
+    if (!AuthService.instance.isLoggedIn.value) {
+      final ok = await Navigator.push<bool>(
+        context,
+        MaterialPageRoute<bool>(builder: (_) => const LoginPage()),
+      );
+      if (!context.mounted ||
+          ok != true ||
+          !AuthService.instance.isLoggedIn.value) {
+        return;
+      }
+    }
+    if (!context.mounted) return;
+    final country = CountryScope.maybeOf(context)?.country ??
+        UserProfileService.instance.signupCountryNotifier.value;
+    final picked = await Navigator.push<DramaItem>(
+      context,
+      MaterialPageRoute<DramaItem>(
+        builder: (_) => const DramaSearchScreen(pickMode: true),
+      ),
+    );
+    if (!context.mounted || picked == null) return;
+    final locTitle =
+        DramaListService.instance.getDisplayTitle(picked.id, country);
+    final dramaTitle = locTitle.trim().isNotEmpty ? locTitle : picked.title;
+    if (!context.mounted) return;
+    await WriteReviewSheet.show(
+      context,
+      dramaId: picked.id,
+      dramaTitle: dramaTitle.trim().isNotEmpty ? dramaTitle : null,
+    );
+    if (!context.mounted) return;
+    unawaited(WatchHistoryService.instance.refresh());
+    unawaited(ReviewService.instance.loadIfNeeded());
   }
 
   void _openSortSheet(BuildContext context, dynamic s) {
@@ -295,6 +371,7 @@ class _DiaryScreenState extends State<DiaryScreen> {
         UserProfileService.instance.signupCountryNotifier.value;
     final locale = CountryScope.maybeOf(context)?.country;
     final uid = AuthService.instance.currentUser.value?.uid ?? '';
+    final matched = _myReviewForDiaryEntry(item, country);
 
     // DiaryEntryRow 표시 로직과 동일: item 직접 → ReviewService 폴백
     final itemRating = item.rating;
@@ -310,23 +387,36 @@ class _DiaryScreenState extends State<DiaryScreen> {
       effectiveRating = itemRating ?? 0;
       effectiveComment = itemComment ?? '';
     } else {
-      final rv = _reviewForWatched(item, country);
-      hasRating = (rv?.rating ?? 0) > 0;
-      hasReviewText = rv?.comment.trim().isNotEmpty ?? false;
-      effectiveRating = rv?.rating ?? 0;
-      effectiveComment = rv?.comment ?? '';
+      hasRating = (matched?.rating ?? 0) > 0;
+      hasReviewText = matched?.comment.trim().isNotEmpty ?? false;
+      effectiveRating = matched?.rating ?? 0;
+      effectiveComment = matched?.comment ?? '';
     }
     final isWatchOnly = !hasRating && !hasReviewText;
+    final feedPid = _feedPostIdFromWatchHistoryEntryId(item.id);
+    final titleForReview =
+        (matched?.dramaTitle.trim().isNotEmpty ?? false)
+            ? matched!.dramaTitle
+            : _displayTitle(item, country);
 
-    // WatchedDramaItem → MyReviewItem 변환
+    // WatchedDramaItem → MyReviewItem 변환 (`feed_<postId>` 다이어리 행은 feedPostId 필수)
     final review = MyReviewItem(
-      id: item.id,
-      dramaId: item.dramaKey,
-      dramaTitle: item.title,
+      id: (matched?.id.trim().isNotEmpty ?? false)
+          ? matched!.id.trim()
+          : (feedPid ?? item.id),
+      dramaId: matched?.dramaId.trim().isNotEmpty == true
+          ? matched!.dramaId.trim()
+          : item.dramaKey,
+      dramaTitle: titleForReview,
       rating: effectiveRating,
       comment: effectiveComment,
-      writtenAt: item.watchedAt,
-      appLocale: item.appLocale,
+      writtenAt: matched?.writtenAt ?? item.watchedAt,
+      authorName: matched?.authorName,
+      modifiedAt: matched?.modifiedAt,
+      feedPostId: (matched?.feedPostId?.trim().isNotEmpty == true)
+          ? matched!.feedPostId!.trim()
+          : feedPid,
+      appLocale: matched?.appLocale ?? item.appLocale,
     );
 
     Navigator.push<void>(
@@ -384,23 +474,35 @@ class _DiaryScreenState extends State<DiaryScreen> {
               child: ListsStyleSubpageHeaderBar(
                 title: titleText,
                 onBack: () => popListsStyleSubpage(context),
-                trailing: Tooltip(
-                  message: s.get('myReviewsSortTitle'),
-                  child: Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(8),
-                      onTap: () => _openSortSheet(context, s),
-                      child: Padding(
-                        padding: const EdgeInsets.all(6),
-                        child: Icon(
-                          LucideIcons.sliders_horizontal,
-                          size: 18,
-                          color: sortIconColor,
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Tooltip(
+                      message: s.get('myReviewsSortTitle'),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(8),
+                          onTap: () => _openSortSheet(context, s),
+                          child: Padding(
+                            padding: const EdgeInsets.all(6),
+                            child: Icon(
+                              LucideIcons.sliders_horizontal,
+                              size: 18,
+                              color: sortIconColor,
+                            ),
+                          ),
                         ),
                       ),
                     ),
-                  ),
+                    const SizedBox(width: 8),
+                    Tooltip(
+                      message: s.get('writeReview'),
+                      child: ListsStyleSubpageHeaderAddButton(
+                        onTap: () => _openAddDiaryReview(context, s),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -418,10 +520,9 @@ class _DiaryScreenState extends State<DiaryScreen> {
     dynamic s,
     String appCountry,
   ) {
-    final loc = LocaleService.instance.locale;
-    final list = WatchHistoryService.instance.list
-        .where((e) => Post.userScopedLocaleVisible(e.appLocale, loc))
-        .toList();
+    // 서비스 로드 단계에서 로케일·레거시(저장 시 country 없음) 규칙으로 이미 필터됨.
+    // UI에서 userScopedLocaleVisible을 한 번 더 쓰면 appLocale null인 기록이 전부 빠짐.
+    final list = WatchHistoryService.instance.list;
     if (list.isEmpty) {
       return Center(
         child: Padding(
@@ -612,7 +713,7 @@ class DiaryEntryRow extends StatelessWidget {
       rating = (itemRating != null && itemRating > 0) ? itemRating : null;
       hasReviewText = itemComment?.isNotEmpty ?? false;
     } else {
-      final review = _reviewForWatched(item, country);
+      final review = _myReviewForDiaryEntry(item, country);
       rating = review != null && review.rating > 0 ? review.rating : null;
       hasReviewText = review?.comment.trim().isNotEmpty ?? false;
     }

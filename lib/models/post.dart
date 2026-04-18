@@ -423,6 +423,8 @@ class PostComment {
     this.createdAtDate,
     this.imageUrl,
     this.authorUid,
+    /// Firestore `country` (us/kr/jp/cn). 없으면 레거시 — [Post.documentVisibleInCountryFeed]에서 전 구역 표시.
+    this.country,
   });
   final String id;
   final String author;
@@ -440,6 +442,9 @@ class PostComment {
   final DateTime? createdAtDate;
   /// 댓글 첨부 이미지/GIF URL (없으면 null)
   final String? imageUrl;
+
+  /// 저장 시 앱 구역(us/kr/jp/cn). 부모 글과 동일 버킷.
+  final String? country;
 
   /// 실제 작성 시각 기준으로 상대 시간 반환. createdAtDate가 없으면 저장된 timeAgo 반환.
   String get displayTimeAgo => createdAtDate != null
@@ -473,6 +478,7 @@ class PostComment {
       if (createdAtDate != null) 'createdAt': Timestamp.fromDate(createdAtDate!),
       if (imageUrl != null) 'imageUrl': imageUrl,
       if (authorUid != null) 'authorUid': authorUid,
+      if (country != null && country!.trim().isNotEmpty) 'country': country!.trim(),
     };
   }
 
@@ -506,6 +512,7 @@ class PostComment {
     final timeAgoStr = createdAtDate != null
         ? formatTimeAgo(createdAtDate, LocaleService.instance.locale)
         : (map['timeAgo'] as String? ?? '');
+    final ctry = (map['country'] as String?)?.trim();
     return PostComment(
       id: map['id'] as String? ?? '',
       author: map['author'] as String? ?? '',
@@ -520,6 +527,7 @@ class PostComment {
       createdAtDate: createdAtDate,
       imageUrl: map['imageUrl'] as String?,
       authorUid: map['authorUid'] as String?,
+      country: ctry != null && ctry.isNotEmpty ? ctry : null,
     );
   }
 }

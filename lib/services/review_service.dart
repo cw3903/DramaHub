@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
 import 'locale_service.dart';
+import 'watch_history_service.dart';
 import '../models/drama.dart';
 import '../models/post.dart';
 import '../utils/format_utils.dart';
@@ -372,6 +373,7 @@ class ReviewService {
   }
 
   /// 리뷰 수정. 로그인 시 Firestore `drama_reviews/{id}` 반영.
+  /// 로컬 캐시에 없어도(리뷰 목록만 보고 수정한 경우) Firestore에서 본인 문서를 읽어 반영.
   Future<void> updateById({
     required String id,
     required double rating,
@@ -379,59 +381,76 @@ class ReviewService {
     /// 피드 동기화 등: 게시글 `country`로 덮어쓸 때만 지정. null이면 [old.appLocale] 유지.
     String? countryOverride,
   }) async {
-    final idx = listNotifier.value.indexWhere((e) => e.id == id);
-    if (idx < 0) return;
-    final old = listNotifier.value[idx];
+    await loadIfNeeded();
+    final uid = _uid;
+    final key = id.trim();
+    if (key.isEmpty) return;
+
+    var idx = listNotifier.value.indexWhere((e) => e.id == key);
+    MyReviewItem? old;
+    if (idx >= 0) {
+      old = listNotifier.value[idx];
+    } else if (uid != null) {
+      old = await _fetchMyReviewDocForOwner(key, uid);
+    }
+    if (old == null) return;
+    final prior = old;
+
     final now = DateTime.now();
     final loc = (countryOverride != null && countryOverride.trim().isNotEmpty)
         ? countryOverride.trim()
-        : ((old.appLocale != null && old.appLocale!.trim().isNotEmpty)
-              ? old.appLocale!.trim()
+        : ((prior.appLocale != null && prior.appLocale!.trim().isNotEmpty)
+              ? prior.appLocale!.trim()
               : LocaleService.instance.locale);
     final item = MyReviewItem(
-      id: old.id,
-      dramaId: old.dramaId,
-      dramaTitle: old.dramaTitle,
+      id: prior.id,
+      dramaId: prior.dramaId,
+      dramaTitle: prior.dramaTitle,
       rating: rating,
       comment: comment,
-      writtenAt: old.writtenAt,
-      authorName: old.authorName,
+      writtenAt: prior.writtenAt,
+      authorName: prior.authorName,
       modifiedAt: now,
-      feedPostId: old.feedPostId,
+      feedPostId: prior.feedPostId,
       appLocale: loc,
     );
     final list = List<MyReviewItem>.from(listNotifier.value);
-    list[idx] = item;
+    final docId = prior.id;
+    final at = list.indexWhere((e) => e.id == docId);
+    if (at >= 0) {
+      list[at] = item;
+    } else {
+      list.insert(0, item);
+    }
     listNotifier.value = list;
     await _persist(list);
 
-    final uid = _uid;
     if (uid != null) {
       try {
         final data = <String, dynamic>{
           'uid': uid,
-          'dramaId': old.dramaId,
-          'dramaTitle': old.dramaTitle,
+          'dramaId': prior.dramaId,
+          'dramaTitle': prior.dramaTitle,
           'rating': rating,
           'comment': comment,
-          'writtenAt': Timestamp.fromDate(old.writtenAt),
-          'authorName': old.authorName,
+          'writtenAt': Timestamp.fromDate(prior.writtenAt),
+          'authorName': prior.authorName,
           'modifiedAt': Timestamp.fromDate(now),
           'country': loc,
         };
-        if (old.feedPostId != null && old.feedPostId!.isNotEmpty) {
-          data['feedPostId'] = old.feedPostId;
+        if (prior.feedPostId != null && prior.feedPostId!.trim().isNotEmpty) {
+          data['feedPostId'] = prior.feedPostId!.trim();
         }
         await _firestore
             .collection(_collection)
-            .doc(id)
+            .doc(docId)
             .set(data, SetOptions(merge: true));
       } catch (e) {
         debugPrint('ReviewService update Firestore: $e');
       }
     }
-    _invalidateDramaAggregateStats(old.dramaId);
-    unawaited(prefetchDramaRatingStats([old.dramaId]));
+    _invalidateDramaAggregateStats(prior.dramaId);
+    unawaited(prefetchDramaRatingStats([prior.dramaId]));
   }
 
   /// DramaFeed 글 id를 리뷰 문서에 연결 (신규 리뷰 저장 직후).
@@ -475,16 +494,55 @@ class ReviewService {
     }
   }
 
+  /// 로컬에 없을 때 Firestore에서 본인 `drama_reviews`만 읽음.
+  /// [idOrFeedPostKey]는 문서 id이거나, 문서 id와 다를 때의 `feedPostId`(피드 글 id).
+  Future<MyReviewItem?> _fetchMyReviewDocForOwner(
+    String idOrFeedPostKey,
+    String uid,
+  ) async {
+    final t = idOrFeedPostKey.trim();
+    if (t.isEmpty) return null;
+    try {
+      final direct = await _firestore.collection(_collection).doc(t).get();
+      if (direct.exists && direct.data() != null) {
+        final data = direct.data()!;
+        if ((data['uid'] as String?)?.trim() == uid) {
+          return _itemFromFirestore(t, data);
+        }
+      }
+    } catch (e, st) {
+      debugPrint('ReviewService _fetchMyReviewDocForOwner direct: $e\n$st');
+    }
+    try {
+      final q = await _firestore
+          .collection(_collection)
+          .where('uid', isEqualTo: uid)
+          .where('feedPostId', isEqualTo: t)
+          .limit(1)
+          .get();
+      if (q.docs.isEmpty) return null;
+      final d = q.docs.first;
+      return _itemFromFirestore(d.id, d.data());
+    } catch (e, st) {
+      debugPrint('ReviewService _fetchMyReviewDocForOwner query: $e\n$st');
+      return null;
+    }
+  }
+
   /// 리뷰 한 건 삭제. 연결된 피드 글이 있으면 해당 글만 삭제.
   Future<void> deleteById(String id) async {
     if (id.isEmpty) return;
     final uid = _uid;
+    await loadIfNeeded();
     MyReviewItem? found;
     for (final e in listNotifier.value) {
       if (e.id == id) {
         found = e;
         break;
       }
+    }
+    if (found == null && uid != null) {
+      found = await _fetchMyReviewDocForOwner(id, uid);
     }
     if (found == null) return;
     final list = listNotifier.value.where((e) => e.id != id).toList();
@@ -516,9 +574,18 @@ class ReviewService {
       );
     }
     if (removedIds.isNotEmpty) {
+      for (final pid in removedIds) {
+        await WatchHistoryService.instance.removeLinkedFeedReviewPost(pid);
+      }
       _lastDeletedFeedPostIds = removedIds;
       reviewFeedPostsDeletedTick.value++;
     }
+    await WatchHistoryService.instance.removeLegacyReviewDiaryRowIfMatches(
+      dramaId: found.dramaId,
+      rating: found.rating,
+      comment: found.comment,
+      reviewAt: found.modifiedAt ?? found.writtenAt,
+    );
   }
 
   /// 같은 유저가 같은 드라마에 올린 DramaFeed 리뷰 글(`posts`, type=review) 삭제. 삭제된 문서 id 목록.
@@ -585,7 +652,7 @@ class ReviewService {
   /// DramaFeed `posts`에 저장된 리뷰 글을 드라마 상세의 리뷰 탭(`drama_reviews`)과 맞춤.
   /// [PostService.addPost] / [PostService.updatePost] 성공 후 호출.
   Future<void> syncDramaReviewFromFeedPost(Post post) async {
-    if (postDisplayType(post) != 'review') return;
+    if (!postIsReviewBoardFeedPost(post)) return;
     final dramaId = post.dramaId?.trim() ?? '';
     if (dramaId.isEmpty) return;
     final rating = post.rating ?? 0;
@@ -603,19 +670,47 @@ class ReviewService {
     final postId = post.id.trim();
     if (postId.isEmpty) return;
     var existing = getById(postId);
+    // 문서 id ≠ 피드 post id 인 경우(자동 id + feedPostId만 연결) — post id로 다시 찾음.
+    if (existing == null) {
+      for (final e in listNotifier.value) {
+        if (e.feedPostId?.trim() == postId) {
+          existing = e;
+          break;
+        }
+      }
+    }
 
     // WriteReviewSheet이 ReviewService.add()로 먼저 저장한 경우 — postId 대신
     // dramaId가 일치하고 feedPostId가 없는 미연결 리뷰가 있으면 그것을 연결하고 종료.
+    //
+    // 워치만 피드(별 0·본문 없음)는 **별점/본문이 있는** 미연결 리뷰를 덮어쓰면 안 됨:
+    // 그렇지 않으면 워치+별점 저장 후 워치만을 남길 때 기존 별점 피드와의 연결이 끊기고
+    // `drama_reviews`만 워치용으로 바뀌어 별점 글이 "사라진" 것처럼 보임.
     if (existing == null) {
-      final unlinked = listNotifier.value
+      final unlinkedAll = listNotifier.value
           .where(
             (e) =>
                 e.dramaId == dramaId &&
                 (e.feedPostId == null || e.feedPostId!.trim().isEmpty),
           )
           .toList();
-      if (unlinked.isNotEmpty) {
-        final target = unlinked.first;
+      MyReviewItem? unlinkedTarget;
+      if (unlinkedAll.isNotEmpty) {
+        final incomingWatchOnly =
+            rating <= 0 && comment.isEmpty;
+        if (incomingWatchOnly) {
+          for (final e in unlinkedAll) {
+            if (e.rating <= 0 && e.comment.trim().isEmpty) {
+              unlinkedTarget = e;
+              break;
+            }
+          }
+        } else {
+          unlinkedTarget = unlinkedAll.first;
+        }
+      }
+      if (unlinkedTarget != null) {
+        final target = unlinkedTarget;
         await updateById(
           id: target.id,
           rating: rating,
@@ -628,17 +723,31 @@ class ReviewService {
     }
 
     if (existing != null) {
+      final reviewDocId = existing.id.trim();
       await updateById(
-        id: postId,
+        id: reviewDocId,
         rating: rating,
         comment: comment,
         countryOverride: post.country,
       );
-      final cur = getById(postId);
-      if (cur != null && (cur.feedPostId == null || cur.feedPostId!.isEmpty)) {
-        await setFeedPostId(reviewId: postId, feedPostId: postId);
+      final cur = getById(reviewDocId);
+      if (cur != null && (cur.feedPostId == null || cur.feedPostId!.trim().isEmpty)) {
+        await setFeedPostId(reviewId: reviewDocId, feedPostId: postId);
       }
     } else {
+      final uid = _uid;
+      if (uid != null) {
+        final remote = await _fetchMyReviewDocForOwner(postId, uid);
+        if (remote != null) {
+          await updateById(
+            id: remote.id,
+            rating: rating,
+            comment: comment,
+            countryOverride: post.country,
+          );
+          return;
+        }
+      }
       await add(
         dramaId: dramaId,
         dramaTitle: dramaTitle.isNotEmpty ? dramaTitle : dramaId,
@@ -651,6 +760,62 @@ class ReviewService {
         appLocale: post.country,
       );
     }
+  }
+
+  /// DramaFeed `posts`의 리뷰 글이 삭제된 뒤 호출 — 연동된 `drama_reviews`와 [listNotifier]에서 제거.
+  /// [PostService.deletePost]가 posts 문서를 지운 뒤 호출한다.
+  Future<void> removeSyncedReviewForDeletedFeedPost(Post post) async {
+    if (!postIsReviewBoardFeedPost(post)) return;
+    final postId = post.id.trim();
+    if (postId.isEmpty) return;
+    final dramaIdFromPost = post.dramaId?.trim() ?? '';
+
+    await loadIfNeeded();
+
+    final matches = listNotifier.value
+        .where(
+          (e) =>
+              e.id == postId ||
+              (e.feedPostId != null && e.feedPostId!.trim() == postId),
+        )
+        .toList();
+
+    final dramaIds = <String>{};
+
+    for (final found in matches) {
+      final did = found.dramaId.trim();
+      if (did.isNotEmpty) dramaIds.add(did);
+      final list = listNotifier.value.where((e) => e.id != found.id).toList();
+      listNotifier.value = list;
+      await _persist(list);
+      final uid = _uid;
+      if (uid != null) {
+        try {
+          await _firestore.collection(_collection).doc(found.id).delete();
+        } catch (e) {
+          debugPrint('removeSyncedReviewForDeletedFeedPost delete: $e');
+        }
+      }
+    }
+
+    if (matches.isEmpty) {
+      try {
+        await _firestore.collection(_collection).doc(postId).delete();
+        if (dramaIdFromPost.isNotEmpty) dramaIds.add(dramaIdFromPost);
+      } catch (e) {
+        debugPrint('removeSyncedReviewForDeletedFeedPost orphan: $e');
+      }
+    }
+
+    for (final id in dramaIds) {
+      _invalidateDramaAggregateStats(id);
+    }
+    if (dramaIds.isNotEmpty) {
+      unawaited(prefetchDramaRatingStats(dramaIds));
+    }
+
+    _lastDeletedFeedPostIds = [postId];
+    reviewFeedPostsDeletedTick.value++;
   }
 
   void _putDramaAggregateStats(String dramaId, double average, int count) {

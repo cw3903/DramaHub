@@ -5,9 +5,15 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import '../models/notification_item.dart';
+import '../models/post.dart';
 import 'auth_service.dart';
+import 'locale_service.dart';
 
 /// 알림 관리 서비스. Firestore users/{uid}/notifications 컬렉션 사용.
+///
+/// 알림 쿼리 스트림([_bindNotificationsQuery])은 **로그인/로그아웃**(auth 상태 변경) 때만
+/// 붙였다 떼었다 한다. [LocaleService.localeNotifier]에 연결해 언어 바꿀 때마다
+/// 재구독하면 gRPC 채널 shutdown/재연결이 반복될 수 있어 하지 않는다.
 class NotificationService {
   NotificationService._();
   static final NotificationService instance = NotificationService._();
@@ -44,6 +50,12 @@ class NotificationService {
         .listen(
       (snapshot) {
         final list = snapshot.docs
+            .where(
+              (d) => Post.documentVisibleInCountryFeed(
+                d.data(),
+                LocaleService.instance.locale,
+              ),
+            )
             .map((d) => NotificationItem.fromMap(d.data(), d.id))
             .toList();
         notifications.value = list;
@@ -92,6 +104,7 @@ class NotificationService {
     required String postId,
     required String postTitle,
     String? commentText,
+    String? country,
   }) async {
     final recipient = await _normalizeRecipientUid(toUid);
     if (recipient == null || recipient.isEmpty) return;
@@ -99,6 +112,9 @@ class NotificationService {
     // 자기 자신한테는 알림 안 보냄 (수신자 uid == 현재 로그인 uid)
     if (senderUid != null && senderUid == recipient) return;
     try {
+      final trimmed = country?.trim();
+      final storeCountry =
+          (trimmed != null && trimmed.isNotEmpty) ? trimmed : null;
       await _firestore
           .collection('users')
           .doc(recipient)
@@ -111,6 +127,7 @@ class NotificationService {
             postTitle: postTitle,
             commentText: commentText,
             createdAt: DateTime.now(),
+            country: storeCountry,
           ).toMap());
     } catch (e, st) {
       developer.log(

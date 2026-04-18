@@ -45,7 +45,6 @@ import '../widgets/app_delete_confirm_dialog.dart';
 import '../widgets/blind_refresh_indicator.dart';
 import '../widgets/community_board_tabs.dart';
 import '../widgets/user_profile_nav.dart';
-import 'question_board_tab.dart';
 import 'package:video_player/video_player.dart';
 import '../widgets/feed_inline_action_colors.dart';
 import '../widgets/feed_post_card.dart'
@@ -354,7 +353,7 @@ class _PostDetailPageState extends State<PostDetailPage>
     WidgetsBinding.instance.addObserver(this);
     _backStack = List.of(widget.initialBackStack);
     _forwardStack = List.of(widget.initialForwardStack);
-    _morePostsTabIndex = (widget.initialTabIndex ?? 0).clamp(0, 2);
+    _morePostsTabIndex = (widget.initialTabIndex ?? 0).clamp(0, 1);
     _scrollController.addListener(() {
       _updateFabVisibility();
       // 스크롤 끝에서 300px 이내: 댓글 더 불러오기
@@ -431,9 +430,9 @@ class _PostDetailPageState extends State<PostDetailPage>
           widget.tabName == s.get('tabGeneral')) {
         idx = 1;
       } else if (widget.tabName == s.get('tabQnA')) {
-        idx = 2;
+        idx = 1;
       }
-      final clamped = idx.clamp(0, 2);
+      final clamped = idx.clamp(0, 1);
       if (_morePostsTabIndex != clamped) {
         _morePostsTabIndex = clamped;
       }
@@ -524,6 +523,9 @@ class _PostDetailPageState extends State<PostDetailPage>
     }
     final author = await UserProfileService.instance.getAuthorBaseName();
     final s = CountryScope.of(context).strings;
+    final ctry = _post.country?.trim().isNotEmpty == true
+        ? _post.country!.trim()
+        : LocaleService.instance.locale;
     final newComment = PostComment(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       author: author,
@@ -537,6 +539,7 @@ class _PostDetailPageState extends State<PostDetailPage>
       imageUrl: imageUrl,
       createdAtDate: DateTime.now(),
       authorUid: AuthService.instance.currentUser.value?.uid,
+      country: Post.normalizeFeedCountry(ctry),
     );
     final parentId = _replyingToCommentId;
     final errorMsg = parentId != null
@@ -569,6 +572,7 @@ class _PostDetailPageState extends State<PostDetailPage>
                 createdAtDate: parent.createdAtDate,
                 imageUrl: parent.imageUrl,
                 authorUid: parent.authorUid,
+                country: parent.country,
               ),
             )
           : [..._post.commentsList, newComment];
@@ -1161,13 +1165,13 @@ class _PostDetailPageState extends State<PostDetailPage>
     if (isVisible != _showFab) setState(() => _showFab = isVisible);
   }
 
-  /// DramaFeed 하단 탭 인덱스(0=리뷰, 1=톡, 2=에스크) — 열린 글의 게시판 종류
+  /// DramaFeed 하단 탭 인덱스(0=리뷰, 1=톡) — 에스크 탭 비표시, 질문 글은 톡 탭과 동일 인덱스
   int _feedTabIndexForPost(Post post) {
     switch (postDisplayType(post)) {
       case 'review':
         return 0;
       case 'ask':
-        return 2;
+        return 1;
       default:
         return 1;
     }
@@ -1232,7 +1236,7 @@ class _PostDetailPageState extends State<PostDetailPage>
       _forwardStack.add((_post, _morePostsTabIndex));
       final (post, tabIndex) = _backStack.removeLast();
       _currentPost = post;
-      _morePostsTabIndex = tabIndex.clamp(0, 2);
+      _morePostsTabIndex = tabIndex.clamp(0, 1);
       _visibleCommentCount = 15;
       _commentLines = 2;
       _commentController.clear();
@@ -1250,7 +1254,7 @@ class _PostDetailPageState extends State<PostDetailPage>
       _backStack.add((_post, _morePostsTabIndex));
       final (post, tabIndex) = _forwardStack.removeLast();
       _currentPost = post;
-      _morePostsTabIndex = tabIndex.clamp(0, 2);
+      _morePostsTabIndex = tabIndex.clamp(0, 1);
       _visibleCommentCount = 15;
       _commentLines = 2;
       _commentController.clear();
@@ -1938,6 +1942,34 @@ class _PostDetailPageState extends State<PostDetailPage>
     await DramaDetailPage.openFromItem(context, item, country: locale);
   }
 
+  /// Letterboxd 리뷰/Watch 상세: 오프라인 합성 글은 Firestore 삭제 없이 콜백만, 실제 글은 삭제 성공 시에만 pop.
+  Future<void> _confirmLetterboxdDelete(
+    BuildContext context,
+    Post post,
+    dynamic strings,
+  ) async {
+    final confirm = await showAppDeleteConfirmDialog(
+      context,
+      message: strings.get('deletePostConfirm'),
+      cancelText: strings.get('cancel'),
+      confirmText: strings.get('delete'),
+    );
+    if (confirm != true || !mounted) return;
+
+    if (widget.offlineSyntheticReview) {
+      widget.onPostDeleted?.call(post);
+      if (mounted) Navigator.of(context).pop();
+      return;
+    }
+
+    final ok = await PostService.instance.deletePost(post.id, postIfKnown: post);
+    if (!mounted) return;
+    if (ok) {
+      widget.onPostDeleted?.call(post);
+      Navigator.of(context).pop();
+    }
+  }
+
   Future<void> _onLetterboxdPostMenuSelected(
     String? value,
     Post post,
@@ -1956,19 +1988,7 @@ class _PostDetailPageState extends State<PostDetailPage>
       );
       if (updated != null && mounted) setState(() => _currentPost = updated);
     } else if (value == 'delete') {
-      final confirm = await showAppDeleteConfirmDialog(
-        context,
-        message: s.get('deletePostConfirm'),
-        cancelText: s.get('cancel'),
-        confirmText: s.get('delete'),
-      );
-      if (confirm == true && mounted) {
-        await PostService.instance.deletePost(post.id);
-        if (mounted) {
-          widget.onPostDeleted?.call(post);
-          Navigator.pop(context);
-        }
-      }
+      await _confirmLetterboxdDelete(context, post, s);
     } else if (value == 'report') {
       await showDialog<void>(
         context: context,
@@ -3157,28 +3177,30 @@ class _PostDetailPageState extends State<PostDetailPage>
                                                       color: cs.surface,
                                                       items: [
                                                         if (_isMine) ...[
-                                                          PopupMenuItem(
-                                                            value: 'edit',
-                                                            child: Row(
-                                                              children: [
-                                                                Icon(
-                                                                  Icons
-                                                                      .edit_outlined,
-                                                                  size: 18,
-                                                                  color: cs
-                                                                      .onSurface,
-                                                                ),
-                                                                const SizedBox(
-                                                                  width: 10,
-                                                                ),
-                                                                Text(
-                                                                  s.get('edit'),
-                                                                  style:
-                                                                      GoogleFonts.notoSansKr(),
-                                                                ),
-                                                              ],
+                                                          if (!widget
+                                                              .offlineSyntheticReview)
+                                                            PopupMenuItem(
+                                                              value: 'edit',
+                                                              child: Row(
+                                                                children: [
+                                                                  Icon(
+                                                                    Icons
+                                                                        .edit_outlined,
+                                                                    size: 18,
+                                                                    color: cs
+                                                                        .onSurface,
+                                                                  ),
+                                                                  const SizedBox(
+                                                                    width: 10,
+                                                                  ),
+                                                                  Text(
+                                                                    s.get('edit'),
+                                                                    style:
+                                                                        GoogleFonts.notoSansKr(),
+                                                                  ),
+                                                                ],
+                                                              ),
                                                             ),
-                                                          ),
                                                           PopupMenuItem(
                                                             value: 'delete',
                                                             child: Row(
@@ -3208,7 +3230,9 @@ class _PostDetailPageState extends State<PostDetailPage>
                                                               ],
                                                             ),
                                                           ),
-                                                        ] else if (isAppModerator()) ...[
+                                                        ] else if (isAppModerator() &&
+                                                            !widget
+                                                                .offlineSyntheticReview) ...[
                                                           PopupMenuItem(
                                                             value: 'delete',
                                                             child: Row(
@@ -3317,34 +3341,11 @@ class _PostDetailPageState extends State<PostDetailPage>
                                                         );
                                                     } else if (value ==
                                                         'delete') {
-                                                      final confirm =
-                                                          await showAppDeleteConfirmDialog(
-                                                            context,
-                                                            message: s.get(
-                                                              'deletePostConfirm',
-                                                            ),
-                                                            cancelText: s.get(
-                                                              'cancel',
-                                                            ),
-                                                            confirmText: s.get(
-                                                              'delete',
-                                                            ),
-                                                          );
-                                                      if (confirm == true &&
-                                                          mounted) {
-                                                        await PostService
-                                                            .instance
-                                                            .deletePost(
-                                                              _post.id,
-                                                            );
-                                                        if (mounted) {
-                                                          widget.onPostDeleted
-                                                              ?.call(_post);
-                                                          Navigator.pop(
-                                                            context,
-                                                          );
-                                                        }
-                                                      }
+                                                      await _confirmLetterboxdDelete(
+                                                        context,
+                                                        _post,
+                                                        s,
+                                                      );
                                                     } else if (value ==
                                                         'report') {
                                                       await showDialog<void>(
@@ -3714,9 +3715,13 @@ class _PostDetailPageState extends State<PostDetailPage>
                                                 ],
                                               ),
                                             ],
-                                            if (_canDeletePost) ...[
+                                            if (_canDeletePost ||
+                                                (_isMine &&
+                                                    !widget
+                                                        .offlineSyntheticReview)) ...[
                                               const Spacer(),
-                                              if (_isMine)
+                                              if (_isMine &&
+                                                  !widget.offlineSyntheticReview)
                                                 GestureDetector(
                                                   onTap: () async {
                                                     final updated =
@@ -3758,31 +3763,11 @@ class _PostDetailPageState extends State<PostDetailPage>
                                                 ),
                                               if (_canDeletePost)
                                                 GestureDetector(
-                                                  onTap: () async {
-                                                    final confirm =
-                                                        await showAppDeleteConfirmDialog(
-                                                          context,
-                                                          message: s.get(
-                                                            'deletePostConfirm',
-                                                          ),
-                                                          cancelText: s.get(
-                                                            'cancel',
-                                                          ),
-                                                          confirmText: s.get(
-                                                            'delete',
-                                                          ),
-                                                        );
-                                                    if (confirm == true &&
-                                                        mounted) {
-                                                      await PostService.instance
-                                                          .deletePost(_post.id);
-                                                      if (mounted) {
-                                                        widget.onPostDeleted
-                                                            ?.call(_post);
-                                                        Navigator.pop(context);
-                                                      }
-                                                    }
-                                                  },
+                                                  onTap: () => _confirmLetterboxdDelete(
+                                                    context,
+                                                    _post,
+                                                    s,
+                                                  ),
                                                   child: Padding(
                                                     padding:
                                                         const EdgeInsets.symmetric(
@@ -4287,7 +4272,7 @@ class _PostDetailPageState extends State<PostDetailPage>
   }
 }
 
-/// 댓글 아래 인기글/자유게시판 탭 + 글 목록 (홈탭과 동일한 PopularPostsTab, FreeBoardTab, QuestionBoardTab 사용)
+/// 댓글 아래 DramaFeed: 리뷰·톡 탭 (에스크 탭 없음 — 홈과 동일 PopularPostsTab / FreeBoardTab)
 class _MorePostsSection extends StatefulWidget {
   const _MorePostsSection({
     super.key,
@@ -4322,15 +4307,22 @@ class _MorePostsSection extends StatefulWidget {
 
 class _MorePostsSectionState extends State<_MorePostsSection>
     with SingleTickerProviderStateMixin {
-  static const List<String> _feedBoards = ['review', 'talk', 'ask'];
+  static const List<String> _feedBoards = ['review', 'talk'];
+
+  /// 탭 [t]에 캐시·갱신 글 [p]가 속하는지 (에스크 탭 숨김 — ask는 톡 탭에만 매칭)
+  bool _tabMatchesPost(int t, Post p) {
+    if (t == 0) return postMatchesFeedFilter(p, _feedBoards[0]);
+    return postMatchesFeedFilter(p, 'talk') ||
+        postMatchesFeedFilter(p, 'ask');
+  }
 
   late TabController _tabController;
-  final List<List<Post>> _tabFeedPosts = List.generate(3, (_) => []);
+  final List<List<Post>> _tabFeedPosts = List.generate(2, (_) => []);
   final List<DocumentSnapshot<Map<String, dynamic>>?> _tabLastDoc =
-      List.generate(3, (_) => null);
-  final List<bool> _tabHasMore = List.generate(3, (_) => true);
-  final List<bool> _tabLoadingMore = List.generate(3, (_) => false);
-  final List<bool> _tabInitialLoading = List.generate(3, (_) => true);
+      List.generate(2, (_) => null);
+  final List<bool> _tabHasMore = List.generate(2, (_) => true);
+  final List<bool> _tabLoadingMore = List.generate(2, (_) => false);
+  final List<bool> _tabInitialLoading = List.generate(2, (_) => true);
   late final List<ScrollController> _feedScrollControllers;
   String? _postsError;
 
@@ -4342,11 +4334,11 @@ class _MorePostsSectionState extends State<_MorePostsSection>
     super.initState();
     _talkAskUseCardFeedLayout = widget.talkAskUseCardFeedLayout;
     _tabController = TabController(
-      length: 3,
+      length: 2,
       vsync: this,
-      initialIndex: widget.initialTabIndex.clamp(0, 2),
+      initialIndex: widget.initialTabIndex.clamp(0, 1),
     );
-    _feedScrollControllers = List.generate(3, (i) {
+    _feedScrollControllers = List.generate(2, (i) {
       final c = ScrollController();
       c.addListener(() => _onFeedScrollNearEnd(i));
       return c;
@@ -4366,21 +4358,21 @@ class _MorePostsSectionState extends State<_MorePostsSection>
             BlockService.instance.isPostBlocked(p.id))
           continue;
         if (p.id == widget.excludePostId) continue;
-        for (var t = 0; t < 3; t++) {
-          if (postMatchesFeedFilter(p, _feedBoards[t])) {
+        for (var t = 0; t < 2; t++) {
+          if (_tabMatchesPost(t, p)) {
             if (!_tabFeedPosts[t].any((e) => e.id == p.id)) {
               _tabFeedPosts[t].add(p);
             }
           }
         }
       }
-      for (var t = 0; t < 3; t++) {
+      for (var t = 0; t < 2; t++) {
         _tabInitialLoading[t] = _tabFeedPosts[t].isEmpty;
       }
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      _ensureFeedTabBootstrapped(widget.initialTabIndex.clamp(0, 2));
+      _ensureFeedTabBootstrapped(widget.initialTabIndex.clamp(0, 1));
     });
   }
 
@@ -4419,14 +4411,14 @@ class _MorePostsSectionState extends State<_MorePostsSection>
   }
 
   void _ensureFeedTabBootstrapped(int tabIndex) {
-    if (tabIndex < 0 || tabIndex > 2) return;
+    if (tabIndex < 0 || tabIndex > 1) return;
     if (_tabFeedPosts[tabIndex].isEmpty && !_tabLoadingMore[tabIndex]) {
       _loadFeedTabPage(tabIndex, reset: false);
     }
   }
 
   Future<void> _loadFeedTabPage(int tabIndex, {required bool reset}) async {
-    if (tabIndex < 0 || tabIndex > 2) return;
+    if (tabIndex < 0 || tabIndex > 1) return;
     if (_tabLoadingMore[tabIndex]) return;
     if (!reset && !_tabHasMore[tabIndex]) return;
 
@@ -4544,7 +4536,7 @@ class _MorePostsSectionState extends State<_MorePostsSection>
               final animValue = _tabController.index.toDouble();
               final idx = _tabController.index;
               final s = CountryScope.of(context).strings;
-              final showLayoutToggle = idx == 1 || idx == 2;
+              final showLayoutToggle = idx == 1;
               final tip = _talkAskUseCardFeedLayout
                   ? s.get('talkAskFeedLayoutSwitchToList')
                   : s.get('talkAskFeedLayoutSwitchToCards');
@@ -4555,7 +4547,7 @@ class _MorePostsSectionState extends State<_MorePostsSection>
                     child: Align(
                       alignment: Alignment.centerLeft,
                       child: SizedBox(
-                        width: (tabW + tabGap) * 2 + tabW,
+                        width: (tabW + tabGap) * 1 + tabW,
                         height: tabH,
                         child: Stack(
                           clipBehavior: Clip.none,
@@ -4572,7 +4564,7 @@ class _MorePostsSectionState extends State<_MorePostsSection>
                                 ),
                               ),
                             ),
-                            for (var i = 0; i < 3; i++)
+                            for (var i = 0; i < 2; i++)
                               Positioned(
                                 left: (tabW + tabGap) * i,
                                 top: 0,
@@ -4600,7 +4592,6 @@ class _MorePostsSectionState extends State<_MorePostsSection>
                                         [
                                           s.get('tabReviews'),
                                           s.get('tabGeneral'),
-                                          s.get('tabQnA'),
                                         ][i],
                                         textHeightBehavior:
                                             const TextHeightBehavior(
@@ -4672,17 +4663,17 @@ class _MorePostsSectionState extends State<_MorePostsSection>
             final idx = _tabController.index;
             void onUpdated(Post updated) {
               setState(() {
-                for (var t = 0; t < 3; t++) {
+                for (var t = 0; t < 2; t++) {
                   final j = _tabFeedPosts[t].indexWhere(
                     (p) => p.id == updated.id,
                   );
                   if (j >= 0) {
-                    if (postMatchesFeedFilter(updated, _feedBoards[t])) {
+                    if (_tabMatchesPost(t, updated)) {
                       _tabFeedPosts[t][j] = updated;
                     } else {
                       _tabFeedPosts[t].removeAt(j);
                     }
-                  } else if (postMatchesFeedFilter(updated, _feedBoards[t]) &&
+                  } else if (_tabMatchesPost(t, updated) &&
                       updated.id != widget.excludePostId &&
                       !BlockService.instance.isBlocked(updated.author) &&
                       !BlockService.instance.isPostBlocked(updated.id)) {
@@ -4694,7 +4685,7 @@ class _MorePostsSectionState extends State<_MorePostsSection>
 
             void onDeleted(Post deleted) {
               setState(() {
-                for (var t = 0; t < 3; t++) {
+                for (var t = 0; t < 2; t++) {
                   _tabFeedPosts[t].removeWhere((p) => p.id == deleted.id);
                 }
               });
@@ -4722,39 +4713,19 @@ class _MorePostsSectionState extends State<_MorePostsSection>
                 feedAuthorAvatarSize: widget.feedAuthorAvatarSize,
               );
             }
-            if (idx == 1) {
-              return FreeBoardTab(
-                posts: _postsForTab(1),
-                isLoading: _tabFeedPosts[1].isEmpty && _tabInitialLoading[1],
-                error: _postsError,
-                currentUserAuthor: widget.currentUserAuthor,
-                onRefresh: () => _loadFeedTabPage(1, reset: true),
-                enablePullToRefresh: false,
-                shrinkWrap: true,
-                useSimpleFeedLayout: true,
-                useCardFeedLayout: _talkAskUseCardFeedLayout,
-                feedScrollController: _feedScrollControllers[1],
-                feedLoadingMore: _tabLoadingMore[1],
-                feedHasMore: _tabHasMore[1],
-                onPostUpdated: onUpdated,
-                onPostDeleted: onDeleted,
-                onPostTap: widget.onPostTap,
-                feedAuthorAvatarSize: widget.feedAuthorAvatarSize,
-              );
-            }
-            return QuestionBoardTab(
-              posts: _postsForTab(2),
-              isLoading: _tabFeedPosts[2].isEmpty && _tabInitialLoading[2],
+            return FreeBoardTab(
+              posts: _postsForTab(1),
+              isLoading: _tabFeedPosts[1].isEmpty && _tabInitialLoading[1],
               error: _postsError,
               currentUserAuthor: widget.currentUserAuthor,
-              onRefresh: () => _loadFeedTabPage(2, reset: true),
+              onRefresh: () => _loadFeedTabPage(1, reset: true),
               enablePullToRefresh: false,
               shrinkWrap: true,
               useSimpleFeedLayout: true,
               useCardFeedLayout: _talkAskUseCardFeedLayout,
-              feedScrollController: _feedScrollControllers[2],
-              feedLoadingMore: _tabLoadingMore[2],
-              feedHasMore: _tabHasMore[2],
+              feedScrollController: _feedScrollControllers[1],
+              feedLoadingMore: _tabLoadingMore[1],
+              feedHasMore: _tabHasMore[1],
               onPostUpdated: onUpdated,
               onPostDeleted: onDeleted,
               onPostTap: widget.onPostTap,
