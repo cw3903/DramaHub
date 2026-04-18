@@ -52,6 +52,20 @@ service cloud.firestore {
         && (request.auth.uid == uid || request.auth.uid == followerUid);
     }
 
+    // 인박스 알림: 본인만 읽기·읽음 처리, 다른 로그인 사용자만 문서 생성(좋아요·댓글 등)
+    // create는 필드 검증을 느슨하게 — 클라이언트 맵·서버타임스탬프 조합에서 isRead 등으로 거절되는 경우 방지
+    match /users/{uid}/notifications/{docId} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow create: if request.auth != null
+        && request.auth.uid != uid
+        && request.resource.data.type is string
+        && request.resource.data.fromUser is string
+        && request.resource.data.postId is string
+        && request.resource.data.postTitle is string;
+      allow update: if request.auth != null && request.auth.uid == uid;
+      allow delete: if false;
+    }
+
     match /conversations/{convId}/messages/{docId} {
       allow read, write: if request.auth != null;
     }

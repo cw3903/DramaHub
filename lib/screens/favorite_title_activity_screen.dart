@@ -18,6 +18,7 @@ import '../widgets/optimized_network_image.dart';
 import '../widgets/two_tab_segment_bar.dart';
 import '../widgets/write_review_sheet.dart';
 import '../widgets/app_delete_confirm_dialog.dart';
+import '../theme/app_theme.dart';
 import 'diary_screen.dart';
 import 'drama_detail_page.dart';
 import 'login_page.dart';
@@ -247,6 +248,34 @@ class _FavoriteTitleActivityScreenState
     extends State<FavoriteTitleActivityScreen> {
   int _segment = 0;
   final ScrollController _scrollController = ScrollController();
+  /// [ListsStyleSubpageHorizontalSwipeBack]과 동일 임계 — 탭/뒤로 분기용.
+  double _horizontalSwipeAccumDx = 0;
+
+  static const double _kSwipeDistancePx = 72;
+  static const double _kSwipeVelocityPxPerS = 200;
+
+  void _onFavoriteActivityHorizontalDragEnd(DragEndDetails details) {
+    final dx = _horizontalSwipeAccumDx;
+    final v = details.primaryVelocity ?? 0;
+    _horizontalSwipeAccumDx = 0;
+
+    final goLeft = dx <= -_kSwipeDistancePx || v <= -_kSwipeVelocityPxPerS;
+    final goRight = dx >= _kSwipeDistancePx || v >= _kSwipeVelocityPxPerS;
+    if (!goLeft && !goRight) return;
+
+    // 리뷰: 오른쪽 → 뒤로, 왼쪽 → 다이어리 / 다이어리: 오른쪽 → 리뷰
+    if (_segment == 0) {
+      if (goRight) {
+        popListsStyleSubpage(context);
+      } else if (goLeft) {
+        setState(() => _segment = 1);
+      }
+    } else {
+      if (goRight) {
+        setState(() => _segment = 0);
+      }
+    }
+  }
 
   @override
   void initState() {
@@ -269,34 +298,23 @@ class _FavoriteTitleActivityScreenState
 
   String _headerTitle(dynamic s) => s.get('favoriteActivityHeaderTitle');
 
-  void _openDramaDetailForFavorite(BuildContext context, String? country) {
+  Future<void> _openDramaDetailForFavorite(
+    BuildContext context,
+    String? country,
+  ) async {
     final line = _favoriteDramaLineMeta(widget.favorite, country);
     final navDrama = _navDramaItemForFavorite(widget.favorite, line);
-    final detail =
-        DramaListService.instance.buildDetailForItem(navDrama, country);
-    Navigator.push<void>(
-      context,
-      CupertinoPageRoute<void>(
-        builder: (_) => DramaDetailPage(detail: detail),
-      ),
-    );
+    await DramaDetailPage.openFromItem(context, navDrama, country: country);
   }
 
   /// 프로필 다이어리와 동일 — 시청 줄마다 해당 작품 상세로 이동.
-  void _openDramaFromWatchedDiaryEntry(
+  Future<void> _openDramaFromWatchedDiaryEntry(
     BuildContext context,
     WatchedDramaItem item,
     String? country,
-  ) {
+  ) async {
     final dramaItem = dramaItemForDiaryEntry(item, country);
-    final detail =
-        DramaListService.instance.buildDetailForItem(dramaItem, country);
-    Navigator.push<void>(
-      context,
-      CupertinoPageRoute<void>(
-        builder: (_) => DramaDetailPage(detail: detail),
-      ),
-    );
+    await DramaDetailPage.openFromItem(context, dramaItem, country: country);
   }
 
   /// Reviews 탭 상단 — 즐겨찾기 작품 포스터·제목 (중앙 정렬).
@@ -518,8 +536,7 @@ class _FavoriteTitleActivityScreenState
     final brightness = theme.brightness;
 
     final headerBg = listsStyleSubpageHeaderBackground(theme);
-    return ListsStyleSwipeBack(
-      child: AnnotatedRegion<SystemUiOverlayStyle>(
+    return AnnotatedRegion<SystemUiOverlayStyle>(
       value: listsStyleSubpageSystemOverlay(theme, headerBg),
       child: Scaffold(
         backgroundColor: theme.scaffoldBackgroundColor,
@@ -543,7 +560,14 @@ class _FavoriteTitleActivityScreenState
           // framework ancestor assertion이 날 수 있어 appCountry 사용.
           final review = _reviewForFavorite(widget.favorite, appCountry);
 
-          return Column(
+          return GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onHorizontalDragStart: (_) => _horizontalSwipeAccumDx = 0,
+            onHorizontalDragUpdate: (d) =>
+                _horizontalSwipeAccumDx += d.delta.dx,
+            onHorizontalDragEnd: _onFavoriteActivityHorizontalDragEnd,
+            onHorizontalDragCancel: () => _horizontalSwipeAccumDx = 0,
+            child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               TwoTabSegmentBar(
@@ -597,6 +621,8 @@ class _FavoriteTitleActivityScreenState
                                             appCountry,
                                           ),
                                           style: FilledButton.styleFrom(
+                                            backgroundColor: AppColors.linkBlue,
+                                            foregroundColor: Colors.white,
                                             padding: const EdgeInsets.symmetric(
                                               horizontal: 24,
                                               vertical: 14,
@@ -655,11 +681,11 @@ class _FavoriteTitleActivityScreenState
                       ),
               ),
             ],
+          ),
           );
         },
         ),
       ),
-    ),
     );
   }
 }

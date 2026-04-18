@@ -1,8 +1,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
-import 'auth_service.dart';
+import '../models/post.dart';
 import '../utils/format_utils.dart';
+import 'auth_service.dart';
 import 'episode_rating_service.dart';
+import 'locale_service.dart';
 import 'user_profile_service.dart';
 
 /// 회차별 리뷰(댓글) 한 건
@@ -18,6 +20,7 @@ class EpisodeReviewItem {
     this.rating,
     this.authorPhotoUrl,
     this.authorAvatarColorIndex,
+    this.appLocale,
   });
 
   final String id;
@@ -30,6 +33,9 @@ class EpisodeReviewItem {
   final double? rating;
   final String? authorPhotoUrl;
   final int? authorAvatarColorIndex;
+
+  /// Firestore `country` (us/kr/jp/cn). null이면 레거시.
+  final String? appLocale;
 
   String get timeAgo => formatTimeAgo(createdAt);
 }
@@ -54,6 +60,30 @@ class EpisodeReviewService {
   final Map<String, ValueNotifier<List<EpisodeReviewItem>>> _notifiers = {};
 
   String? get _uid => AuthService.instance.currentUser.value?.uid;
+
+  static bool _docVisibleInCurrentLocale(Map<String, dynamic> data) =>
+      Post.userScopedFirestoreDocVisibleForLocale(
+        data,
+        LocaleService.instance.locale,
+      );
+
+  /// 해당 드라마 회차 캐시만 비움 (언어 전환 등).
+  void clearNotifiersForDrama(String dramaId) {
+    final id = dramaId.trim();
+    if (id.isEmpty) return;
+    final prefix = '${id}_';
+    final keys = _notifiers.keys.where((k) => k.startsWith(prefix)).toList();
+    for (final k in keys) {
+      _notifiers.remove(k);
+    }
+  }
+
+  void clearAllEpisodeNotifiers() {
+    for (final n in _notifiers.values) {
+      n.value = [];
+    }
+    _notifiers.clear();
+  }
 
   ValueNotifier<List<EpisodeReviewItem>> getNotifierForEpisode(String dramaId, int episodeNumber) {
     final key = '${dramaId}_$episodeNumber';
@@ -93,6 +123,7 @@ class EpisodeReviewService {
           .orderBy('createdAt', descending: false)
           .get();
       final list = snapshot.docs
+          .where((d) => _docVisibleInCurrentLocale(d.data()))
           .map((d) => _itemFromFirestore(d.id, d.data()))
           .whereType<EpisodeReviewItem>()
           .toList();
@@ -107,6 +138,7 @@ class EpisodeReviewService {
             .where('dramaId', isEqualTo: dramaId)
             .get();
         var list = snapshot.docs
+            .where((d) => _docVisibleInCurrentLocale(d.data()))
             .map((d) => _itemFromFirestore(d.id, d.data()))
             .whereType<EpisodeReviewItem>()
             .where((e) => e.episodeNumber == episodeNumber)
@@ -130,6 +162,7 @@ class EpisodeReviewService {
         ? createdAt.toDate()
         : DateTime.fromMillisecondsSinceEpoch((createdAt as num?)?.toInt() ?? 0, isUtc: false);
     final colorIdx = data['authorAvatarColorIndex'];
+    final loc = (data['country'] as String?)?.trim();
     return EpisodeReviewItem(
       id: id,
       dramaId: data['dramaId'] as String? ?? '',
@@ -141,6 +174,7 @@ class EpisodeReviewService {
       rating: (data['rating'] as num?)?.toDouble(),
       authorPhotoUrl: data['authorPhotoUrl'] as String?,
       authorAvatarColorIndex: colorIdx is num ? colorIdx.toInt() : null,
+      appLocale: loc != null && loc.isNotEmpty ? loc : null,
     );
   }
 
@@ -158,17 +192,19 @@ class EpisodeReviewService {
     final notifier = getNotifierForEpisode(dramaId, episodeNumber);
     final trimmed = comment.trim();
 
+    final loc = LocaleService.instance.locale;
     if (uid != null) {
       try {
         final dup = await _firestore
             .collection(_collection)
             .where('dramaId', isEqualTo: dramaId)
             .where('episodeNumber', isEqualTo: episodeNumber)
-            .where('uid', isEqualTo: uid)
-            .limit(1)
             .get();
-        if (dup.docs.isNotEmpty) {
-          return duplicateReviewMessageKey;
+        for (final d in dup.docs) {
+          if ((d.data()['uid'] as String?) != uid) continue;
+          if (_docVisibleInCurrentLocale(d.data())) {
+            return duplicateReviewMessageKey;
+          }
         }
       } catch (e) {
         debugPrint('EpisodeReviewService add duplicate check: $e');
@@ -196,6 +232,7 @@ class EpisodeReviewService {
         rating: rating,
         authorPhotoUrl: authorPhotoUrl,
         authorAvatarColorIndex: authorAvatarColorIndex,
+        appLocale: loc,
       );
       notifier.value = [...notifier.value, newItem];
       _syncAverage(dramaId, episodeNumber, notifier.value);
@@ -210,6 +247,7 @@ class EpisodeReviewService {
         'authorName': authorName,
         'comment': trimmed,
         'rating': rating,
+        'country': loc,
         'createdAt': FieldValue.serverTimestamp(),
         'authorPhotoUrl': authorPhotoUrl,
         'authorAvatarColorIndex': authorAvatarColorIndex,
@@ -248,6 +286,13 @@ class EpisodeReviewService {
     final trimmed = comment.trim();
     if (uid != null) {
       try {
+        final snap = await _firestore.collection(_collection).doc(id).get();
+        final prev = snap.data();
+        final prevCountry = (prev?['country'] as String?)?.trim();
+        final countryToWrite =
+            (prevCountry != null && prevCountry.isNotEmpty)
+                ? prevCountry
+                : LocaleService.instance.locale;
         await _firestore.collection(_collection).doc(id).set({
           'uid': uid,
           'dramaId': dramaId,
@@ -255,6 +300,7 @@ class EpisodeReviewService {
           'authorName': authorName,
           'comment': trimmed,
           'rating': rating,
+          'country': countryToWrite,
           'authorPhotoUrl': authorPhotoUrl,
           'authorAvatarColorIndex': authorAvatarColorIndex,
           'updatedAt': FieldValue.serverTimestamp(),

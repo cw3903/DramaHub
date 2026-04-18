@@ -150,7 +150,8 @@ class _QuestionBoardTabState extends State<QuestionBoardTab> {
     void Function(Post)? onPostUpdated,
     void Function(Post)? onPostDeleted,
   ) {
-    final tabName = CountryScope.of(context).strings.get('tabQnA');
+    final s = CountryScope.of(context).strings;
+    final tabName = s.get('tabQnA');
     if (isLoading && posts.isEmpty) {
       if (widget.shrinkWrap) {
         return ListView(
@@ -187,15 +188,20 @@ class _QuestionBoardTabState extends State<QuestionBoardTab> {
         physics: widget.shrinkWrap ? const NeverScrollableScrollPhysics() : const AlwaysScrollableScrollPhysics(),
         padding: EdgeInsets.fromLTRB(24, 48, 24, bottom),
         children: [
+          const SizedBox(height: 8),
+          Icon(
+            LucideIcons.message_square_plus,
+            size: 64,
+            color: cs.onSurfaceVariant.withOpacity(0.4),
+          ),
           const SizedBox(height: 24),
-          Center(
-            child: SizedBox(
-              width: 24,
-              height: 24,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: cs.primary,
-              ),
+          Text(
+            s.get('postSoon'),
+            textAlign: TextAlign.center,
+            style: GoogleFonts.notoSansKr(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: cs.onSurface,
             ),
           ),
         ],
@@ -262,6 +268,7 @@ class _QuestionBoardTabState extends State<QuestionBoardTab> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
+    final s = CountryScope.of(context).strings;
     final posts = widget.posts;
     final isLoading = widget.isLoading;
     final error = widget.error;
@@ -326,15 +333,20 @@ class _QuestionBoardTabState extends State<QuestionBoardTab> {
           physics: widget.shrinkWrap ? const NeverScrollableScrollPhysics() : const AlwaysScrollableScrollPhysics(),
           padding: EdgeInsets.fromLTRB(24, 48, 24, bottom),
           children: [
+            const SizedBox(height: 8),
+            Icon(
+              LucideIcons.message_square_plus,
+              size: 64,
+              color: cs.onSurfaceVariant.withOpacity(0.4),
+            ),
             const SizedBox(height: 24),
-            Center(
-              child: SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: cs.primary,
-                ),
+            Text(
+              s.get('postSoon'),
+              textAlign: TextAlign.center,
+              style: GoogleFonts.notoSansKr(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: cs.onSurface,
               ),
             ),
           ],

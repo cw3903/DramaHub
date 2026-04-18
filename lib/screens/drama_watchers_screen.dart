@@ -279,6 +279,7 @@ class _WatcherListTile extends StatelessWidget {
         writtenAt: r.writtenAt ?? DateTime.now(),
         authorName: r.userName,
         feedPostId: r.feedPostId,
+        appLocale: r.appLocale,
       );
       Navigator.push<void>(
         context,
@@ -307,6 +308,7 @@ class _WatcherListTile extends StatelessWidget {
         writtenAt: r.writtenAt ?? DateTime.now(),
         authorName: r.userName,
         feedPostId: r.feedPostId,
+        appLocale: r.appLocale,
       );
       Navigator.push<void>(
         context,

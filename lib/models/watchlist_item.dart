@@ -7,12 +7,15 @@ class WatchlistItem {
     required this.addedAt,
     this.titleSnapshot,
     this.imageUrlSnapshot,
+    /// 앱 언어(us/kr/jp/cn) 저장 시점 — 피드·게시글과 동일 스코프.
+    this.appLocale,
   });
 
   final String dramaId;
   final DateTime addedAt;
   final String? titleSnapshot;
   final String? imageUrlSnapshot;
+  final String? appLocale;
 
   static WatchlistItem fromDoc(String docId, Map<String, dynamic> data) {
     final id = (data['dramaId'] as String?)?.trim().isNotEmpty == true ? data['dramaId'] as String : docId;
@@ -25,11 +28,13 @@ class WatchlistItem {
     } else {
       added = DateTime.fromMillisecondsSinceEpoch((ts as num?)?.toInt() ?? 0);
     }
+    final loc = (data['country'] as String?)?.trim();
     return WatchlistItem(
       dramaId: id,
       addedAt: added,
       titleSnapshot: data['title'] as String?,
       imageUrlSnapshot: data['imageUrl'] as String?,
+      appLocale: loc != null && loc.isNotEmpty ? loc : null,
     );
   }
 
@@ -39,6 +44,7 @@ class WatchlistItem {
       'addedAt': FieldValue.serverTimestamp(),
       if (titleSnapshot != null && titleSnapshot!.trim().isNotEmpty) 'title': titleSnapshot!.trim(),
       if (imageUrlSnapshot != null && imageUrlSnapshot!.trim().isNotEmpty) 'imageUrl': imageUrlSnapshot!.trim(),
+      if (appLocale != null && appLocale!.trim().isNotEmpty) 'country': appLocale!.trim(),
     };
   }
 }

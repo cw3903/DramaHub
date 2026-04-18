@@ -358,21 +358,52 @@ class Post {
 
   static String _normalizeCountry(String? v) {
     if (v == null || v.isEmpty) return 'us';
-    final c = v.toLowerCase();
-    if (c == 'kr' || c == 'jp' || c == 'cn') return c;
+    final c = v.toLowerCase().trim();
+    // 앱 피드 버킷은 us | kr | jp | cn. BCP-47·레거시 값은 버킷으로 합침.
+    if (c == 'kr' || c == 'ko' || c == 'kor') return 'kr';
+    if (c == 'jp' || c == 'ja') return 'jp';
+    if (c == 'cn' || c == 'zh' || c.startsWith('zh-')) return 'cn';
+    if (c == 'us' || c == 'en') return 'us';
     return 'us';
   }
 
+  /// 글 저장·피드 조회 시 동일 규칙으로 지역 코드 정리 ([_normalizeCountry]와 동일).
+  static String normalizeFeedCountry(String? v) => _normalizeCountry(v);
+
   /// Firestore 원본 [data]가 지역 피드([viewerCountry])에 포함돼야 하는지.
-  /// `country`가 없거나 빈 문자열이면 레거시 문서로 보고 모든 지역에서 표시
-  /// (서버 `where('country', …)`에선 잡히지 않던 글을 피드에서 복구).
+  /// `country`가 없거나 빈 문자열이면 **레거시 문서**로 보고 **모든 구역 피드에 표시**합니다.
+  /// (옛 데이터는 `us`로만 묶이면 한국어 UI에서 글이 전부 사라지는 문제가 있음.)
+  /// [viewerCountry]가 null·빈 문자열이면 호출 측에서 구역을 모를 때로 보고 `true`.
   static bool documentVisibleInCountryFeed(Map<String, dynamic> data, String? viewerCountry) {
-    final eq = viewerCountry?.trim();
-    if (eq == null || eq.isEmpty) return true;
+    final v = viewerCountry?.trim();
+    if (v == null || v.isEmpty) return true;
+    final viewer = _normalizeCountry(v);
     final raw = data['country'];
-    if (raw == null) return true;
-    if (raw is String && raw.trim().isEmpty) return true;
-    return _normalizeCountry(raw as String?) == eq;
+    if (raw == null || (raw is String && raw.trim().isEmpty)) {
+      return true;
+    }
+    final docCountry = _normalizeCountry(raw as String?);
+    return docCountry == viewer;
+  }
+
+  /// 즐겨찾기·내 리뷰·시청 기록·워치리스트 등 **사용자 데이터를 앱 언어별로 나눌 때** 사용.
+  /// [documentVisibleInCountryFeed]와 달리 `country`/`appLocale`이 없으면 **표시하지 않음**.
+  static bool userScopedLocaleVisible(String? itemCountryOrLocale, String? viewerLocale) {
+    final v = viewerLocale?.trim();
+    if (v == null || v.isEmpty) return false;
+    final raw = itemCountryOrLocale?.trim();
+    if (raw == null || raw.isEmpty) return false;
+    return _normalizeCountry(raw) == _normalizeCountry(v);
+  }
+
+  /// Firestore 문서의 `country`만 보고 [userScopedLocaleVisible]과 동일하게 판별.
+  static bool userScopedFirestoreDocVisibleForLocale(
+    Map<String, dynamic> data,
+    String? viewerLocale,
+  ) {
+    final raw = data['country'];
+    final s = raw is String ? raw.trim() : raw?.toString().trim();
+    return userScopedLocaleVisible(s, viewerLocale);
   }
 }
 

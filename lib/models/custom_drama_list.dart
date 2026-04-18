@@ -12,6 +12,7 @@ class CustomDramaList {
     this.coverImageUrl,
     this.likeCount = 0,
     this.likedBy = const [],
+    this.appLocale,
   });
 
   final String id;
@@ -30,6 +31,9 @@ class CustomDramaList {
   /// 좋아요 수(문서 `likeCount`, 없으면 likedBy 길이로 보정).
   final int likeCount;
   final List<String> likedBy;
+
+  /// 저장 시 앱 언어(us/kr/jp/cn). null이면 레거시.
+  final String? appLocale;
 
   static CustomDramaList fromDoc(String docId, Map<String, dynamic> data) {
     DateTime parseTs(dynamic value) {
@@ -60,6 +64,7 @@ class CustomDramaList {
         const <String>[];
     var likeCount = (data['likeCount'] as num?)?.toInt() ?? 0;
     if (likeCount < likedBy.length) likeCount = likedBy.length;
+    final loc = (data['country'] as String?)?.trim();
     return CustomDramaList(
       id: docId,
       title: (data['title'] as String? ?? '').trim(),
@@ -71,6 +76,7 @@ class CustomDramaList {
       coverImageUrl: coverImageUrl,
       likeCount: likeCount,
       likedBy: likedBy,
+      appLocale: loc != null && loc.isNotEmpty ? loc : null,
     );
   }
 

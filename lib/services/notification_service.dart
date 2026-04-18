@@ -1,4 +1,8 @@
+import 'dart:async';
+import 'dart:developer' as developer;
+
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import '../models/notification_item.dart';
 import 'auth_service.dart';
@@ -13,6 +17,9 @@ class NotificationService {
   final ValueNotifier<List<NotificationItem>> notifications = ValueNotifier([]);
   final ValueNotifier<int> unreadCount = ValueNotifier(0);
 
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _notifSubscription;
+  StreamSubscription<User?>? _authSubscription;
+
   String? get _uid => AuthService.instance.currentUser.value?.uid;
 
   CollectionReference<Map<String, dynamic>>? get _col {
@@ -21,24 +28,60 @@ class NotificationService {
     return _firestore.collection('users').doc(uid).collection('notifications');
   }
 
-  /// 앱 시작 또는 로그인 시 알림 로드 + 리스닝
-  Future<void> init() async {
-    final uid = _uid;
-    if (uid == null) return;
-    _firestore
+  void _bindNotificationsQuery(String uid) {
+    _notifSubscription?.cancel();
+    _notifSubscription = null;
+    notifications.value = [];
+    unreadCount.value = 0;
+    if (uid.isEmpty) return;
+    _notifSubscription = _firestore
         .collection('users')
         .doc(uid)
         .collection('notifications')
         .orderBy('createdAt', descending: true)
         .limit(50)
         .snapshots()
-        .listen((snapshot) {
-      final list = snapshot.docs
-          .map((d) => NotificationItem.fromMap(d.data(), d.id))
-          .toList();
-      notifications.value = list;
-      unreadCount.value = list.where((n) => !n.isRead).length;
-    });
+        .listen(
+      (snapshot) {
+        final list = snapshot.docs
+            .map((d) => NotificationItem.fromMap(d.data(), d.id))
+            .toList();
+        notifications.value = list;
+        unreadCount.value = list.where((n) => !n.isRead).length;
+      },
+      onError: (Object e, StackTrace st) {
+        if (kDebugMode) {
+          debugPrint('notifications snapshot: $e\n$st');
+        }
+      },
+    );
+  }
+
+  /// 앱 시작 시 1회 호출. 로그인/로그아웃 시마다 인박스 스트림을 다시 붙임.
+  Future<void> init() async {
+    await _authSubscription?.cancel();
+    _authSubscription = FirebaseAuth.instance.authStateChanges().listen(
+      (user) {
+        _notifSubscription?.cancel();
+        _notifSubscription = null;
+        notifications.value = [];
+        unreadCount.value = 0;
+        final uid = user?.uid;
+        if (uid != null && uid.isNotEmpty) {
+          _bindNotificationsQuery(uid);
+        }
+      },
+    );
+  }
+
+  /// [raw]이 Firebase uid 형태가 아니면 nicknames로 uid 해석 (구글/오타 대비).
+  Future<String?> _normalizeRecipientUid(String raw) async {
+    final t = raw.trim();
+    if (t.isEmpty) return null;
+    final looksLikeUid =
+        t.length >= 20 && t.length <= 128 && RegExp(r'^[A-Za-z0-9]+$').hasMatch(t);
+    if (looksLikeUid) return t;
+    return getUidByNickname(t);
   }
 
   /// 알림 저장 (수신자 uid 기준으로 저장)
@@ -50,13 +93,15 @@ class NotificationService {
     required String postTitle,
     String? commentText,
   }) async {
-    if (toUid.isEmpty) return;
-    // 자기 자신한테는 알림 안 보냄
-    if (toUid == _uid) return;
+    final recipient = await _normalizeRecipientUid(toUid);
+    if (recipient == null || recipient.isEmpty) return;
+    final senderUid = FirebaseAuth.instance.currentUser?.uid.trim();
+    // 자기 자신한테는 알림 안 보냄 (수신자 uid == 현재 로그인 uid)
+    if (senderUid != null && senderUid == recipient) return;
     try {
       await _firestore
           .collection('users')
-          .doc(toUid)
+          .doc(recipient)
           .collection('notifications')
           .add(NotificationItem(
             id: '',
@@ -67,7 +112,13 @@ class NotificationService {
             commentText: commentText,
             createdAt: DateTime.now(),
           ).toMap());
-    } catch (e) {
+    } catch (e, st) {
+      developer.log(
+        '알림 전송 실패 to=$recipient type=$type: $e',
+        name: 'NotificationService',
+        error: e,
+        stackTrace: st,
+      );
       debugPrint('알림 전송 실패: $e');
     }
   }
@@ -111,6 +162,8 @@ class NotificationService {
   }
 
   void reset() {
+    _notifSubscription?.cancel();
+    _notifSubscription = null;
     notifications.value = [];
     unreadCount.value = 0;
   }

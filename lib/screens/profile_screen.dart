@@ -54,6 +54,7 @@ import 'user_public_likes_screen.dart';
 import '../widgets/optimized_network_image.dart';
 import '../services/country_service.dart';
 import '../services/drama_list_service.dart';
+import '../services/locale_service.dart';
 
 final ValueNotifier<int> _profileStatsRefreshNotifier = ValueNotifier(0);
 
@@ -208,6 +209,7 @@ class _ProfileLinksMenuState extends State<_ProfileLinksMenu> {
     super.initState();
     _profileStatsRefreshNotifier.addListener(_onLikesRefreshSignal);
     AuthService.instance.currentUser.addListener(_onLikesRefreshSignal);
+    LocaleService.instance.localeNotifier.addListener(_onAppLocaleChanged);
     // 다른 유저 프로필에서는 현재 사용자 서비스 로드 불필요
     if (widget.viewedUid == null) {
       WatchHistoryService.instance.loadIfNeeded();
@@ -223,9 +225,17 @@ class _ProfileLinksMenuState extends State<_ProfileLinksMenu> {
 
   @override
   void dispose() {
+    LocaleService.instance.localeNotifier.removeListener(_onAppLocaleChanged);
     _profileStatsRefreshNotifier.removeListener(_onLikesRefreshSignal);
     AuthService.instance.currentUser.removeListener(_onLikesRefreshSignal);
     super.dispose();
+  }
+
+  /// [CountryScope.maybeOf]는 구독을 걸지 않아 `didChangeDependencies`가
+  /// 언어 변경 때마다 오지 않을 수 있음 — [LocaleService.localeNotifier]로 직접 갱신.
+  void _onAppLocaleChanged() {
+    if (widget.menuLikesCount != null) return;
+    _reloadLikesTotal();
   }
 
   void _onLikesRefreshSignal() {
@@ -251,6 +261,7 @@ class _ProfileLinksMenuState extends State<_ProfileLinksMenu> {
         countryForTimeAgo: country,
       );
       if (!mounted) return;
+      PostService.instance.cacheLikedPostsForLikesScreen(uid, list);
       setState(() => _likesCount = list.length);
     } catch (_) {
       if (mounted) setState(() => _likesCount = 0);
@@ -409,10 +420,10 @@ class _ProfileLinksMenuState extends State<_ProfileLinksMenu> {
               _ProfileTile(
                 icon: LucideIcons.languages,
                 label: s.get('language'),
-                onTap: () {
-                  Navigator.push(
+                onTap: () async {
+                  await Navigator.push<bool>(
                     context,
-                    MaterialPageRoute(
+                    MaterialPageRoute<bool>(
                       builder: (_) => LanguageSelectScreen(
                         title: s.get('language'),
                         showCloseButton: true,
@@ -530,6 +541,7 @@ class _ProfileStatRowState extends State<_ProfileStatRow> {
     _reviewCountFromExtras = widget.reviewCountOverride;
     _statsFuture = _load();
     _profileStatsRefreshNotifier.addListener(_onRefresh);
+    LocaleService.instance.localeNotifier.addListener(_onLocaleChanged);
   }
 
   @override
@@ -546,7 +558,17 @@ class _ProfileStatRowState extends State<_ProfileStatRow> {
   @override
   void dispose() {
     _profileStatsRefreshNotifier.removeListener(_onRefresh);
+    LocaleService.instance.localeNotifier.removeListener(_onLocaleChanged);
     super.dispose();
+  }
+
+  void _onLocaleChanged() {
+    if (!mounted) return;
+    // 루트 locale 반영으로 첫 프레임이 무거움 → 통계 쿼리는 다음 프레임으로 미룸
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() => _statsFuture = _load());
+    });
   }
 
   void _onRefresh() {
@@ -879,12 +901,15 @@ class _OtherUserProfileScreenState extends State<_OtherUserProfileScreen> {
     required Widget body,
   }) {
     final headerBg = listsStyleSubpageHeaderBackground(theme);
-    return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: listsStyleSubpageSystemOverlay(theme, headerBg),
-      child: Scaffold(
-        backgroundColor: theme.scaffoldBackgroundColor,
-        appBar: appBar,
-        body: body,
+    return ListsStyleSubpageHorizontalSwipeBack(
+      onSwipePop: () => popListsStyleSubpage(context),
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
+        value: listsStyleSubpageSystemOverlay(theme, headerBg),
+        child: Scaffold(
+          backgroundColor: theme.scaffoldBackgroundColor,
+          appBar: appBar,
+          body: body,
+        ),
       ),
     );
   }
@@ -1397,6 +1422,7 @@ class _MyProfileScreen extends StatelessWidget {
                         final messenger = ScaffoldMessenger.of(context);
                         final s = CountryScope.of(context).strings;
                         await AuthService.instance.signOut();
+                        PostService.instance.clearLikedPostsScreenCache();
                         SavedService.instance.clearForLogout();
                         WatchlistService.instance.clearForLogout();
                         MessageService.instance.clearForLogout();
@@ -1650,6 +1676,7 @@ class _ProfileFavoritesSection extends StatelessWidget {
     Widget rowFor(List<ProfileFavorite> favs) {
       return ListenableBuilder(
         listenable: Listenable.merge([
+          LocaleService.instance.localeNotifier,
           DramaListService.instance.listNotifier,
           DramaListService.instance.extraNotifier,
         ]),
@@ -1693,12 +1720,30 @@ class _ProfileFavoritesSection extends StatelessWidget {
                   style: _profileCapsLabel(cs),
                 ),
                 const SizedBox(height: 6),
-                rowFor(favoritesOverride!),
+                ListenableBuilder(
+                  listenable: Listenable.merge([
+                    LocaleService.instance.localeNotifier,
+                    DramaListService.instance.listNotifier,
+                    DramaListService.instance.extraNotifier,
+                  ]),
+                  builder: (context, _) {
+                    final favs = UserProfileService.favoritesVisibleInLocale(
+                      favoritesOverride!,
+                      LocaleService.instance.locale,
+                    );
+                    return rowFor(favs);
+                  },
+                ),
               ],
             )
-          : ValueListenableBuilder<List<ProfileFavorite>>(
-              valueListenable: UserProfileService.instance.favoritesNotifier,
-              builder: (context, favs, _) {
+          : ListenableBuilder(
+              listenable: Listenable.merge([
+                LocaleService.instance.localeNotifier,
+                UserProfileService.instance.favoritesNotifier,
+              ]),
+              builder: (context, _) {
+                final favs = UserProfileService.instance
+                    .favoritesVisibleForCurrentLocale();
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -1825,25 +1870,37 @@ class _ProfileRatingsSectionState extends State<_ProfileRatingsSection> {
   void initState() {
     super.initState();
     _loadHistogram();
-    _profileStatsRefreshNotifier.addListener(_onRefresh);
+    _profileStatsRefreshNotifier.addListener(_onHistogramRefresh);
+    LocaleService.instance.localeNotifier.addListener(_onLocaleHistogramDeferred);
     // 자신의 프로필일 때만 리뷰 목록 변화 감지
     if (widget.ratingsUid == null) {
-      ReviewService.instance.listNotifier.addListener(_onRefresh);
+      ReviewService.instance.listNotifier.addListener(_onHistogramRefresh);
     }
   }
 
   @override
   void dispose() {
-    _profileStatsRefreshNotifier.removeListener(_onRefresh);
+    _profileStatsRefreshNotifier.removeListener(_onHistogramRefresh);
+    LocaleService.instance.localeNotifier.removeListener(
+      _onLocaleHistogramDeferred,
+    );
     if (widget.ratingsUid == null) {
-      ReviewService.instance.listNotifier.removeListener(_onRefresh);
+      ReviewService.instance.listNotifier.removeListener(_onHistogramRefresh);
     }
     super.dispose();
   }
 
-  void _onRefresh() {
+  void _onHistogramRefresh() {
     if (!mounted) return;
     setState(_loadHistogram);
+  }
+
+  void _onLocaleHistogramDeferred() {
+    if (!mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(_loadHistogram);
+    });
   }
 
   @override
@@ -1876,6 +1933,7 @@ class _ProfileRatingsSectionState extends State<_ProfileRatingsSection> {
             hist: hist,
             cs: cs,
             strings: s,
+            ratingsForSelf: widget.ratingsUid == null,
           );
         },
       ),
@@ -1889,11 +1947,13 @@ class _ProfileRatingsInteractiveBody extends StatefulWidget {
     required this.hist,
     required this.cs,
     required this.strings,
+    required this.ratingsForSelf,
   });
 
   final ProfileRatingHistogram hist;
   final ColorScheme cs;
   final dynamic strings;
+  final bool ratingsForSelf;
 
   @override
   State<_ProfileRatingsInteractiveBody> createState() =>
@@ -1966,10 +2026,14 @@ class _ProfileRatingsInteractiveBodyState
     /// 탭 시 개수 숫자 — 별 줄 위에 붙이기(스택 상단 `top:0`이면 간격이 너무 벌어짐).
     const double rightRatingCountBottom = 15.0;
 
+    final ratingsTitleKey = widget.ratingsForSelf
+        ? 'profileRatingsTitle'
+        : 'profileRatingsTitleOther';
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(s.get('profileRatingsTitle'), style: _profileCapsLabel(cs)),
+        Text(s.get(ratingsTitleKey), style: _profileCapsLabel(cs)),
         const SizedBox(height: 12),
         Row(
           crossAxisAlignment: CrossAxisAlignment.end,
@@ -2592,6 +2656,30 @@ String _fastSyntheticPostAuthor() {
   return 'DramaFeed';
 }
 
+/// 게시판과 동일: `country`가 있으면 현재 앱 언어와 일치할 때만 표시.
+/// `appLocale`이 없으면 [Post.documentVisibleInCountryFeed] 레거시 규칙(모든 언어 표시).
+bool _profileRecentActivityMyReviewVisible(MyReviewItem r) {
+  final m = <String, dynamic>{};
+  if (r.appLocale != null && r.appLocale!.trim().isNotEmpty) {
+    m['country'] = r.appLocale!.trim();
+  }
+  return Post.documentVisibleInCountryFeed(
+    m,
+    LocaleService.instance.locale,
+  );
+}
+
+bool _profileRecentActivityWatchVisible(WatchedDramaItem e) {
+  final m = <String, dynamic>{};
+  if (e.appLocale != null && e.appLocale!.trim().isNotEmpty) {
+    m['country'] = e.appLocale!.trim();
+  }
+  return Post.documentVisibleInCountryFeed(
+    m,
+    LocaleService.instance.locale,
+  );
+}
+
 /// 별점을 준 리뷰만, 최신 작성 순 (최대 4개 표시용).
 List<MyReviewItem> _ratedReviewsForProfileRecentActivity() {
   return _ratedReviewsForProfileRecentActivityFromList(
@@ -2603,6 +2691,7 @@ List<MyReviewItem> _ratedReviewsForProfileRecentActivityFromList(
   List<MyReviewItem> raw,
 ) {
   final out = raw
+      .where(_profileRecentActivityMyReviewVisible)
       .where((r) => r.rating > 0 && r.dramaId.trim().isNotEmpty)
       .toList();
   out.sort((a, b) => b.writtenAt.compareTo(a.writtenAt));
@@ -2616,6 +2705,7 @@ List<MyReviewItem> _recentActivitiesForMyProfile() {
   // 별점/리뷰가 있는 dramaId 셋 — 워치기록 중복 방지
   final ratedDramaIds = rated.map((r) => r.dramaId.trim()).toSet();
   final watchOnly = WatchHistoryService.instance.list
+      .where(_profileRecentActivityWatchVisible)
       .where(
         (e) =>
             (e.rating == null || e.rating! <= 0) &&
@@ -2631,6 +2721,7 @@ List<MyReviewItem> _recentActivitiesForMyProfile() {
           rating: 0,
           comment: '',
           writtenAt: e.watchedAt,
+          appLocale: e.appLocale,
         ),
       )
       .toList();
@@ -2665,7 +2756,12 @@ Widget _profileRecentActivityRow(ColorScheme cs, List<MyReviewItem> list) {
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4),
           child: i < shown.length
-              ? _RecentActivitySlot(review: shown[i])
+              ? _RecentActivitySlot(
+                  key: ValueKey(
+                    '${shown[i].id}_${LocaleService.instance.locale}',
+                  ),
+                  review: shown[i],
+                )
               : _RecentActivityEmptySlot(cs: cs, showBottomPlaceholder: true),
         ),
       );
@@ -2724,6 +2820,7 @@ class _ProfileRecentActivitySection extends StatelessWidget {
             child: reviewsOverride != null
                 ? ListenableBuilder(
                     listenable: Listenable.merge([
+                      LocaleService.instance.localeNotifier,
                       DramaListService.instance.listNotifier,
                       DramaListService.instance.extraNotifier,
                     ]),
@@ -2737,6 +2834,7 @@ class _ProfileRecentActivitySection extends StatelessWidget {
                   )
                 : AnimatedBuilder(
                     animation: Listenable.merge([
+                      LocaleService.instance.localeNotifier,
                       ReviewService.instance.listNotifier,
                       WatchHistoryService.instance.listNotifier,
                       DramaListService.instance.listNotifier,
@@ -2806,7 +2904,7 @@ class _RecentActivityEmptySlot extends StatelessWidget {
 }
 
 class _RecentActivitySlot extends StatelessWidget {
-  const _RecentActivitySlot({required this.review});
+  const _RecentActivitySlot({super.key, required this.review});
 
   final MyReviewItem review;
 
@@ -2821,9 +2919,7 @@ class _RecentActivitySlot extends StatelessWidget {
   ];
 
   String? _resolveImageUrl(BuildContext context) {
-    final country =
-        CountryScope.maybeOf(context)?.country ??
-        CountryService.instance.countryNotifier.value;
+    final country = LocaleService.instance.locale;
     final id = review.dramaId.trim();
     if (id.isNotEmpty && !id.startsWith('short-')) {
       final byId = DramaListService.instance.getDisplayImageUrl(id, country);
@@ -2840,9 +2936,7 @@ class _RecentActivitySlot extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final country =
-        CountryScope.maybeOf(context)?.country ??
-        CountryService.instance.countryNotifier.value;
+    final country = LocaleService.instance.locale;
     final rating = review.rating;
     final colors =
         _gradients[review.dramaTitle.hashCode.abs() % _gradients.length];
@@ -2853,6 +2947,7 @@ class _RecentActivitySlot extends StatelessWidget {
     Widget posterChild;
     if (hasImage && url.startsWith('http')) {
       posterChild = OptimizedNetworkImage(
+        key: ValueKey('$country|$url'),
         imageUrl: url,
         width: double.infinity,
         height: double.infinity,
@@ -2909,7 +3004,7 @@ class _RecentActivitySlot extends StatelessWidget {
           child: Material(
             color: Colors.transparent,
             child: InkWell(
-              onTap: () {
+              onTap: () async {
                 final uid = AuthService.instance.currentUser.value?.uid;
                 final dramaId = review.dramaId.trim();
                 final locale = CountryScope.maybeOf(context)?.country;
@@ -2943,15 +3038,10 @@ class _RecentActivitySlot extends StatelessWidget {
                   return;
                 }
                 final dramaItem = _dramaItemFromReview(review, country);
-                final detail = DramaListService.instance.buildDetailForItem(
-                  dramaItem,
-                  country,
-                );
-                Navigator.push<void>(
+                await DramaDetailPage.openFromItem(
                   context,
-                  CupertinoPageRoute<void>(
-                    builder: (_) => DramaDetailPage(detail: detail),
-                  ),
+                  dramaItem,
+                  country: country,
                 );
               },
               borderRadius: BorderRadius.circular(8),
@@ -2993,6 +3083,25 @@ class _RecentActivitySlot extends StatelessWidget {
   }
 }
 
+/// 현재 앱 표시 구역(us/kr/jp/cn)에 맞는 DramaFeed 글만 Watch 화면에 붙임.
+bool _feedPostMatchesCurrentViewerLocale(Post? p) {
+  if (p == null) return false;
+  return Post.documentVisibleInCountryFeed(
+    {'country': p.country},
+    LocaleService.instance.locale,
+  );
+}
+
+/// Recent Activity에 넣을 때와 동일: `appLocale` 없으면 레거시로 모든 언어에서 표시.
+bool _myReviewLogMatchesCurrentViewerLocale(MyReviewItem r) {
+  final al = r.appLocale?.trim();
+  if (al == null || al.isEmpty) return true;
+  return Post.documentVisibleInCountryFeed(
+    {'country': al},
+    LocaleService.instance.locale,
+  );
+}
+
 class RecentActivityWatchOnlyPage extends StatefulWidget {
   const RecentActivityWatchOnlyPage({
     required this.authorUid,
@@ -3021,10 +3130,14 @@ class _RecentActivityWatchOnlyPageState
     extends State<RecentActivityWatchOnlyPage> {
   late final Post? _syntheticPost;
   Post? _feedPost;
+  late final Future<DramaDetail> _dramaDetailBundleFuture;
 
   @override
   void initState() {
     super.initState();
+    final dramaItem = _dramaItemFromReview(widget.review, widget.country);
+    _dramaDetailBundleFuture = DramaListService.instance
+        .buildDetailWithReviewBundle(dramaItem, widget.country);
     final raw =
         (widget.country ??
                 UserProfileService.instance.signupCountryNotifier.value ??
@@ -3109,7 +3222,11 @@ class _RecentActivityWatchOnlyPageState
     } catch (_) {
       feed = null;
     }
-    if (!mounted || feed == null) return;
+    if (!mounted) return;
+    if (feed != null && !_feedPostMatchesCurrentViewerLocale(feed)) {
+      feed = null;
+    }
+    if (feed == null) return;
     setState(() {
       _feedPost = feed;
     });
@@ -3127,7 +3244,8 @@ class _RecentActivityWatchOnlyPageState
         forceWatchPageTitle: true,
       );
     }
-    if (_syntheticPost != null) {
+    if (_syntheticPost != null &&
+        _myReviewLogMatchesCurrentViewerLocale(widget.review)) {
       return PostDetailPage(
         post: _syntheticPost!,
         hideBottomDramaFeed: true,
@@ -3135,13 +3253,19 @@ class _RecentActivityWatchOnlyPageState
         forceWatchPageTitle: true,
       );
     }
-    // fallback: drama detail page
-    final dramaItem = _dramaItemFromReview(widget.review, widget.country);
-    final detail = DramaListService.instance.buildDetailForItem(
-      dramaItem,
-      widget.country,
+    return FutureBuilder<DramaDetail>(
+      future: _dramaDetailBundleFuture,
+      builder: (context, snap) {
+        if (snap.hasData) {
+          return DramaDetailPage(detail: snap.data!);
+        }
+        final theme = Theme.of(context);
+        return Scaffold(
+          backgroundColor: theme.scaffoldBackgroundColor,
+          body: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+        );
+      },
     );
-    return DramaDetailPage(detail: detail);
   }
 }
 
@@ -3604,10 +3728,14 @@ class RecentActivityReviewGate extends StatefulWidget {
 class _RecentActivityReviewGateState extends State<RecentActivityReviewGate> {
   Post? _feedPost;
   late final Post? _offlineSyntheticPost;
+  late final Future<DramaDetail> _dramaDetailBundleFuture;
 
   @override
   void initState() {
     super.initState();
+    final dramaItem = _dramaItemFromReview(widget.review, widget.country);
+    _dramaDetailBundleFuture = DramaListService.instance
+        .buildDetailWithReviewBundle(dramaItem, widget.country);
     final raw =
         (widget.country ??
                 UserProfileService.instance.signupCountryNotifier.value ??
@@ -3660,7 +3788,11 @@ class _RecentActivityReviewGateState extends State<RecentActivityReviewGate> {
     } catch (_) {
       feed = null;
     }
-    if (!mounted || feed == null) return;
+    if (!mounted) return;
+    if (feed != null && !_feedPostMatchesCurrentViewerLocale(feed)) {
+      feed = null;
+    }
+    if (feed == null) return;
     setState(() {
       _feedPost = feed;
     });
@@ -3674,18 +3806,26 @@ class _RecentActivityReviewGateState extends State<RecentActivityReviewGate> {
         hideBottomDramaFeed: true,
       );
     }
-    if (_offlineSyntheticPost != null) {
+    if (_offlineSyntheticPost != null &&
+        _myReviewLogMatchesCurrentViewerLocale(widget.review)) {
       return PostDetailPage(
         post: _offlineSyntheticPost!,
         hideBottomDramaFeed: true,
         offlineSyntheticReview: true,
       );
     }
-    final dramaItem = _dramaItemFromReview(widget.review, widget.country);
-    final detail = DramaListService.instance.buildDetailForItem(
-      dramaItem,
-      widget.country,
+    return FutureBuilder<DramaDetail>(
+      future: _dramaDetailBundleFuture,
+      builder: (context, snap) {
+        if (snap.hasData) {
+          return DramaDetailPage(detail: snap.data!);
+        }
+        final theme = Theme.of(context);
+        return Scaffold(
+          backgroundColor: theme.scaffoldBackgroundColor,
+          body: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+        );
+      },
     );
-    return DramaDetailPage(detail: detail);
   }
 }

@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -197,6 +197,7 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
   /// 리뷰 본문 탭 시 아래에 댓글 목록 펼침(Letterboxd 인라인 피드).
   final Set<String> _expandedReviewComments = {};
   final Map<String, TextEditingController> _inlineCommentControllers = {};
+  final Map<String, FocusNode> _inlineCommentFocusNodes = {};
 
   /// 인라인 댓글 좋아요 상태: postId → commentId → (liked, count)
   final Map<String, Map<String, ({bool liked, int count})>>
@@ -239,6 +240,10 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
       c.dispose();
     }
     _inlineCommentControllers.clear();
+    for (final n in _inlineCommentFocusNodes.values) {
+      n.dispose();
+    }
+    _inlineCommentFocusNodes.clear();
     _searchController.dispose();
     _pageInputController.dispose();
     super.dispose();
@@ -391,12 +396,21 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
     }
   }
 
+  FocusNode _inlineComposerFocus(String postId) =>
+      _inlineCommentFocusNodes.putIfAbsent(postId, FocusNode.new);
+
   /// 인라인 댓글 답글 시작
   void _startInlineReply(Post post, PostComment comment) {
-    _inlineCommentControllers.putIfAbsent(post.id, TextEditingController.new);
+    final id = post.id;
+    _inlineCommentControllers.putIfAbsent(id, TextEditingController.new);
+    _inlineComposerFocus(id);
     setState(() {
-      _inlineReplyingToCommentId[post.id] = comment.id;
-      _inlineReplyingToComment[post.id] = comment;
+      _inlineReplyingToCommentId[id] = comment.id;
+      _inlineReplyingToComment[id] = comment;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _inlineCommentFocusNodes[id]?.requestFocus();
     });
   }
 
@@ -612,12 +626,8 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
           rating: post.rating ?? 0,
           imageUrl: post.dramaThumbnail?.trim(),
         );
-    final detail = DramaListService.instance.buildDetailForItem(item, locale);
     if (!context.mounted) return;
-    await Navigator.push<void>(
-      context,
-      CupertinoPageRoute<void>(builder: (_) => DramaDetailPage(detail: detail)),
-    );
+    await DramaDetailPage.openFromItem(context, item, country: locale);
   }
 
   /// 피드 리뷰 타일 — 별점 탭 시 드라마 상세 > 리뷰 페이지로 이동.
@@ -1193,6 +1203,7 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
             ),
           _ReviewFeedInlineComposer(
             controller: ctrl,
+            focusNode: _inlineComposerFocus(id),
             isSubmitting: _inlineCommentSubmitting.contains(id),
             autofocus: !hasComments,
             onSend: () => _submitInlineComment(post, successPopContext: null),
@@ -1727,15 +1738,20 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
               : const AlwaysScrollableScrollPhysics(),
           padding: EdgeInsets.fromLTRB(24, 48, 24, _listBottomPadding(context)),
           children: [
+            const SizedBox(height: 8),
+            Icon(
+              LucideIcons.star,
+              size: 64,
+              color: cs.onSurfaceVariant.withOpacity(0.4),
+            ),
             const SizedBox(height: 24),
-            Center(
-              child: SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: cs.primary,
-                ),
+            Text(
+              s.get('reviewsTabEmpty'),
+              textAlign: TextAlign.center,
+              style: GoogleFonts.notoSansKr(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: cs.onSurface,
               ),
             ),
           ],
@@ -1964,15 +1980,20 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
               : const AlwaysScrollableScrollPhysics(),
           padding: EdgeInsets.fromLTRB(24, 48, 24, _listBottomPadding(context)),
           children: [
+            const SizedBox(height: 8),
+            Icon(
+              LucideIcons.star,
+              size: 64,
+              color: cs.onSurfaceVariant.withOpacity(0.4),
+            ),
             const SizedBox(height: 24),
-            Center(
-              child: SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: cs.primary,
-                ),
+            Text(
+              s.get('reviewsTabEmpty'),
+              textAlign: TextAlign.center,
+              style: GoogleFonts.notoSansKr(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: cs.onSurface,
               ),
             ),
           ],
@@ -2118,14 +2139,16 @@ class _PopularPostsTabState extends State<PopularPostsTab> {
 
 /// 리뷰 Letterboxd 인라인 펼침 하단: 피드에 붙는 댓글 입력(오버레이 하단바와 동일 스타일).
 class _ReviewFeedInlineComposer extends StatelessWidget {
-  const _ReviewFeedInlineComposer({
+  _ReviewFeedInlineComposer({
     required this.controller,
+    required this.focusNode,
     required this.isSubmitting,
     required this.autofocus,
     required this.onSend,
   });
 
   final TextEditingController controller;
+  final FocusNode focusNode;
   final bool isSubmitting;
   final bool autofocus;
   final Future<void> Function() onSend;
@@ -2198,6 +2221,7 @@ class _ReviewFeedInlineComposer extends StatelessWidget {
                 Expanded(
                   child: TextField(
                     controller: controller,
+                    focusNode: focusNode,
                     autofocus: autofocus,
                     minLines: 1,
                     maxLines: 6,

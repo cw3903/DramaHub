@@ -1,4 +1,7 @@
+import 'dart:async' show unawaited;
+
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
@@ -23,7 +26,6 @@ import 'notification_screen.dart';
 import 'post_detail_page.dart';
 import 'write_post_page.dart';
 import 'video_select_page.dart';
-import 'question_board_tab.dart';
 import 'community_search_page.dart';
 import '../widgets/blind_refresh_indicator.dart';
 import '../widgets/community_board_tabs.dart';
@@ -62,13 +64,17 @@ class _CommunityScreenState extends State<CommunityScreen>
   /// 글 상세 네비용 (로드된 글 합집합)
   List<Post> _cachedFiltered = [];
 
-  static const List<String> _feedBoards = ['review', 'talk', 'ask'];
-  final List<List<Post>> _tabFeedPosts = List.generate(3, (_) => []);
+  /// 홈 DramaFeed: 리뷰·자유만 (질문 게시판은 노출하지 않음)
+  static const List<String> _feedBoards = ['review', 'talk'];
+  static final int _feedTabCount = _feedBoards.length;
+  final List<List<Post>> _tabFeedPosts =
+      List.generate(_feedTabCount, (_) => []);
   final List<DocumentSnapshot<Map<String, dynamic>>?> _tabLastDoc =
-      List.generate(3, (_) => null);
-  final List<bool> _tabHasMore = List.generate(3, (_) => true);
-  final List<bool> _tabLoadingMore = List.generate(3, (_) => false);
-  final List<bool> _tabInitialLoading = [true, false, false];
+      List.generate(_feedTabCount, (_) => null);
+  final List<bool> _tabHasMore = List.generate(_feedTabCount, (_) => true);
+  final List<bool> _tabLoadingMore =
+      List.generate(_feedTabCount, (_) => false);
+  final List<bool> _tabInitialLoading = [true, false];
   late final List<ScrollController> _feedScrollControllers;
   int _feedPrevTabIndex = 0;
   bool _feedTabListenerArmed = false;
@@ -83,8 +89,8 @@ class _CommunityScreenState extends State<CommunityScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
-    _feedScrollControllers = List.generate(3, (i) {
+    _tabController = TabController(length: _feedTabCount, vsync: this);
+    _feedScrollControllers = List.generate(_feedTabCount, (i) {
       final c = ScrollController();
       c.addListener(() => _onFeedScrollNearEnd(i));
       return c;
@@ -102,14 +108,20 @@ class _CommunityScreenState extends State<CommunityScreen>
     ReviewService.instance.reviewFeedPostsDeletedTick.addListener(
       _onReviewFeedPostsDeletedTick,
     );
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (!mounted) return;
-      if (AuthService.instance.isLoggedIn.value) {
-        await UserProfileService.instance.loadUserProfile();
-      }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _feedTabListenerArmed = true;
+      // 프로필 Firestore가 지연·멈추면 여기서 await 하면 피드가 영원히 시작되지 않음(무한 로딩).
       _loadFeedTabPage(0, reset: true);
+      if (AuthService.instance.isLoggedIn.value) {
+        unawaited(
+          UserProfileService.instance.loadUserProfile().catchError((e, st) {
+            if (kDebugMode) {
+              debugPrint('CommunityScreen loadUserProfile: $e\n$st');
+            }
+          }),
+        );
+      }
     });
   }
 
@@ -135,7 +147,7 @@ class _CommunityScreenState extends State<CommunityScreen>
 
   /// 언어·전체 새로고침 등: 해당 탭 캐시 비우고 맨 위로
   void _purgeFeedTab(int tabIndex) {
-    if (tabIndex < 0 || tabIndex > 2) return;
+    if (tabIndex < 0 || tabIndex >= _feedTabCount) return;
     final c = _feedScrollControllers[tabIndex];
     if (c.hasClients) {
       try {
@@ -163,22 +175,19 @@ class _CommunityScreenState extends State<CommunityScreen>
     final c = _feedScrollControllers[tabIndex];
     if (!c.hasClients) return;
     if (_tabLoadingMore[tabIndex] || !_tabHasMore[tabIndex]) return;
+    // 첫 페이지는 init/bootstrap이 담당. 목록이 비어 있을 때는 extentAfter가 작아져
+    // 페이징만 반복 호출되는 경우가 있어 여기서는 추가 로드를 하지 않음.
+    if (_tabFeedPosts[tabIndex].isEmpty) return;
     if (c.position.extentAfter > 200) return;
     _loadFeedTabPage(tabIndex, reset: false);
   }
 
+  /// DramaFeed 상대 시간·기타 표시용: **앱 표시 언어**를 피드 국가 키로 정규화한다.
+  /// (피드 문서 로드 시 국가 필터는 쓰지 않고, Firestore `country`와 불일치해도 글이 보이게 한다.)
   String _viewerLanguageForFeed() {
-    if (!AuthService.instance.isLoggedIn.value) {
-      final loc = LocaleService.instance.locale;
-      return loc.isNotEmpty ? loc : 'us';
-    }
-    final signupCountry =
-        UserProfileService.instance.signupCountryNotifier.value;
-    if (signupCountry != null && signupCountry.isNotEmpty) {
-      return signupCountry;
-    }
-    final locale = LocaleService.instance.locale;
-    return locale.isNotEmpty ? locale : 'us';
+    final raw = LocaleService.instance.locale;
+    final t = raw.trim();
+    return Post.normalizeFeedCountry(t.isEmpty ? null : t);
   }
 
   void _mergeIntoMasterFeeds(List<Post> incoming) {
@@ -192,8 +201,9 @@ class _CommunityScreenState extends State<CommunityScreen>
   }
 
   Future<void> _loadFeedTabPage(int tabIndex, {required bool reset}) async {
-    if (tabIndex < 0 || tabIndex > 2) return;
-    if (_tabLoadingMore[tabIndex]) return;
+    if (tabIndex < 0 || tabIndex >= _feedTabCount) return;
+    // pull-to-refresh 등 reset이면 진행 중인 요청과 겹쳐도 새로고침은 허용
+    if (_tabLoadingMore[tabIndex] && !reset) return;
     if (!reset && !_tabHasMore[tabIndex]) return;
 
     setState(() {
@@ -215,11 +225,14 @@ class _CommunityScreenState extends State<CommunityScreen>
       DocumentSnapshot<Map<String, dynamic>>? cursor = _tabLastDoc[tabIndex];
       var pageHasMore = _tabHasMore[tabIndex];
 
-      // 클라이언트 필터로 비는 페이지가 많을 수 있어 여러 번 시도하되, 상한으로 지연 방지
-      const maxFilterSkips = 10;
+      // 클라이언트 필터로 비는 페이지가 많을 수 있어 여러 번 시도하되, 상한으로 지연 방지.
+      // DramaFeed 홈은 [getPosts]의 국가 필터를 쓰지 않음(Firestore country·앱 언어 불일치로 목록이 통째로 비는 경우 방지).
+      // 톡은 최근 N개가 리뷰 위주일 때 스킵이 많이 필요함.
+      final maxFilterSkips = _feedBoards[tabIndex] == 'review' ? 48 : 64;
       for (var attempt = 0; attempt < maxFilterSkips; attempt++) {
         final page = await PostService.instance.getPosts(
-          country: viewerLanguage,
+          country: null,
+          timeAgoLocale: viewerLanguage,
           type: _feedBoards[tabIndex],
           lastDocument: cursor,
           limit: 24,
@@ -229,12 +242,6 @@ class _CommunityScreenState extends State<CommunityScreen>
         for (final p in page.posts) {
           if (!BlockService.instance.isBlocked(p.author) &&
               !BlockService.instance.isPostBlocked(p.id)) {
-            // 리뷰 게시판은 별점+리뷰글 둘 다 있는 게시글만 표시
-            if (_feedBoards[tabIndex] == 'review') {
-              final hasText = p.body?.trim().isNotEmpty ?? false;
-              final hasRating = (p.rating ?? 0) > 0;
-              if (!hasText || !hasRating) continue;
-            }
             accumulated.add(p);
           }
         }
@@ -243,6 +250,11 @@ class _CommunityScreenState extends State<CommunityScreen>
             page.lastDocument == null) {
           break;
         }
+      }
+      // Firestore `hasMore`는 필터 전 문서 개수 기준이라, 필터 후 목록이 비면 hasMore가 true로 남을 수 있음.
+      // 빈 리스트에서 스크롤이 끝으로 잡혀 페이징만 반복되며 로딩 스피너가 무한 표시되는 것을 막음.
+      if (accumulated.isEmpty) {
+        pageHasMore = false;
       }
 
       if (!mounted) return;
@@ -279,7 +291,7 @@ class _CommunityScreenState extends State<CommunityScreen>
   void _onLocaleForFeedReload() {
     if (!mounted) return;
     _loadCurrentUserAuthor();
-    for (var i = 0; i < 3; i++) {
+    for (var i = 0; i < _feedTabCount; i++) {
       _purgeFeedTab(i);
     }
     _feedPrevTabIndex = _tabController.index;
@@ -325,7 +337,7 @@ class _CommunityScreenState extends State<CommunityScreen>
       } else {
         _freeBoardPosts.insert(0, updated);
       }
-      for (var t = 0; t < 3; t++) {
+      for (var t = 0; t < _feedTabCount; t++) {
         if (!postMatchesFeedFilter(updated, _feedBoards[t])) {
           _tabFeedPosts[t].removeWhere((p) => p.id == updated.id);
           continue;
@@ -371,10 +383,15 @@ class _CommunityScreenState extends State<CommunityScreen>
   void _onAuthChanged() {
     if (AuthService.instance.isLoggedIn.value) {
       _loadCurrentUserAuthor();
-      // 로그인 직후 프로필·가입 국가 로드 후 피드 재조회 (signupCountry null 레이스 방지)
-      WidgetsBinding.instance.addPostFrameCallback((_) async {
-        await UserProfileService.instance.loadUserProfile();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _refreshActiveFeedTab();
+        unawaited(
+          UserProfileService.instance.loadUserProfile().catchError((e, st) {
+            if (kDebugMode) {
+              debugPrint('CommunityScreen auth loadUserProfile: $e\n$st');
+            }
+          }),
+        );
       });
     } else if (mounted) {
       setState(() => _currentUserAuthor = null);
@@ -481,8 +498,7 @@ class _CommunityScreenState extends State<CommunityScreen>
         ? 'review'
         : switch (_tabController.index) {
             0 => 'review',
-            1 => 'talk',
-            _ => 'ask',
+            _ => 'talk',
           };
     final Post? post = await Navigator.push<Post>(
       context,
@@ -684,13 +700,18 @@ class _CommunityScreenState extends State<CommunityScreen>
                         // TabController는 드래그 중 index만으로는 리스너가 안 도므로
                         // animation을 구독해 스와이프 끝나자마자 칩·글자색이 맞게 갱신.
                         final animRaw = _tabController.animation!.value;
-                        final animValue = animRaw.clamp(0.0, 2.0).toDouble();
-                        final idx = animRaw.round().clamp(0, 2);
+                        final maxSlide = (_feedTabCount - 1).toDouble();
+                        final animValue =
+                            animRaw.clamp(0.0, maxSlide).toDouble();
+                        final idx =
+                            animRaw.round().clamp(0, _feedTabCount - 1);
 
                         return Align(
                           alignment: Alignment.centerLeft,
                           child: SizedBox(
-                            width: leftPad + (tabW + tabGap) * 2 + tabW,
+                            width: leftPad +
+                                (tabW + tabGap) * (_feedTabCount - 1) +
+                                tabW,
                             height: tabH,
                             child: Stack(
                               clipBehavior: Clip.none,
@@ -709,7 +730,7 @@ class _CommunityScreenState extends State<CommunityScreen>
                                     ),
                                   ),
                                 ),
-                                for (var i = 0; i < 3; i++)
+                                for (var i = 0; i < _feedTabCount; i++)
                                   Positioned(
                                     left: leftPad + (tabW + tabGap) * i,
                                     top: 0,
@@ -746,7 +767,6 @@ class _CommunityScreenState extends State<CommunityScreen>
                                             [
                                               s.get('tabReviews'),
                                               s.get('tabGeneral'),
-                                              s.get('tabQnA'),
                                             ][i],
                                             textHeightBehavior:
                                                 const TextHeightBehavior(
@@ -782,9 +802,10 @@ class _CommunityScreenState extends State<CommunityScreen>
                     AnimatedBuilder(
                       animation: _tabController.animation!,
                       builder: (context, _) {
-                        final idx =
-                            _tabController.animation!.value.round().clamp(0, 2);
-                        final showLayoutToggle = idx == 1 || idx == 2;
+                        final idx = _tabController.animation!.value
+                            .round()
+                            .clamp(0, _feedTabCount - 1);
+                        final showLayoutToggle = idx == 1;
                         if (!showLayoutToggle) {
                           return SizedBox(width: 14 * r);
                         }
@@ -876,31 +897,6 @@ class _CommunityScreenState extends State<CommunityScreen>
                       post,
                       tabName: s.get('tabGeneral'),
                       tabIndex: 1,
-                      backStack: _navBackStack,
-                      forwardStack: [],
-                    ),
-                    onUserBlocked: _applyBlockFilterToFeeds,
-                  ),
-                  QuestionBoardTab(
-                    posts: _tabFeedPosts[2],
-                    isLoading:
-                        _tabFeedPosts[2].isEmpty &&
-                        (_tabInitialLoading[2] || _tabLoadingMore[2]),
-                    error: _postsError,
-                    currentUserAuthor: _currentUserAuthor,
-                    onRefresh: _refreshActiveFeedTab,
-                    useSimpleFeedLayout: true,
-                    useCardFeedLayout: _talkAskUseCardFeedLayout,
-                    feedScrollController: _feedScrollControllers[2],
-                    feedLoadingMore: _tabLoadingMore[2],
-                    feedHasMore: _tabHasMore[2],
-                    onPostUpdated: _syncPostInFeeds,
-                    onPostDeleted: (Post deleted) =>
-                        _removePostFromAllFeeds(deleted.id),
-                    onPostTap: (post) => _openPost(
-                      post,
-                      tabName: s.get('tabQnA'),
-                      tabIndex: 2,
                       backStack: _navBackStack,
                       forwardStack: [],
                     ),

@@ -700,7 +700,10 @@ class _WritePostPageState extends State<WritePostPage> {
         allowReply: true,
         authorPhotoUrl: UserProfileService.instance.profileImageUrlNotifier.value,
         authorAvatarColorIndex: UserProfileService.instance.avatarColorNotifier.value,
-        country: UserProfileService.instance.signupCountryNotifier.value ?? LocaleService.instance.locale,
+        country: Post.normalizeFeedCountry(
+          UserProfileService.instance.signupCountryNotifier.value ??
+              LocaleService.instance.locale,
+        ),
       );
       if (!mounted) return;
       setState(() => _isSubmitting = false);
@@ -810,7 +813,10 @@ class _WritePostPageState extends State<WritePostPage> {
       allowReply: _boardKind == 'review' ? _allowReply : true,
       authorPhotoUrl: UserProfileService.instance.profileImageUrlNotifier.value,
       authorAvatarColorIndex: UserProfileService.instance.avatarColorNotifier.value,
-      country: UserProfileService.instance.signupCountryNotifier.value ?? LocaleService.instance.locale,
+      country: Post.normalizeFeedCountry(
+        UserProfileService.instance.signupCountryNotifier.value ??
+            LocaleService.instance.locale,
+      ),
     );
 
     unawaited(_syncReviewWatchHistory().catchError((_) {}));

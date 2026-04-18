@@ -1,6 +1,8 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+
+import 'services/watch_history_service.dart';
 import 'firebase_options.dart';
 import 'services/auth_service.dart';
 import 'services/country_service.dart';
@@ -13,6 +15,7 @@ import 'services/notification_service.dart';
 import 'services/post_service.dart';
 import 'services/theme_service.dart';
 import 'services/locale_service.dart';
+import 'services/review_service.dart';
 import 'services/drama_view_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'widgets/country_scope.dart';
@@ -21,6 +24,12 @@ import 'theme/app_theme.dart' show redditTheme, redditDarkTheme;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // LocaleService.load / setLocale 직전 콜백 — 드라마 탭 미방문 시에도 등록되도록 최대한 이른 시점
+  ReviewService.ensurePreLocaleAggregateClearRegistered();
+  LocaleService.registerPostLocaleCommit(() async {
+    await ReviewService.instance.refresh();
+    await WatchHistoryService.instance.refresh();
+  });
   if (!kIsWeb) {
     await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   }

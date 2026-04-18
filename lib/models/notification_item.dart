@@ -44,15 +44,21 @@ class NotificationItem {
     }
   }
 
-  Map<String, dynamic> toMap() => {
-    'type': _typeToString(type),
-    'fromUser': fromUser,
-    'postId': postId,
-    'postTitle': postTitle,
-    'commentText': commentText,
-    'isRead': isRead,
-    'createdAt': FieldValue.serverTimestamp(),
-  };
+  Map<String, dynamic> toMap() {
+    final m = <String, dynamic>{
+      'type': _typeToString(type),
+      'fromUser': fromUser,
+      'postId': postId,
+      'postTitle': postTitle,
+      'isRead': isRead,
+      'createdAt': FieldValue.serverTimestamp(),
+    };
+    final ct = commentText?.trim();
+    if (ct != null && ct.isNotEmpty) {
+      m['commentText'] = ct;
+    }
+    return m;
+  }
 
   static NotificationItem fromMap(Map<String, dynamic> map, String id) {
     final createdAt = map['createdAt'];

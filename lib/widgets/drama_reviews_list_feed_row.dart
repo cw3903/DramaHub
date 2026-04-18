@@ -102,6 +102,7 @@ class _DramaReviewsListFeedRowState extends State<DramaReviewsListFeedRow> {
   bool _loadingPost = false;
   bool _expanded = false;
   TextEditingController? _commentCtrl;
+  final FocusNode _commentFocus = FocusNode();
   bool _submitting = false;
   bool _likeBusy = false;
 
@@ -125,6 +126,7 @@ class _DramaReviewsListFeedRowState extends State<DramaReviewsListFeedRow> {
   @override
   void dispose() {
     _commentCtrl?.dispose();
+    _commentFocus.dispose();
     super.dispose();
   }
 
@@ -399,7 +401,8 @@ class _DramaReviewsListFeedRowState extends State<DramaReviewsListFeedRow> {
       _commentCtrl ??= TextEditingController();
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      FocusScope.of(context).requestFocus(FocusNode());
+      if (!mounted) return;
+      _commentFocus.requestFocus();
     });
   }
 
@@ -917,6 +920,7 @@ class _DramaReviewsListFeedRowState extends State<DramaReviewsListFeedRow> {
             ),
           _DramaReviewsListInlineComposer(
             controller: ctrl,
+            focusNode: _commentFocus,
             isSubmitting: _submitting,
             autofocus: !hasComments,
             sendLabel: sendLabel,
@@ -1062,6 +1066,7 @@ class _DramaReviewsListFeedRowState extends State<DramaReviewsListFeedRow> {
 class _DramaReviewsListInlineComposer extends StatelessWidget {
   const _DramaReviewsListInlineComposer({
     required this.controller,
+    required this.focusNode,
     required this.isSubmitting,
     required this.autofocus,
     required this.onSend,
@@ -1069,6 +1074,7 @@ class _DramaReviewsListInlineComposer extends StatelessWidget {
   });
 
   final TextEditingController controller;
+  final FocusNode focusNode;
   final bool isSubmitting;
   final bool autofocus;
   final Future<void> Function() onSend;
@@ -1139,6 +1145,7 @@ class _DramaReviewsListInlineComposer extends StatelessWidget {
                 Expanded(
                   child: TextField(
                     controller: controller,
+                    focusNode: focusNode,
                     autofocus: autofocus,
                     minLines: 1,
                     maxLines: 6,

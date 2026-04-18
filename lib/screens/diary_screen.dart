@@ -5,10 +5,12 @@ import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../models/drama.dart';
+import '../models/post.dart';
 import '../models/profile_favorite.dart';
 import '../services/auth_service.dart';
 import '../services/country_service.dart';
 import '../services/drama_list_service.dart';
+import '../services/locale_service.dart';
 import '../services/review_service.dart';
 import '../services/user_profile_service.dart';
 import '../services/watch_history_service.dart';
@@ -324,6 +326,7 @@ class _DiaryScreenState extends State<DiaryScreen> {
       rating: effectiveRating,
       comment: effectiveComment,
       writtenAt: item.watchedAt,
+      appLocale: item.appLocale,
     );
 
     Navigator.push<void>(
@@ -356,6 +359,7 @@ class _DiaryScreenState extends State<DiaryScreen> {
 
     return AnimatedBuilder(
       animation: Listenable.merge([
+        LocaleService.instance.localeNotifier,
         WatchHistoryService.instance.listNotifier,
         ReviewService.instance.listNotifier,
         DramaListService.instance.listNotifier,
@@ -414,7 +418,10 @@ class _DiaryScreenState extends State<DiaryScreen> {
     dynamic s,
     String appCountry,
   ) {
-    final list = WatchHistoryService.instance.list;
+    final loc = LocaleService.instance.locale;
+    final list = WatchHistoryService.instance.list
+        .where((e) => Post.userScopedLocaleVisible(e.appLocale, loc))
+        .toList();
     if (list.isEmpty) {
       return Center(
         child: Padding(

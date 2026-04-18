@@ -7,8 +7,10 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../models/profile_favorite.dart';
+import '../models/post.dart';
 import 'auth_service.dart';
 import 'follow_service.dart';
+import 'locale_service.dart';
 import 'post_service.dart';
 
 /// 다른 유저 프로필 조회용 (Firestore `users/{uid}` 공개 필드만).
@@ -38,8 +40,13 @@ class UserProfileService {
   final ValueNotifier<int?> avatarColorNotifier = ValueNotifier<int?>(null);
   /// 가입 시 선택한 국가 코드 (us, kr, cn, jp). 프로필 표시용.
   final ValueNotifier<String?> signupCountryNotifier = ValueNotifier<String?>(null);
-  /// Letterboxd 스타일 프로필 즐겨찾기 드라마 (최대 4, `users/{uid}.favorites`).
+  /// Letterboxd 스타일 프로필 즐겨찾기 (`users/{uid}.favorites` 배열).
+  /// 항목마다 `country`가 있으면 해당 언어에서만 표시. 저장 상한 [_kFavoritesMaxStored],
+  /// 현재 언어당 표시·추가 상한 [_kFavoritesMaxPerLocale].
   final ValueNotifier<List<ProfileFavorite>> favoritesNotifier = ValueNotifier<List<ProfileFavorite>>([]);
+
+  static const int _kFavoritesMaxStored = 24;
+  static const int _kFavoritesMaxPerLocale = 4;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseStorage _storage = FirebaseStorage.instance;
   bool _loaded = false;
@@ -307,16 +314,53 @@ class UserProfileService {
     for (final e in raw) {
       final fav = ProfileFavorite.fromDynamic(e);
       if (fav != null) out.add(fav);
-      if (out.length >= 4) break;
+      if (out.length >= _kFavoritesMaxStored) break;
     }
     return out;
   }
 
-  /// `favorites` 배열 전체 저장 (최대 4개).
+  static bool favoriteVisibleInLocale(ProfileFavorite e, String viewerLocale) {
+    final m = <String, dynamic>{};
+    final c = e.appLocale?.trim();
+    if (c != null && c.isNotEmpty) m['country'] = c;
+    return Post.documentVisibleInCountryFeed(m, viewerLocale);
+  }
+
+  static List<ProfileFavorite> favoritesVisibleInLocale(
+    List<ProfileFavorite> all,
+    String viewerLocale,
+  ) {
+    return all
+        .where((e) => favoriteVisibleInLocale(e, viewerLocale))
+        .take(_kFavoritesMaxPerLocale)
+        .toList();
+  }
+
+  /// 현재 앱 언어에서 보이는 즐겨찾기만 (슬롯 4개 UI용).
+  List<ProfileFavorite> favoritesVisibleForCurrentLocale() =>
+      favoritesVisibleInLocale(
+        favoritesNotifier.value,
+        LocaleService.instance.locale,
+      );
+
+  static int _visibleFavoriteCount(List<ProfileFavorite> cur, String loc) =>
+      cur.where((e) => favoriteVisibleInLocale(e, loc)).length;
+
+  /// 동일 작품·동일 `country` 버킷(둘 다 레거시면 동일)이면 중복으로 간주.
+  static bool _favoriteSameLocaleBucket(ProfileFavorite a, ProfileFavorite b) {
+    if (a.dramaId != b.dramaId) return false;
+    final ca = (a.appLocale ?? '').trim();
+    final cb = (b.appLocale ?? '').trim();
+    if (ca.isEmpty && cb.isEmpty) return true;
+    if (ca.isEmpty || cb.isEmpty) return false;
+    return ca == cb;
+  }
+
+  /// `favorites` 배열 전체 저장 (최대 [_kFavoritesMaxStored]개까지 보관).
   Future<void> saveFavorites(List<ProfileFavorite> list) async {
     final uid = AuthService.instance.currentUser.value?.uid;
     if (uid == null) return;
-    final trimmed = list.take(4).toList();
+    final trimmed = list.take(_kFavoritesMaxStored).toList();
     try {
       await _userDoc.set(
         {'favorites': trimmed.map((e) => e.toMap()).toList()},
@@ -329,10 +373,23 @@ class UserProfileService {
   }
 
   Future<void> addFavorite(ProfileFavorite fav) async {
+    await loadIfNeeded();
+    final uid = AuthService.instance.currentUser.value?.uid;
+    if (uid == null) return;
+    final loc = LocaleService.instance.locale;
+    final scoped = ProfileFavorite(
+      dramaId: fav.dramaId,
+      dramaTitle: fav.dramaTitle,
+      dramaThumbnail: fav.dramaThumbnail,
+      appLocale: (fav.appLocale != null && fav.appLocale!.trim().isNotEmpty)
+          ? fav.appLocale!.trim()
+          : loc,
+    );
     final cur = List<ProfileFavorite>.from(favoritesNotifier.value);
-    if (cur.length >= 4) return;
-    if (cur.any((e) => e.dramaId == fav.dramaId)) return;
-    cur.add(fav);
+    if (cur.length >= _kFavoritesMaxStored) return;
+    if (_visibleFavoriteCount(cur, loc) >= _kFavoritesMaxPerLocale) return;
+    if (cur.any((e) => _favoriteSameLocaleBucket(e, scoped))) return;
+    cur.add(scoped);
     await saveFavorites(cur);
   }
 

@@ -1,5 +1,6 @@
 import 'dart:async' show unawaited;
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter/material.dart';
 import '../utils/format_utils.dart';
@@ -22,6 +23,7 @@ import '../services/user_profile_service.dart';
 import '../services/custom_drama_list_service.dart';
 import '../services/watch_history_service.dart';
 import '../services/watchlist_service.dart';
+import '../services/locale_service.dart';
 import '../constants/app_profile_avatar_size.dart';
 import '../models/drama.dart';
 import 'login_page.dart';
@@ -47,11 +49,38 @@ TextStyle _detailSectionCapsLabel(ColorScheme cs) => GoogleFonts.notoSansKr(
   color: cs.onSurface.withValues(alpha: 0.90),
 );
 
-Widget _sectionLabel(String text, ColorScheme cs) => Transform.scale(
-  scaleX: 1.1,
-  alignment: Alignment.centerLeft,
-  child: Text(text, style: _detailSectionCapsLabel(cs)),
-);
+/// 섹션 캡션 가로 확장(1.1)은 **영어(us)** UI에서만 적용.
+double _detailCapsScaleX() =>
+    LocaleService.instance.locale == 'us' ? 1.1 : 1.0;
+
+Widget _detailCapsTitleText(
+  String text,
+  ColorScheme cs, {
+  int? maxLines,
+  TextOverflow? overflow,
+}) {
+  final scaleX = _detailCapsScaleX();
+  final child = Text(
+    text,
+    style: _detailSectionCapsLabel(cs),
+    maxLines: maxLines,
+    overflow: overflow,
+  );
+  if (scaleX == 1.0) return child;
+  return Transform.scale(
+    scaleX: scaleX,
+    alignment: Alignment.centerLeft,
+    child: child,
+  );
+}
+
+Widget _sectionLabel(String text, ColorScheme cs) =>
+    _detailCapsTitleText(text, cs);
+
+/// 스탯 타일 텍스트: CTA 1줄 ↔ 라벨+숫자 2줄 전환 시에도 동일 높이·세로 중앙 유지.
+const double _kStatsBarTextLine1BoxHeight = 15;
+const double _kStatsBarTextLine2Gap = 2;
+const double _kStatsBarTextLine2BoxHeight = 12;
 
 class _StatsBarWatchlistButton extends StatelessWidget {
   const _StatsBarWatchlistButton({
@@ -62,6 +91,7 @@ class _StatsBarWatchlistButton extends StatelessWidget {
   });
 
   final String dramaId;
+
   /// 이 드라마를 워치리스트에 둔 전체 유저 수.
   final int userCount;
   final dynamic strings;
@@ -92,10 +122,10 @@ class _StatsBarWatchlistButton extends StatelessWidget {
       builder: (context, _) {
         final iconColor = cs.onSurface;
         final did = dramaId.trim();
-        final inList = AuthService.instance.isLoggedIn.value &&
+        final inList =
+            AuthService.instance.isLoggedIn.value &&
             did.isNotEmpty &&
             WatchlistService.instance.isInWatchlist(did);
-        final hasCount = userCount > 0;
         final labelColor = cs.onSurface;
         return Material(
           color: _kBackground,
@@ -108,12 +138,10 @@ class _StatsBarWatchlistButton extends StatelessWidget {
             onTap: onTap,
             child: SizedBox.expand(
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                 child: LayoutBuilder(
                   builder: (context, constraints) {
-                    return FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.center,
+                    return Center(
                       child: ConstrainedBox(
                         constraints: BoxConstraints(
                           maxWidth: constraints.maxWidth,
@@ -172,54 +200,51 @@ class _StatsBarWatchlistButton extends StatelessWidget {
                               ),
                             ),
                             const SizedBox(height: 4),
-                            if (hasCount)
-                              Column(
-                                mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.center,
-                                children: [
-                                  Text(
-                                    strings.get('dramaBottomActionWatchlist'),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    textAlign: TextAlign.center,
-                                    style: GoogleFonts.notoSansKr(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w800,
-                                      color: labelColor,
-                                      height: 1.1,
-                                      letterSpacing: -0.2,
+                            Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                SizedBox(
+                                  height: _kStatsBarTextLine1BoxHeight,
+                                  width: double.infinity,
+                                  child: Center(
+                                    child: Text(
+                                      strings.get('dramaBottomActionWatchlist'),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      textAlign: TextAlign.center,
+                                      style: GoogleFonts.notoSansKr(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w800,
+                                        color: labelColor,
+                                        height: 1.1,
+                                        letterSpacing: -0.2,
+                                      ),
                                     ),
                                   ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    formatCompactCount(userCount),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    textAlign: TextAlign.center,
-                                    style: GoogleFonts.notoSansKr(
-                                      fontSize: 10.5,
-                                      fontWeight: FontWeight.w600,
-                                      color: labelColor.withValues(alpha: 0.88),
-                                      height: 1.05,
-                                      letterSpacing: -0.15,
-                                    ),
-                                  ),
-                                ],
-                              )
-                            else
-                              Text(
-                                strings.get('dramaBottomActionWatchlist'),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                textAlign: TextAlign.center,
-                                style: GoogleFonts.notoSansKr(
-                                  fontSize: 11.5,
-                                  fontWeight: FontWeight.w600,
-                                  color: labelColor,
-                                  height: 1.15,
-                                  letterSpacing: -0.1,
                                 ),
-                              ),
+                                SizedBox(height: _kStatsBarTextLine2Gap),
+                                SizedBox(
+                                  height: _kStatsBarTextLine2BoxHeight,
+                                  width: double.infinity,
+                                  child: Center(
+                                    child: Text(
+                                      formatCompactCount(userCount),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      textAlign: TextAlign.center,
+                                      style: GoogleFonts.notoSansKr(
+                                        fontSize: 10.5,
+                                        fontWeight: FontWeight.w600,
+                                        color: labelColor.withValues(alpha: 0.88),
+                                        height: 1.05,
+                                        letterSpacing: -0.15,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ],
                         ),
                       ),
@@ -242,31 +267,46 @@ class _StatsBarSlot extends StatelessWidget {
     required this.backgroundColor,
     required this.count,
     required this.labelKey,
-    required this.zeroHintKey,
     required this.strings,
     required this.onTap,
+    /// 집계 전에도 보조 아이콘(예: 리뷰 문서)을 쓸지 — [peek] 등으로 별점 건수가 있을 때.
+    this.useSecondaryIcon = false,
   });
 
-  /// 빈 상태·CTA 문구용 (예: 연필, 리스트).
   final IconData icon;
-
-  /// 숫자가 있을 때만 교체 (예: 문서형 리뷰, 레이어형 리스트).
   final IconData? iconWhenHasCount;
   final Color backgroundColor;
   final int count;
   final String labelKey;
-  final String zeroHintKey;
   final dynamic strings;
   final VoidCallback onTap;
+  final bool useSecondaryIcon;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final labelColor = cs.onSurface;
-    final hasCount = count > 0;
-    final resolvedIcon = hasCount && iconWhenHasCount != null
-        ? iconWhenHasCount!
-        : icon;
+    final resolvedIcon =
+        (count > 0 || useSecondaryIcon) && iconWhenHasCount != null
+            ? iconWhenHasCount!
+            : icon;
+
+    final line1Style = GoogleFonts.notoSansKr(
+      fontSize: 12,
+      fontWeight: FontWeight.w800,
+      color: labelColor,
+      height: 1.1,
+      letterSpacing: -0.2,
+    );
+
+    final line2Style = GoogleFonts.notoSansKr(
+      fontSize: 10.5,
+      fontWeight: FontWeight.w600,
+      color: labelColor.withValues(alpha: 0.88),
+      height: 1.05,
+      letterSpacing: -0.15,
+    );
+
     return Material(
       color: backgroundColor,
       borderRadius: BorderRadius.circular(8),
@@ -278,14 +318,13 @@ class _StatsBarSlot extends StatelessWidget {
         onTap: onTap,
         child: SizedBox.expand(
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
             child: LayoutBuilder(
               builder: (context, constraints) {
-                return FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.center,
+                return Center(
                   child: ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: constraints.maxWidth),
+                    constraints:
+                        BoxConstraints(maxWidth: constraints.maxWidth),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -293,54 +332,39 @@ class _StatsBarSlot extends StatelessWidget {
                       children: [
                         Icon(resolvedIcon, size: 22, color: labelColor),
                         const SizedBox(height: 4),
-                        if (hasCount)
-                          Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              Text(
-                                strings.get(labelKey),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                textAlign: TextAlign.center,
-                                style: GoogleFonts.notoSansKr(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w800,
-                                  color: labelColor,
-                                  height: 1.1,
-                                  letterSpacing: -0.2,
+                        Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            SizedBox(
+                              height: _kStatsBarTextLine1BoxHeight,
+                              width: double.infinity,
+                              child: Center(
+                                child: Text(
+                                  strings.get(labelKey),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.center,
+                                  style: line1Style,
                                 ),
                               ),
-                              const SizedBox(height: 2),
-                              Text(
-                                formatCompactCount(count),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                textAlign: TextAlign.center,
-                                style: GoogleFonts.notoSansKr(
-                                  fontSize: 10.5,
-                                  fontWeight: FontWeight.w600,
-                                  color: labelColor.withValues(alpha: 0.88),
-                                  height: 1.05,
-                                  letterSpacing: -0.15,
-                                ),
-                              ),
-                            ],
-                          )
-                        else
-                          Text(
-                            strings.get(zeroHintKey),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.center,
-                            style: GoogleFonts.notoSansKr(
-                              fontSize: 11.5,
-                              fontWeight: FontWeight.w600,
-                              color: labelColor,
-                              height: 1.15,
-                              letterSpacing: -0.1,
                             ),
-                          ),
+                            SizedBox(height: _kStatsBarTextLine2Gap),
+                            SizedBox(
+                              height: _kStatsBarTextLine2BoxHeight,
+                              width: double.infinity,
+                              child: Center(
+                                child: Text(
+                                  formatCompactCount(count),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.center,
+                                  style: line2Style,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ],
                     ),
                   ),
@@ -366,6 +390,8 @@ class _StatsBar extends StatelessWidget {
     required this.reviewCount,
     required this.watcherCount,
     required this.watchlistUserCount,
+    /// 리스트가 비어 있어도 캐시된 별점 건수가 있으면 문서 아이콘(첫 프레임부터).
+    this.reviewUseFileIcon = false,
   });
 
   final DramaDetail detail;
@@ -377,13 +403,14 @@ class _StatsBar extends StatelessWidget {
   final int reviewCount;
   final int watcherCount;
   final int watchlistUserCount;
+  final bool reviewUseFileIcon;
 
   /// Letterboxd-style stat 타일 — 선명한 채도, 리뷰만 웜 코랄로 슬레이트(워치리스트)와 구분.
   static const Color _kWatchersGreen = Color(0xFF1FA65A);
   static const Color _kReviewsCoral = Color(0xFFFF5C45);
   static const Color _kListsBlue = Color(0xFF2D8CED);
 
-  /// 네 칸 동일 너비·타일 높이(아이콘·한 줄 라벨에 맞춤).
+  /// 네 칸 동일 너비·타일 높이 (내부는 세로 패딩 3+콘텐츠로 62 안에 맞춤).
   static const double _rowHeight = 62;
 
   @override
@@ -400,7 +427,6 @@ class _StatsBar extends StatelessWidget {
               backgroundColor: _kWatchersGreen,
               count: watcherCount,
               labelKey: 'statsBarWatchersLabel',
-              zeroHintKey: 'statsBarFirstWatcher',
               strings: strings,
               onTap: onWatchedTap,
             ),
@@ -413,9 +439,9 @@ class _StatsBar extends StatelessWidget {
               backgroundColor: _kReviewsCoral,
               count: reviewCount,
               labelKey: 'statsBarReviewsLabel',
-              zeroHintKey: 'statsBarWriteReview',
               strings: strings,
               onTap: onReviewsTap,
+              useSecondaryIcon: reviewUseFileIcon,
             ),
           ),
           const SizedBox(width: 8),
@@ -431,7 +457,6 @@ class _StatsBar extends StatelessWidget {
                   backgroundColor: _kListsBlue,
                   count: listCount,
                   labelKey: 'statsBarListsLabel',
-                  zeroHintKey: 'statsBarMakeList',
                   strings: strings,
                   onTap: onListsTap,
                 );
@@ -459,10 +484,49 @@ class DramaDetailPage extends StatefulWidget {
     super.key,
     required this.detail,
     this.scrollToRatings = false,
+    /// [openFromItem] 등에서 워치리스트 집계를 미리 받아 첫 프레임부터 반영.
+    this.prefetchedWatchlistUserCount,
   });
 
   final DramaDetail detail;
   final bool scrollToRatings;
+
+  /// 서버 집계를 넘기면 상세 내부에서 다시 기다리지 않아도 됨.
+  final int? prefetchedWatchlistUserCount;
+
+  /// 카탈로그에서 진입: 동기 [buildDetailForItem]만으로 바로 푸시(목록에서 멈춤 없음).
+  /// 집계는 상세 [initState]의 [_loadRatingStats]에서 로드.
+  static Future<void> openFromItem(
+    BuildContext context,
+    DramaItem item, {
+    String? country,
+    bool scrollToRatings = false,
+  }) async {
+    final detail =
+        DramaListService.instance.buildDetailForItem(item, country);
+    if (!context.mounted) return;
+    await Navigator.of(context).push<void>(
+      PageRouteBuilder<void>(
+        transitionDuration: const Duration(milliseconds: 120),
+        reverseTransitionDuration: const Duration(milliseconds: 100),
+        opaque: true,
+        pageBuilder: (ctx, animation, secondaryAnimation) {
+          return FadeTransition(
+            opacity: CurvedAnimation(
+              parent: animation,
+              curve: Curves.easeOut,
+              reverseCurve: Curves.easeIn,
+            ),
+            child: DramaDetailPage(
+              key: ValueKey<String>(detail.item.id),
+              detail: detail,
+              scrollToRatings: scrollToRatings,
+            ),
+          );
+        },
+      ),
+    );
+  }
 
   @override
   State<DramaDetailPage> createState() => _DramaDetailPageState();
@@ -475,9 +539,11 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
   List<DramaReview>? _liveReviews;
   int? _liveViews;
   int _watchlistUserCount = 0;
+
   /// feedPostId → (likeCount, commentCount) from posts collection.
   /// Overrides the potentially-stale likeCount stored in drama_reviews docs.
-  Map<String, ({int likeCount, int commentCount, bool isLiked})> _reviewPostMeta = {};
+  Map<String, ({int likeCount, int commentCount, bool isLiked})>
+  _reviewPostMeta = {};
 
   /// 조회수: 낙관적 +1 즉시 표시 → 백그라운드에서 increment. 8초 타임아웃.
   Future<void> _updateViewCount() async {
@@ -513,48 +579,88 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
               UserProfileService.instance.signupCountryNotifier.value)
         : UserProfileService.instance.signupCountryNotifier.value;
     try {
-      // Pre-compute feedPost IDs from the already-loaded initial reviews so we
-      // can fire batchGetPostMeta in parallel with getDramaReviews.
-      final initialIds = _reviewPostIds(widget.detail.reviews);
+      final preloaded = widget.detail.reviews.isNotEmpty;
 
-      final results = await Future.wait([
-        ReviewService.instance
-            .getDramaRatingStats(dramaId)
-            .timeout(
-              const Duration(seconds: 8),
-              onTimeout: () => (average: 0.0, count: 0),
-            ),
-        ReviewService.instance
-            .getDramaReviews(dramaId, country: country)
-            .timeout(
-              const Duration(seconds: 8),
-              onTimeout: () => <DramaReview>[],
-            ),
-        // Fetch like/comment counts from posts in parallel — completes at the
-        // same time as getDramaReviews so a single setState shows everything.
-        if (initialIds.isNotEmpty)
-          PostService.instance.batchGetPostMeta(initialIds)
-        else
-          Future.value(<String, ({int likeCount, int commentCount, bool isLiked})>{}),
-      ]);
-      if (mounted) {
-        final stats = results[0] as ({double average, int count});
-        final reviews = results[1] as List<DramaReview>;
-        final meta = results[2]
-            as Map<String, ({int likeCount, int commentCount, bool isLiked})>;
+      if (preloaded) {
+        // [DramaDetail]에 리뷰가 이미 채워져 있음 → drama_reviews 재조회 생략.
+        int wlCount = _watchlistUserCount;
+        if (widget.prefetchedWatchlistUserCount == null) {
+          final results = await Future.wait<Object?>([
+            WatchlistService.instance
+                .countUsersIncludingDrama(dramaId)
+                .timeout(const Duration(seconds: 10), onTimeout: () => null),
+          ]);
+          if (!mounted) return;
+          final watchN = results[0] as int?;
+          final userHasIt = WatchlistService.instance.isInWatchlist(dramaId);
+          if (watchN != null) {
+            wlCount = (userHasIt && watchN < 1) ? 1 : watchN;
+          }
+        }
+        if (!mounted) return;
         setState(() {
-          _liveAverage = stats.average;
-          _liveCount = stats.count;
-          _liveReviews = reviews;
-          if (meta.isNotEmpty) _reviewPostMeta = meta;
+          _liveAverage = widget.detail.averageRating;
+          _liveCount = widget.detail.ratingCount;
+          _liveReviews = widget.detail.reviews;
+          _watchlistUserCount = wlCount;
         });
-        // If the fresh reviews have IDs not covered by the initial batch,
-        // fetch those too (new reviews posted since the page last loaded).
-        final freshIds = _reviewPostIds(reviews);
-        final uncovered =
-            freshIds.where((id) => !meta.containsKey(id)).toList();
-        if (uncovered.isNotEmpty) _fetchReviewPostMeta(uncovered);
+        final ids = _reviewPostIds(widget.detail.reviews);
+        if (ids.isNotEmpty) {
+          unawaited(_kickBatchReviewPostMeta(ids));
+        }
+        return;
       }
+
+      // drama_reviews + 워치리스트 집계 → 한 setState에 반영.
+      final results = await Future.wait<Object?>([
+        ReviewService.instance
+            .getDramaReviewDetailBundle(dramaId, country: country)
+            .timeout(
+              const Duration(seconds: 8),
+              onTimeout: () =>
+                  (average: 0.0, count: 0, reviews: <DramaReview>[]),
+            ),
+        WatchlistService.instance
+            .countUsersIncludingDrama(dramaId)
+            .timeout(const Duration(seconds: 10), onTimeout: () => null),
+      ]);
+      if (!mounted) return;
+      final bundle = results[0]
+          as ({double average, int count, List<DramaReview> reviews});
+      final watchN = results[1] as int?;
+      final userHasIt = WatchlistService.instance.isInWatchlist(dramaId);
+      int wlCount = _watchlistUserCount;
+      if (watchN != null) {
+        wlCount = (userHasIt && watchN < 1) ? 1 : watchN;
+      }
+      setState(() {
+        _liveAverage = bundle.average;
+        _liveCount = bundle.count;
+        _liveReviews = bundle.reviews;
+        _watchlistUserCount = wlCount;
+      });
+      final ids = _reviewPostIds(bundle.reviews);
+      if (ids.isNotEmpty) {
+        unawaited(_kickBatchReviewPostMeta(ids));
+      }
+    } catch (_) {}
+  }
+
+  /// 스탯 바·리뷰 행은 이미 반영된 뒤 호출 — posts 메타만 보강(추가 setState, 스탯 레이아웃 불변).
+  Future<void> _kickBatchReviewPostMeta(List<String> ids) async {
+    if (ids.isEmpty) return;
+    try {
+      final meta = await PostService.instance
+          .batchGetPostMeta(ids)
+          .timeout(
+            const Duration(seconds: 8),
+            onTimeout: () =>
+                <String, ({int likeCount, int commentCount, bool isLiked})>{},
+          );
+      if (!mounted || meta.isEmpty) return;
+      setState(() => _reviewPostMeta = {..._reviewPostMeta, ...meta});
+      final uncovered = ids.where((id) => !meta.containsKey(id)).toList();
+      if (uncovered.isNotEmpty) unawaited(_fetchReviewPostMeta(uncovered));
     } catch (_) {}
   }
 
@@ -601,40 +707,75 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
   @override
   void initState() {
     super.initState();
-    // Optimistic initial value: if the user already has this drama in their
-    // local watchlist cache, show at least 1 before the server count arrives.
     final dramaId = widget.detail.item.id;
-    if (WatchlistService.instance.isInWatchlist(dramaId)) {
+    final d = widget.detail;
+
+    if (widget.prefetchedWatchlistUserCount != null) {
+      _watchlistUserCount = widget.prefetchedWatchlistUserCount!;
+    } else if (WatchlistService.instance.isInWatchlist(dramaId)) {
       _watchlistUserCount = 1;
     }
-    // Kick off meta fetch immediately with pre-loaded reviews so like/comment
-    // counts are ready before the first frame renders (no blank-zero flash).
-    final initialIds = _reviewPostIds(widget.detail.reviews);
-    if (initialIds.isNotEmpty) {
-      _fetchReviewPostMeta(initialIds);
+
+    if (d.reviews.isNotEmpty) {
+      _liveReviews = d.reviews;
+      _liveAverage = d.averageRating;
+      _liveCount = d.ratingCount;
+    } else if (d.ratingCount > 0) {
+      _liveAverage = d.averageRating;
+      _liveCount = d.ratingCount;
+    } else if (dramaId.isNotEmpty) {
+      final peek = ReviewService.instance.peekDramaAggregateStats(dramaId);
+      if (peek != null) {
+        _liveAverage = peek.average;
+        _liveCount = peek.count;
+      }
     }
-    // 첫 프레임 그린 뒤 각 작업을 독립적으로 실행 (순차 await 체인 제거 → ANR 방지)
+
+    LocaleService.instance.localeNotifier.addListener(
+      _reloadEpisodeRatingsForLocaleChange,
+    );
+    // 리뷰·워치리스트 집계는 즉시 시작. posts 메타는 [_kickBatchReviewPostMeta]에서 비동기만.
+    unawaited(_loadRatingStats().catchError((_) {}));
+    // 첫 프레임·전환 애니메이션 후에 나머지 네트워크·서비스 로드 → 탭 직후 멈춤 체감 완화
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      // 세 작업 완전히 독립 실행 - 서로 기다리지 않음
-      _updateViewCount().catchError((_) {});
-      _loadRatingStats().catchError((_) {});
-      WatchHistoryService.instance.loadIfNeeded();
-      CustomDramaListService.instance.loadIfNeeded();
-      // 워치리스트 상태를 미리 로드 → 버튼 탭 시 즉시 응답
+      final id = widget.detail.item.id;
+      if (id.isNotEmpty) {
+        unawaited(EpisodeRatingService.instance.getMyRatingsForDrama(id));
+        unawaited(EpisodeRatingService.instance.loadEpisodeAverageRatings(id));
+      }
+      unawaited(_updateViewCount().catchError((_) {}));
+      unawaited(WatchHistoryService.instance.loadIfNeeded());
+      unawaited(CustomDramaListService.instance.loadIfNeeded());
       unawaited(WatchlistService.instance.loadIfNeeded());
-      unawaited(_loadWatchlistUserCount());
+      if (widget.scrollToRatings) {
+        WidgetsBinding.instance.addPostFrameCallback((__) {
+          if (!mounted) return;
+          Scrollable.ensureVisible(
+            _ratingsKey.currentContext!,
+            duration: const Duration(milliseconds: 400),
+            curve: Curves.easeInOut,
+          );
+        });
+      }
     });
-    if (widget.scrollToRatings) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        Scrollable.ensureVisible(
-          _ratingsKey.currentContext!,
-          duration: const Duration(milliseconds: 400),
-          curve: Curves.easeInOut,
-        );
-      });
-    }
+  }
+
+  void _reloadEpisodeRatingsForLocaleChange() {
+    final id = widget.detail.item.id.trim();
+    if (id.isEmpty) return;
+    EpisodeRatingService.instance.invalidateEpisodeDataForDrama(id);
+    EpisodeReviewService.instance.clearNotifiersForDrama(id);
+    unawaited(EpisodeRatingService.instance.getMyRatingsForDrama(id));
+    unawaited(EpisodeRatingService.instance.loadEpisodeAverageRatings(id));
+  }
+
+  @override
+  void dispose() {
+    LocaleService.instance.localeNotifier.removeListener(
+      _reloadEpisodeRatingsForLocaleChange,
+    );
+    super.dispose();
   }
 
   void _openDramaLists(BuildContext context, DramaDetail detail) {
@@ -723,7 +864,8 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
       if (ok != true || !AuthService.instance.isLoggedIn.value) return;
     }
 
-    final country = CountryScope.maybeOf(context)?.country ??
+    final country =
+        CountryScope.maybeOf(context)?.country ??
         UserProfileService.instance.signupCountryNotifier.value;
     final id = detail.item.id;
     final currentlyInList = WatchlistService.instance.isInWatchlist(id);
@@ -781,6 +923,14 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
     final visibleReviews = _visibleRatingsAndReviews(
       _liveReviews ?? detail.reviews,
     );
+    final rawReviews = _liveReviews ?? detail.reviews;
+    final ratingCountHint = _liveCount ?? detail.ratingCount;
+    final watcherForStats =
+        rawReviews.isNotEmpty ? rawReviews.length : ratingCountHint;
+    final reviewUseFileIcon =
+        visibleReviews.isNotEmpty || ratingCountHint > 0;
+    final reviewForStats =
+        visibleReviews.isNotEmpty ? visibleReviews.length : ratingCountHint;
     final theme = Theme.of(context);
     final headerBg = listsStyleSubpageHeaderBackground(theme);
     return PopScope(
@@ -793,7 +943,10 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
       },
       child: AnnotatedRegion<SystemUiOverlayStyle>(
         value: listsStyleSubpageSystemOverlay(theme, headerBg),
-        child: Scaffold(
+        child: ListsStyleSubpageHorizontalSwipeBack(
+          onSwipePop: () =>
+              popListsStyleSubpage(context, _buildViewCountResult()),
+          child: Scaffold(
           backgroundColor: theme.scaffoldBackgroundColor,
           body: CustomScrollView(
             keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
@@ -818,13 +971,16 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
                         strings: s,
                         onReviewsTap: () =>
                             _openDramaReviewsList(context, detail),
-                        onWatchedTap: () => _openDramaWatchers(context, detail),
+                        onWatchedTap: () =>
+                            _openDramaWatchers(context, detail),
                         onListsTap: () => _openDramaLists(context, detail),
-                        onWatchlistTap: () =>
-                            unawaited(_toggleWatchlistFromDetail(context, detail)),
-                        reviewCount: visibleReviews.length,
-                        watcherCount: (_liveReviews ?? detail.reviews).length,
+                        onWatchlistTap: () => unawaited(
+                          _toggleWatchlistFromDetail(context, detail),
+                        ),
+                        reviewCount: reviewForStats,
+                        watcherCount: watcherForStats,
                         watchlistUserCount: _watchlistUserCount,
+                        reviewUseFileIcon: reviewUseFileIcon,
                       ),
                       const SizedBox(height: 32),
                       // 줄거리 (가입 국가별 언어, 위에 장르 태그 pill)
@@ -885,6 +1041,7 @@ class _DramaDetailPageState extends State<DramaDetailPage> {
               ),
             ],
           ),
+        ),
         ),
       ),
     );
@@ -1040,6 +1197,8 @@ class _HeaderSection extends StatelessWidget {
                                       fit: BoxFit.cover,
                                       width: 80,
                                       height: 80 * 1.3,
+                                      memCacheWidth: 168,
+                                      memCacheHeight: 220,
                                     )
                                   : Image.asset(
                                       displayImageUrl,
@@ -1096,6 +1255,9 @@ class _SynopsisSection extends StatefulWidget {
 class _SynopsisSectionState extends State<_SynopsisSection> {
   bool _synopsisExpanded = false;
 
+  /// 접힌 상태에서 레이아웃 부담 완화(긴 JSON 줄거리 등).
+  static const int _kSynopsisLayoutCap = 2800;
+
   @override
   void didUpdateWidget(covariant _SynopsisSection oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -1130,9 +1292,12 @@ class _SynopsisSectionState extends State<_SynopsisSection> {
           detail.item.id,
           country,
         );
-        final displaySynopsis = synopsis.isNotEmpty
-            ? synopsis
-            : detail.synopsis;
+        final rawSynopsis =
+            synopsis.isNotEmpty ? synopsis : detail.synopsis;
+        final displaySynopsis = (!_synopsisExpanded &&
+                rawSynopsis.length > _kSynopsisLayoutCap)
+            ? '${rawSynopsis.substring(0, _kSynopsisLayoutCap)}…'
+            : rawSynopsis;
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1318,16 +1483,6 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
   bool _episodesExpanded = true;
 
   @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      EpisodeRatingService.instance.getMyRatingsForDrama(widget.dramaId);
-      EpisodeRatingService.instance.loadEpisodeAverageRatings(widget.dramaId);
-    });
-  }
-
-  @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final episodes = widget.episodes;
@@ -1400,15 +1555,11 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Transform.scale(
-                            scaleX: 1.1,
-                            alignment: Alignment.centerLeft,
-                            child: Text(
-                              strings.get('episodes').toUpperCase(),
-                              style: _detailSectionCapsLabel(cs),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
+                          _detailCapsTitleText(
+                            strings.get('episodes').toUpperCase(),
+                            cs,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                           const SizedBox(width: 12),
                           Icon(
@@ -1508,6 +1659,10 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
                     if (ranges.length > 1) const SizedBox(height: 12),
                     ListenableBuilder(
                       listenable: Listenable.merge([
+                        LocaleService.instance.localeNotifier,
+                        EpisodeRatingService.instance.getNotifierForDrama(
+                          widget.dramaId,
+                        ),
                         EpisodeRatingService.instance
                             .getAverageNotifierForDrama(widget.dramaId),
                         EpisodeRatingService.instance.getCountNotifierForDrama(
@@ -1721,11 +1876,33 @@ class _EpisodesBottomSheet extends StatefulWidget {
 class _EpisodesBottomSheetState extends State<_EpisodesBottomSheet> {
   int _rangeIndex = 0;
 
+  void _reloadEpisodeRatingsForLocaleChange() {
+    final id = widget.dramaId.trim();
+    if (id.isEmpty) return;
+    EpisodeRatingService.instance.invalidateEpisodeDataForDrama(id);
+    EpisodeReviewService.instance.clearNotifiersForDrama(id);
+    unawaited(EpisodeRatingService.instance.getMyRatingsForDrama(id));
+    unawaited(EpisodeRatingService.instance.loadEpisodeAverageRatings(id));
+  }
+
   @override
   void initState() {
     super.initState();
-    EpisodeRatingService.instance.getMyRatingsForDrama(widget.dramaId);
-    EpisodeRatingService.instance.loadEpisodeAverageRatings(widget.dramaId);
+    unawaited(EpisodeRatingService.instance.getMyRatingsForDrama(widget.dramaId));
+    unawaited(
+      EpisodeRatingService.instance.loadEpisodeAverageRatings(widget.dramaId),
+    );
+    LocaleService.instance.localeNotifier.addListener(
+      _reloadEpisodeRatingsForLocaleChange,
+    );
+  }
+
+  @override
+  void dispose() {
+    LocaleService.instance.localeNotifier.removeListener(
+      _reloadEpisodeRatingsForLocaleChange,
+    );
+    super.dispose();
   }
 
   @override
@@ -1828,6 +2005,10 @@ class _EpisodesBottomSheetState extends State<_EpisodesBottomSheet> {
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
               child: ListenableBuilder(
                 listenable: Listenable.merge([
+                  LocaleService.instance.localeNotifier,
+                  EpisodeRatingService.instance.getNotifierForDrama(
+                    widget.dramaId,
+                  ),
                   EpisodeRatingService.instance.getAverageNotifierForDrama(
                     widget.dramaId,
                   ),
@@ -2035,6 +2216,7 @@ class _RatingsAndReviewsSection extends StatefulWidget {
   final List<DramaReview> reviews;
   final dynamic strings;
   final VoidCallback onWriteReviewTap;
+
   /// feedPostId → real (likeCount, commentCount, isLiked) from the posts collection.
   final Map<String, ({int likeCount, int commentCount, bool isLiked})> postMeta;
 
@@ -2057,7 +2239,9 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
   @override
   void initState() {
     super.initState();
-    ReviewService.instance.loadIfNeeded();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(ReviewService.instance.loadIfNeeded());
+    });
     _syncLikedIdsFromMeta(widget.postMeta);
   }
 
@@ -2070,7 +2254,8 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
   }
 
   void _syncLikedIdsFromMeta(
-      Map<String, ({int likeCount, int commentCount, bool isLiked})> meta) {
+    Map<String, ({int likeCount, int commentCount, bool isLiked})> meta,
+  ) {
     final liked = <String>{};
     for (final r in widget.reviews) {
       final m = _postMetaForWith(r, meta);
@@ -2081,16 +2266,19 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
     if (liked.isNotEmpty || _likedIds.isNotEmpty) {
       // Only update if there's a real change to avoid unnecessary rebuilds
       if (!setEquals(liked, _likedIds)) {
-        setState(() => _likedIds
-          ..clear()
-          ..addAll(liked));
+        setState(
+          () => _likedIds
+            ..clear()
+            ..addAll(liked),
+        );
       }
     }
   }
 
   ({int likeCount, int commentCount, bool isLiked})? _postMetaForWith(
-      DramaReview r,
-      Map<String, ({int likeCount, int commentCount, bool isLiked})> meta) {
+    DramaReview r,
+    Map<String, ({int likeCount, int commentCount, bool isLiked})> meta,
+  ) {
     final fp = r.feedPostId?.trim();
     if (fp != null && fp.isNotEmpty) {
       final m = meta[fp];
@@ -2103,7 +2291,8 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
 
   /// Returns the postMeta entry for this review (keyed by feedPostId then id).
   ({int likeCount, int commentCount, bool isLiked})? _postMetaFor(
-      DramaReview r) {
+    DramaReview r,
+  ) {
     final fp = r.feedPostId?.trim();
     if (fp != null && fp.isNotEmpty) {
       final m = widget.postMeta[fp];
@@ -2114,8 +2303,7 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
     return null;
   }
 
-  String _reviewKey(DramaReview r) =>
-      r.id ?? '${r.userName}_${r.timeAgo}';
+  String _reviewKey(DramaReview r) => r.id ?? '${r.userName}_${r.timeAgo}';
 
   int _displayLikeCount(DramaReview r) {
     final meta = _postMetaFor(r);
@@ -2151,9 +2339,8 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
         ),
       );
     }
-    final likes = _displayLikeCount(r);
     final body = r.comment.trim();
-    // 평균 점수 블록 오른쪽: 본문만 (닉네임 없음). 좋아요는 본문 아래 보조로만.
+    // 평균 점수 블록 오른쪽: 본문만 (닉네임·좋아요 없음).
     return SizedBox(
       width: double.infinity,
       child: Column(
@@ -2175,25 +2362,6 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
               height: 1.45,
             ),
           ),
-          if (likes > 0) ...[
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(LucideIcons.heart, size: 13, color: cs.primary),
-                const SizedBox(width: 4),
-                Text(
-                  formatCompactCount(likes),
-                  style: GoogleFonts.notoSansKr(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: cs.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
-          ],
         ],
       ),
     );
@@ -2213,10 +2381,12 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
         ? r.feedPostId!.trim()
         : r.id?.trim();
     if (feedPostId != null && feedPostId.isNotEmpty) {
-      unawaited(PostService.instance.togglePostLike(
-        feedPostId,
-        postAuthorUid: r.authorUid,
-      ));
+      unawaited(
+        PostService.instance.togglePostLike(
+          feedPostId,
+          postAuthorUid: r.authorUid,
+        ),
+      );
     }
   }
 
@@ -2279,6 +2449,7 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
       writtenAt: my.modifiedAt ?? my.writtenAt,
       authorUid: AuthService.instance.currentUser.value?.uid,
       feedPostId: my.feedPostId,
+      appLocale: my.appLocale,
     );
   }
 
@@ -2458,8 +2629,9 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
                           child: Center(
                             child: TextButton(
                               style: TextButton.styleFrom(
-                                foregroundColor: cs.onSurfaceVariant
-                                    .withValues(alpha: 0.55),
+                                foregroundColor: cs.onSurfaceVariant.withValues(
+                                  alpha: 0.55,
+                                ),
                               ),
                               onPressed: widget.onReviewsListTap,
                               child: Text(
@@ -2467,8 +2639,9 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
                                 style: GoogleFonts.notoSansKr(
                                   fontSize: 12,
                                   fontWeight: FontWeight.w500,
-                                  color: cs.onSurfaceVariant
-                                      .withValues(alpha: 0.55),
+                                  color: cs.onSurfaceVariant.withValues(
+                                    alpha: 0.55,
+                                  ),
                                 ),
                               ),
                             ),
@@ -2876,6 +3049,7 @@ class _ReviewCard extends StatefulWidget {
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
   final VoidCallback? onShareReview;
+
   /// When non-null, overrides the replies.length used as comment count display.
   final int? commentCountOverride;
   final bool embeddedInMergedSection;
@@ -2923,8 +3097,7 @@ class _ReviewCardState extends State<_ReviewCard> {
   }
 
   List<Widget> _embeddedMineActions(BuildContext context) {
-    if (!widget.isMine ||
-        (widget.onEdit == null && widget.onDelete == null)) {
+    if (!widget.isMine || (widget.onEdit == null && widget.onDelete == null)) {
       return const [];
     }
     return [
@@ -3223,12 +3396,16 @@ class _ReviewCardState extends State<_ReviewCard> {
         children: [
           ..._embeddedMineActions(context),
           DramaReviewsListFeedRow(
-            key: ValueKey<String>(review.id ?? '${review.userName}_${review.timeAgo}'),
+            key: ValueKey<String>(
+              review.id ?? '${review.userName}_${review.timeAgo}',
+            ),
             review: review,
             displayLikeCountOverride: widget.likeCount,
             displayCommentCountOverride: widget.commentCountOverride,
             initialIsLiked: widget.isLiked,
-            rowMaterialColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+            rowMaterialColor: Theme.of(
+              context,
+            ).colorScheme.surfaceContainerHighest,
           ),
         ],
       );
@@ -3517,18 +3694,15 @@ class _SimilarSectionState extends State<_SimilarSection> {
                     const posterRadius = 8.0;
                     const metaFont = 9.0;
                     const starSize = 11.0;
-                    final ratingTextColor =
-                        rating > 0
-                            ? (isDark ? colorScheme.onSurface : Colors.black)
-                            : greyColor;
+                    final ratingTextColor = rating > 0
+                        ? (isDark ? colorScheme.onSurface : Colors.black)
+                        : greyColor;
                     return GestureDetector(
-                      onTap: () {
-                        final detail = DramaListService.instance
-                            .buildDetailForItem(item, country);
-                        Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) => DramaDetailPage(detail: detail),
-                          ),
+                      onTap: () async {
+                        await DramaDetailPage.openFromItem(
+                          context,
+                          item,
+                          country: country,
                         );
                       },
                       child: SizedBox(
@@ -3542,8 +3716,7 @@ class _SimilarSectionState extends State<_SimilarSection> {
                               child: SizedBox(
                                 width: posterW,
                                 height: posterH,
-                                child:
-                                    imageUrl != null && imageUrl.isNotEmpty
+                                child: imageUrl != null && imageUrl.isNotEmpty
                                     ? (imageUrl.startsWith('http')
                                           ? OptimizedNetworkImage(
                                               imageUrl: imageUrl,

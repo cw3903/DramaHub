@@ -2,9 +2,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 
 import '../models/drama.dart';
+import '../models/post.dart';
 import '../models/watchlist_item.dart';
 import 'auth_service.dart';
 import 'drama_list_service.dart';
+import 'locale_service.dart';
 
 /// Letterboxd 스타일 보고 싶은 드라마 — `users/{uid}/watchlist/{dramaId}`.
 class WatchlistService {
@@ -16,6 +18,7 @@ class WatchlistService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   bool _loaded = false;
   String? _lastUid;
+  String? _lastLocaleForFilter;
 
   String? get _uid => AuthService.instance.currentUser.value?.uid;
 
@@ -30,15 +33,20 @@ class WatchlistService {
 
   Future<void> loadIfNeeded({bool force = false}) async {
     final uid = _uid;
+    final loc = LocaleService.instance.locale;
     if (uid != _lastUid) {
       _loaded = false;
       _lastUid = uid;
+    }
+    if (_lastLocaleForFilter != null && _lastLocaleForFilter != loc) {
+      _loaded = false;
     }
     if (force) _loaded = false;
 
     if (uid == null) {
       itemsNotifier.value = [];
       _loaded = true;
+      _lastLocaleForFilter = loc;
       return;
     }
     if (_loaded) return;
@@ -50,6 +58,7 @@ class WatchlistService {
         snapshot = await _watchlistCol.get();
       }
       final list = snapshot.docs
+          .where((d) => Post.userScopedFirestoreDocVisibleForLocale(d.data(), loc))
           .map((d) => WatchlistItem.fromDoc(d.id, d.data()))
           .where((e) => e.dramaId.isNotEmpty)
           .toList();
@@ -60,12 +69,14 @@ class WatchlistService {
       itemsNotifier.value = [];
     }
     _loaded = true;
+    _lastLocaleForFilter = loc;
   }
 
   void clearForLogout() {
     itemsNotifier.value = [];
     _loaded = false;
     _lastUid = null;
+    _lastLocaleForFilter = null;
   }
 
   /// 타 유저 워치리스트 조회.
@@ -88,7 +99,9 @@ class WatchlistService {
             .collection('watchlist')
             .get();
       }
+      final loc = LocaleService.instance.locale;
       final items = snap.docs
+          .where((d) => Post.userScopedFirestoreDocVisibleForLocale(d.data(), loc))
           .map((d) => WatchlistItem.fromDoc(d.id, d.data()))
           .where((e) => e.dramaId.isNotEmpty)
           .toList();
@@ -127,11 +140,13 @@ class WatchlistService {
     final svc = DramaListService.instance;
     final title = svc.getDisplayTitle(dramaId, country).trim();
     final imageUrl = svc.getDisplayImageUrl(dramaId, country);
+    final loc = LocaleService.instance.locale;
     final item = WatchlistItem(
       dramaId: dramaId,
       addedAt: DateTime.now(),
       titleSnapshot: title.isNotEmpty ? title : null,
       imageUrlSnapshot: imageUrl,
+      appLocale: loc,
     );
 
     // Optimistic update first — UI responds immediately (same as remove())

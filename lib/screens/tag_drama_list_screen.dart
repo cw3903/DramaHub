@@ -6,6 +6,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../models/drama.dart';
 import '../services/drama_list_service.dart';
+import '../services/locale_service.dart';
 import '../services/user_profile_service.dart';
 import '../widgets/country_scope.dart';
 import '../widgets/lists_style_subpage_app_bar.dart';
@@ -21,7 +22,8 @@ const int _kTagListMaxPosters = 4;
 
 bool _isFavoriteDrama(String dramaId) {
   if (dramaId.trim().isEmpty) return false;
-  return UserProfileService.instance.favoritesNotifier.value
+  return UserProfileService.instance
+      .favoritesVisibleForCurrentLocale()
       .any((e) => e.dramaId == dramaId);
 }
 
@@ -42,12 +44,12 @@ class _TagDramaListScreenState extends State<TagDramaListScreen> {
     DramaListService.instance.loadFromAsset();
   }
 
-  void _openDrama(BuildContext context, DramaItem item, String? country) {
-    final detail = DramaListService.instance.buildDetailForItem(item, country);
-    Navigator.push<void>(
-      context,
-      CupertinoPageRoute<void>(builder: (_) => DramaDetailPage(detail: detail)),
-    );
+  Future<void> _openDrama(
+    BuildContext context,
+    DramaItem item,
+    String? country,
+  ) async {
+    await DramaDetailPage.openFromItem(context, item, country: country);
   }
 
   @override
@@ -121,7 +123,10 @@ class _TagDramaListScreenState extends State<TagDramaListScreen> {
                 );
               }
               return AnimatedBuilder(
-                animation: UserProfileService.instance.favoritesNotifier,
+                animation: Listenable.merge([
+                  LocaleService.instance.localeNotifier,
+                  UserProfileService.instance.favoritesNotifier,
+                ]),
                 builder: (context, _) {
                   return ColoredBox(
                     color: bodyBg,

@@ -2,6 +2,9 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
 import '../models/drama.dart';
+import 'country_service.dart';
+import 'locale_service.dart';
+import 'review_service.dart';
 
 // ── isolate용 top-level 파싱 함수 ─────────────────────────────────────────────
 
@@ -592,5 +595,40 @@ class DramaListService {
       similar: const [],
       cast: cast,
     );
+  }
+
+  /// [buildDetailForItem] 후 `drama_reviews`를 한 번 읽어 리뷰·집계를 채움 — 상세 첫 프레임부터 숫자 표시.
+  Future<DramaDetail> buildDetailWithReviewBundle(
+    DramaItem item,
+    String? country,
+  ) async {
+    final base = buildDetailForItem(item, country);
+    final id = item.id.trim();
+    if (id.isEmpty) return base;
+    final effective = (country != null && country.trim().isNotEmpty)
+        ? country.trim().toLowerCase()
+        : LocaleService.instance.locale.trim().toLowerCase();
+    try {
+      final bundle = await ReviewService.instance.getDramaReviewDetailBundle(
+        id,
+        country: effective,
+      );
+      if (bundle.reviews.isEmpty) return base;
+      return DramaDetail(
+        item: base.item,
+        synopsis: base.synopsis,
+        year: base.year,
+        genre: base.genre,
+        averageRating: bundle.average,
+        ratingCount: bundle.count,
+        episodes: base.episodes,
+        reviews: bundle.reviews,
+        similar: base.similar,
+        cast: base.cast,
+      );
+    } catch (e, st) {
+      debugPrint('DramaListService.buildDetailWithReviewBundle: $e\n$st');
+      return base;
+    }
   }
 }

@@ -21,11 +21,11 @@ String _postFeedFilterToken(Post post) {
   return post.subreddit.trim().toLowerCase();
 }
 
-/// DramaFeed 리뷰 탭: 본문만 있고 별점 없으면 제외. 봤어요만·별만·본문+별 포함.
+/// DramaFeed 리뷰 탭: 본문도 없고 별점도 없으면 제외.
 bool reviewFeedPostHasWrittenBody(Post post) {
   final b = post.body?.replaceAll(RegExp(r'\s+'), ' ').trim() ?? '';
   final r = post.rating ?? 0;
-  if (b.isNotEmpty && r <= 0) return false;
+  if (b.isEmpty && r <= 0) return false; // ← && 로 수정
   return true;
 }
 
@@ -39,10 +39,11 @@ bool postMatchesFeedFilter(Post post, String board) {
     case 'trend':
       return postInTrendFeed(post);
     case 'talk':
+      // t.isEmpty(레거시 필드 없는 글)는 review가 아닌 경우만 talk으로 처리
       return t == 'talk' ||
           t == 'free' ||
           t == 'general' ||
-          t.isEmpty;
+          (t.isEmpty && post.type?.trim().isEmpty != false);
     case 'ask':
       return t == 'ask' || t == 'question';
     default:

@@ -640,20 +640,11 @@ class CustomDramaListDetailScreen extends StatelessWidget {
                                         imageUrl: imageUrl,
                                         radius: CustomDramaListDetailScreen
                                             ._cellRadius,
-                                        onTap: () {
-                                          final detail = DramaListService
-                                              .instance
-                                              .buildDetailForItem(
-                                                item,
-                                                country,
-                                              );
-                                          Navigator.push<void>(
+                                        onTap: () async {
+                                          await DramaDetailPage.openFromItem(
                                             context,
-                                            CupertinoPageRoute<void>(
-                                              builder: (_) => DramaDetailPage(
-                                                detail: detail,
-                                              ),
-                                            ),
+                                            item,
+                                            country: country,
                                           );
                                         },
                                       );
@@ -724,15 +715,11 @@ class CustomDramaListDetailScreen extends StatelessWidget {
                               return _PosterCell(
                                 imageUrl: imageUrl,
                                 radius: CustomDramaListDetailScreen._cellRadius,
-                                onTap: () {
-                                  final detail = DramaListService.instance
-                                      .buildDetailForItem(item, country);
-                                  Navigator.push<void>(
+                                onTap: () async {
+                                  await DramaDetailPage.openFromItem(
                                     context,
-                                    CupertinoPageRoute<void>(
-                                      builder: (_) =>
-                                          DramaDetailPage(detail: detail),
-                                    ),
+                                    item,
+                                    country: country,
                                   );
                                 },
                               );

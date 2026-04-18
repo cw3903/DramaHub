@@ -4,6 +4,8 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../theme/app_theme.dart';
 import '../services/locale_service.dart';
+import '../services/episode_rating_service.dart';
+import '../services/episode_review_service.dart';
 import '../widgets/lists_style_subpage_app_bar.dart';
 
 /// 표시 언어 4가지: EN / 한국어 / 日本語 / 中文
@@ -88,15 +90,17 @@ class LanguageSelectScreen extends StatelessWidget {
                           color: Colors.transparent,
                           borderRadius: BorderRadius.circular(18),
                           child: InkWell(
-                            onTap: () {
-                              // Navigator 잠금 방지: 먼저 pop한 뒤 다음 프레임에서 언어 변경
-                              WidgetsBinding.instance.addPostFrameCallback((
-                                _,
-                              ) async {
-                                if (!context.mounted) return;
-                                Navigator.pop(context, true);
-                                await LocaleService.instance.setLocale(code);
-                              });
+                            onTap: () async {
+                              final chosen = code;
+                              await LocaleService.instance.setLocale(chosen);
+                              if (!context.mounted) return;
+                              await WidgetsBinding.instance.endOfFrame;
+                              if (!context.mounted) return;
+                              EpisodeRatingService.instance
+                                  .invalidateAllEpisodeCaches();
+                              EpisodeReviewService.instance
+                                  .clearAllEpisodeNotifiers();
+                              popListsStyleSubpage(context, true);
                             },
                             borderRadius: BorderRadius.circular(18),
                             child: Padding(

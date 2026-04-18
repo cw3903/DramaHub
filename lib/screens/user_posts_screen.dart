@@ -7,6 +7,7 @@ import '../models/post.dart';
 import '../services/auth_service.dart';
 import '../services/follow_service.dart';
 import '../services/post_service.dart';
+import '../services/locale_service.dart';
 import '../services/user_profile_service.dart';
 import '../widgets/country_scope.dart';
 import '../widgets/lists_style_subpage_app_bar.dart';
@@ -60,16 +61,34 @@ class _UserPostsScreenState extends State<UserPostsScreen> {
     super.initState();
     _segment = widget.initialSegment.clamp(0, 1);
     // 프로필에서 이미 로드된 데이터가 있으면 즉시 표시 (로딩 스피너 없음).
+    // 프로필 통계는 언어 변경 전에 캐시될 수 있어, 현재 로케일 기준으로만 표시.
+    final loc = LocaleService.instance.locale;
     if (widget.initialPosts != null) {
-      _posts = widget.initialPosts!;
+      _posts = widget.initialPosts!
+          .where((p) => Post.userScopedLocaleVisible(p.country, loc))
+          .toList();
       _loading = false;
     }
     if (widget.initialCommentItems != null) {
-      _commentItems = widget.initialCommentItems!;
+      _commentItems = widget.initialCommentItems!
+          .where((e) => Post.userScopedLocaleVisible(e.post.country, loc))
+          .toList();
       _loading = false;
     }
+    LocaleService.instance.localeNotifier.addListener(_onLocaleChanged);
     _load(); // 최신 데이터로 백그라운드 갱신
     _resolveProfile();
+  }
+
+  @override
+  void dispose() {
+    LocaleService.instance.localeNotifier.removeListener(_onLocaleChanged);
+    super.dispose();
+  }
+
+  void _onLocaleChanged() {
+    if (!mounted) return;
+    _load();
   }
 
   String get _baseNickname {
@@ -167,6 +186,12 @@ class _UserPostsScreenState extends State<UserPostsScreen> {
           comments =
               await PostService.instance.getCommentsByAuthor(_baseNickname);
         }
+        final loc = LocaleService.instance.locale;
+        posts =
+            posts.where((p) => Post.userScopedLocaleVisible(p.country, loc)).toList();
+        comments = comments
+            .where((e) => Post.userScopedLocaleVisible(e.post.country, loc))
+            .toList();
         if (mounted) {
           setState(() {
             _posts = posts;
@@ -180,11 +205,18 @@ class _UserPostsScreenState extends State<UserPostsScreen> {
           PostService.instance.getPostsByAuthor(_postAuthor),
           PostService.instance.getCommentsByAuthor(_baseNickname),
         ]);
+        final loc = LocaleService.instance.locale;
+        final posts = (results[0] as List<Post>)
+            .where((p) => Post.userScopedLocaleVisible(p.country, loc))
+            .toList();
+        final comments = (results[1]
+                as List<({Post post, PostComment comment})>)
+            .where((e) => Post.userScopedLocaleVisible(e.post.country, loc))
+            .toList();
         if (mounted) {
           setState(() {
-            _posts = results[0] as List<Post>;
-            _commentItems =
-                results[1] as List<({Post post, PostComment comment})>;
+            _posts = posts;
+            _commentItems = comments;
             _loading = false;
           });
         }

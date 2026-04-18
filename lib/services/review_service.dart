@@ -5,7 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
-import 'country_service.dart';
+import 'locale_service.dart';
 import '../models/drama.dart';
 import '../models/post.dart';
 import '../utils/format_utils.dart';
@@ -23,6 +23,7 @@ class MyReviewItem {
     this.authorName,
     this.modifiedAt,
     this.feedPostId,
+    this.appLocale,
   });
 
   final String id;
@@ -32,25 +33,32 @@ class MyReviewItem {
   final String comment;
   final DateTime writtenAt;
   final String? authorName;
+
   /// 수정 시각 (null이면 미수정)
   final DateTime? modifiedAt;
+
   /// DramaFeed `posts` 문서 id (삭제 시 해당 글만 제거)
   final String? feedPostId;
 
+  /// 저장 시 앱 언어(us/kr/jp/cn). null이면 레거시.
+  final String? appLocale;
+
   Map<String, dynamic> toMap() => {
-        'id': id,
-        'dramaId': dramaId,
-        'dramaTitle': dramaTitle,
-        'rating': rating,
-        'comment': comment,
-        'writtenAt': writtenAt.millisecondsSinceEpoch,
-        'authorName': authorName,
-        'modifiedAt': modifiedAt?.millisecondsSinceEpoch,
-        if (feedPostId != null) 'feedPostId': feedPostId,
-      };
+    'id': id,
+    'dramaId': dramaId,
+    'dramaTitle': dramaTitle,
+    'rating': rating,
+    'comment': comment,
+    'writtenAt': writtenAt.millisecondsSinceEpoch,
+    'authorName': authorName,
+    'modifiedAt': modifiedAt?.millisecondsSinceEpoch,
+    if (feedPostId != null) 'feedPostId': feedPostId,
+    if (appLocale != null && appLocale!.trim().isNotEmpty) 'country': appLocale!.trim(),
+  };
 
   static MyReviewItem fromMap(Map<String, dynamic> map) {
     final modifiedMs = map['modifiedAt'] as int?;
+    final loc = (map['country'] as String?)?.trim();
     return MyReviewItem(
       id: map['id'] as String? ?? '',
       dramaId: map['dramaId'] as String? ?? '',
@@ -62,8 +70,11 @@ class MyReviewItem {
         isUtc: false,
       ),
       authorName: map['authorName'] as String?,
-      modifiedAt: modifiedMs != null ? DateTime.fromMillisecondsSinceEpoch(modifiedMs, isUtc: false) : null,
+      modifiedAt: modifiedMs != null
+          ? DateTime.fromMillisecondsSinceEpoch(modifiedMs, isUtc: false)
+          : null,
       feedPostId: map['feedPostId'] as String?,
+      appLocale: loc != null && loc.isNotEmpty ? loc : null,
     );
   }
 }
@@ -73,6 +84,17 @@ class ReviewService {
   ReviewService._();
 
   static final ReviewService instance = ReviewService._();
+
+  static var _registeredPreLocaleClear = false;
+
+  /// [main]에서 `runApp` 전에 호출 — 드라마 탭을 한 번도 열지 않아도 언어 변경 시 집계 캐시가 비워지게 함.
+  static void ensurePreLocaleAggregateClearRegistered() {
+    if (_registeredPreLocaleClear) return;
+    _registeredPreLocaleClear = true;
+    LocaleService.registerPreLocaleCommit(() {
+      instance._dramaAggregateStatsCache.clear();
+    });
+  }
 
   static const _key = 'my_drama_reviews';
   static const _maxItems = 200;
@@ -85,13 +107,26 @@ class ReviewService {
   }
 
   /// `dramaId`별 전체 리뷰 평균·개수 — 상세 [getDramaRatingStats]·[prefetchDramaRatingStats]로 채움.
-  final Map<String, ({double average, int count})> _dramaAggregateStatsCache = {};
+  final Map<String, ({double average, int count})> _dramaAggregateStatsCache =
+      {};
 
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final ValueNotifier<List<MyReviewItem>> listNotifier =
       ValueNotifier<List<MyReviewItem>>([]);
   bool _loaded = false;
   String? _lastUid;
+  String? _lastLocaleForFilter;
+
+  bool _myReviewVisibleInLocale(MyReviewItem e) {
+    final m = <String, dynamic>{};
+    if (e.appLocale != null && e.appLocale!.trim().isNotEmpty) {
+      m['country'] = e.appLocale!.trim();
+    }
+    return Post.documentVisibleInCountryFeed(m, LocaleService.instance.locale);
+  }
+
+  bool _firestoreReviewDocVisible(Map<String, dynamic> data) =>
+      Post.documentVisibleInCountryFeed(data, LocaleService.instance.locale);
 
   /// [delete]로 DramaFeed `posts`에서 리뷰 글이 지워졌을 때 +1. [consumeLastDeletedFeedPostIds]로 id 목록 소비.
   final ValueNotifier<int> reviewFeedPostsDeletedTick = ValueNotifier(0);
@@ -109,6 +144,7 @@ class ReviewService {
   String? get _uid => AuthService.instance.currentUser.value?.uid;
 
   Future<void> _load() async {
+    final loc = LocaleService.instance.locale;
     List<MyReviewItem> list = [];
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -117,6 +153,7 @@ class ReviewService {
         list = (jsonDecode(json) as List<dynamic>)
             .map((e) => MyReviewItem.fromMap(e as Map<String, dynamic>))
             .where((e) => e.id.isNotEmpty)
+            .where(_myReviewVisibleInLocale)
             .toList();
       }
     } catch (_) {}
@@ -129,6 +166,7 @@ class ReviewService {
             .where('uid', isEqualTo: uid)
             .get();
         final fromFirestore = snapshot.docs
+            .where((d) => _firestoreReviewDocVisible(d.data()))
             .map((d) => _itemFromFirestore(d.id, d.data()))
             .whereType<MyReviewItem>()
             .toList();
@@ -149,18 +187,31 @@ class ReviewService {
     listNotifier.value = list;
     _loaded = true;
     _lastUid = _uid;
+    _lastLocaleForFilter = loc;
     _persist(list);
   }
 
-  static MyReviewItem? _itemFromFirestore(String id, Map<String, dynamic> data) {
+  static MyReviewItem? _itemFromFirestore(
+    String id,
+    Map<String, dynamic> data,
+  ) {
     final writtenAt = data['writtenAt'];
     final modifiedAt = data['modifiedAt'];
     final written = writtenAt is Timestamp
         ? writtenAt.toDate()
-        : DateTime.fromMillisecondsSinceEpoch((writtenAt as num?)?.toInt() ?? 0, isUtc: false);
+        : DateTime.fromMillisecondsSinceEpoch(
+            (writtenAt as num?)?.toInt() ?? 0,
+            isUtc: false,
+          );
     final modified = modifiedAt is Timestamp
         ? modifiedAt.toDate()
-        : (modifiedAt != null ? DateTime.fromMillisecondsSinceEpoch((modifiedAt as num).toInt(), isUtc: false) : null);
+        : (modifiedAt != null
+              ? DateTime.fromMillisecondsSinceEpoch(
+                  (modifiedAt as num).toInt(),
+                  isUtc: false,
+                )
+              : null);
+    final loc = (data['country'] as String?)?.trim();
     return MyReviewItem(
       id: id,
       dramaId: data['dramaId'] as String? ?? '',
@@ -171,6 +222,7 @@ class ReviewService {
       authorName: data['authorName'] as String?,
       modifiedAt: modified,
       feedPostId: data['feedPostId'] as String?,
+      appLocale: loc != null && loc.isNotEmpty ? loc : null,
     );
   }
 
@@ -178,6 +230,10 @@ class ReviewService {
     final uid = _uid;
     // UID가 바뀌면 이전 사용자 데이터를 즉시 클리어하고 재로드
     if (uid != _lastUid) await clearForLogout();
+    if (_lastLocaleForFilter != null &&
+        _lastLocaleForFilter != LocaleService.instance.locale) {
+      _loaded = false;
+    }
     if (!_loaded) await _load();
   }
 
@@ -190,7 +246,9 @@ class ReviewService {
           .collection(_collection)
           .where('uid', isEqualTo: u)
           .get();
+      final loc = LocaleService.instance.locale;
       final list = snapshot.docs
+          .where((d) => Post.documentVisibleInCountryFeed(d.data(), loc))
           .map((d) => _itemFromFirestore(d.id, d.data()))
           .whereType<MyReviewItem>()
           .toList();
@@ -231,12 +289,16 @@ class ReviewService {
     String? documentId,
     String? feedPostId,
     String? authorPhotoUrl,
+    String? appLocale,
   }) async {
     final uid = _uid;
     final id = (documentId != null && documentId.isNotEmpty)
         ? documentId
         : _newReviewDocId(uid, dramaId);
     final now = DateTime.now();
+    final loc = (appLocale != null && appLocale.trim().isNotEmpty)
+        ? appLocale.trim()
+        : LocaleService.instance.locale;
     final item = MyReviewItem(
       id: id,
       dramaId: dramaId,
@@ -246,6 +308,7 @@ class ReviewService {
       writtenAt: now,
       authorName: authorName,
       feedPostId: feedPostId,
+      appLocale: loc,
     );
     var list = List<MyReviewItem>.from(listNotifier.value);
     list.removeWhere((e) => e.id == id);
@@ -266,6 +329,7 @@ class ReviewService {
           'comment': comment,
           'writtenAt': Timestamp.fromDate(now),
           'authorName': authorName,
+          'country': loc,
         };
         if (feedPostId != null && feedPostId.isNotEmpty) {
           data['feedPostId'] = feedPostId;
@@ -295,8 +359,9 @@ class ReviewService {
 
   /// dramaId에 해당하는 **가장 최근** 내 리뷰 (목록·별점 표시용). 없으면 null.
   MyReviewItem? getByDramaId(String dramaId) {
-    final matches =
-        listNotifier.value.where((e) => e.dramaId == dramaId).toList();
+    final matches = listNotifier.value
+        .where((e) => e.dramaId == dramaId)
+        .toList();
     if (matches.isEmpty) return null;
     matches.sort((a, b) {
       final tb = b.modifiedAt ?? b.writtenAt;
@@ -311,11 +376,18 @@ class ReviewService {
     required String id,
     required double rating,
     required String comment,
+    /// 피드 동기화 등: 게시글 `country`로 덮어쓸 때만 지정. null이면 [old.appLocale] 유지.
+    String? countryOverride,
   }) async {
     final idx = listNotifier.value.indexWhere((e) => e.id == id);
     if (idx < 0) return;
     final old = listNotifier.value[idx];
     final now = DateTime.now();
+    final loc = (countryOverride != null && countryOverride.trim().isNotEmpty)
+        ? countryOverride.trim()
+        : ((old.appLocale != null && old.appLocale!.trim().isNotEmpty)
+              ? old.appLocale!.trim()
+              : LocaleService.instance.locale);
     final item = MyReviewItem(
       id: old.id,
       dramaId: old.dramaId,
@@ -326,6 +398,7 @@ class ReviewService {
       authorName: old.authorName,
       modifiedAt: now,
       feedPostId: old.feedPostId,
+      appLocale: loc,
     );
     final list = List<MyReviewItem>.from(listNotifier.value);
     list[idx] = item;
@@ -344,6 +417,7 @@ class ReviewService {
           'writtenAt': Timestamp.fromDate(old.writtenAt),
           'authorName': old.authorName,
           'modifiedAt': Timestamp.fromDate(now),
+          'country': loc,
         };
         if (old.feedPostId != null && old.feedPostId!.isNotEmpty) {
           data['feedPostId'] = old.feedPostId;
@@ -369,6 +443,9 @@ class ReviewService {
     final idx = listNotifier.value.indexWhere((e) => e.id == reviewId);
     if (idx < 0) return;
     final old = listNotifier.value[idx];
+    final loc = (old.appLocale != null && old.appLocale!.trim().isNotEmpty)
+        ? old.appLocale!.trim()
+        : LocaleService.instance.locale;
     final item = MyReviewItem(
       id: old.id,
       dramaId: old.dramaId,
@@ -379,6 +456,7 @@ class ReviewService {
       authorName: old.authorName,
       modifiedAt: old.modifiedAt,
       feedPostId: feedPostId,
+      appLocale: loc,
     );
     final list = List<MyReviewItem>.from(listNotifier.value);
     list[idx] = item;
@@ -387,10 +465,10 @@ class ReviewService {
     final uid = _uid;
     if (uid != null) {
       try {
-        await _firestore.collection(_collection).doc(reviewId).set(
-              {'feedPostId': feedPostId},
-              SetOptions(merge: true),
-            );
+        await _firestore.collection(_collection).doc(reviewId).set({
+          'feedPostId': feedPostId,
+          'country': loc,
+        }, SetOptions(merge: true));
       } catch (e) {
         debugPrint('ReviewService setFeedPostId: $e');
       }
@@ -487,6 +565,7 @@ class ReviewService {
     listNotifier.value = [];
     _loaded = false;
     _lastUid = null;
+    _lastLocaleForFilter = null;
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_key);
@@ -496,7 +575,10 @@ class ReviewService {
   Future<void> _persist(List<MyReviewItem> list) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_key, jsonEncode(list.map((e) => e.toMap()).toList()));
+      await prefs.setString(
+        _key,
+        jsonEncode(list.map((e) => e.toMap()).toList()),
+      );
     } catch (_) {}
   }
 
@@ -509,8 +591,12 @@ class ReviewService {
     final rating = post.rating ?? 0;
     final comment = (post.body ?? '').trim();
     if (comment.isNotEmpty && rating <= 0) return;
-    final dramaTitle = (post.dramaTitle?.trim().isNotEmpty == true) ? post.dramaTitle!.trim() : post.title.trim();
-    var authorName = post.author.startsWith('u/') ? post.author.substring(2) : post.author;
+    final dramaTitle = (post.dramaTitle?.trim().isNotEmpty == true)
+        ? post.dramaTitle!.trim()
+        : post.title.trim();
+    var authorName = post.author.startsWith('u/')
+        ? post.author.substring(2)
+        : post.author;
     if (authorName.isEmpty) authorName = '익명';
 
     await loadIfNeeded();
@@ -530,17 +616,26 @@ class ReviewService {
           .toList();
       if (unlinked.isNotEmpty) {
         final target = unlinked.first;
-        await updateById(id: target.id, rating: rating, comment: comment);
+        await updateById(
+          id: target.id,
+          rating: rating,
+          comment: comment,
+          countryOverride: post.country,
+        );
         await setFeedPostId(reviewId: target.id, feedPostId: postId);
         return;
       }
     }
 
     if (existing != null) {
-      await updateById(id: postId, rating: rating, comment: comment);
+      await updateById(
+        id: postId,
+        rating: rating,
+        comment: comment,
+        countryOverride: post.country,
+      );
       final cur = getById(postId);
-      if (cur != null &&
-          (cur.feedPostId == null || cur.feedPostId!.isEmpty)) {
+      if (cur != null && (cur.feedPostId == null || cur.feedPostId!.isEmpty)) {
         await setFeedPostId(reviewId: postId, feedPostId: postId);
       }
     } else {
@@ -553,6 +648,7 @@ class ReviewService {
         documentId: postId,
         feedPostId: postId,
         authorPhotoUrl: post.authorPhotoUrl,
+        appLocale: post.country,
       );
     }
   }
@@ -569,21 +665,35 @@ class ReviewService {
     _dramaAggregateStatsCache.remove(id);
   }
 
-  /// 그리드·검색 카드: 집계 캐시가 있고 유효한 리뷰가 있으면 평균, 아니면 카탈로그 [catalogRating].
+  /// 그리드·검색 카드: Firestore 집계 후 캐시가 있으면 그 구역 기준.
+  /// [count]가 0이면(해당 구역에 보이는 리뷰 없음) **0**을 반환해 카탈로그 별점으로 덮어쓰지 않음.
+  /// 캐시 미적재 시에만 [catalogRating].
   double ratingForListCard(String dramaId, {required double catalogRating}) {
     final id = dramaId.trim();
     if (id.isEmpty) return catalogRating;
     final c = _dramaAggregateStatsCache[id];
-    if (c != null && c.count > 0) return c.average;
-    return catalogRating;
+    if (c == null) return catalogRating;
+    if (c.count <= 0) return 0.0;
+    return c.average;
+  }
+
+  /// [prefetchDramaRatingStats] 등으로 채워진 집계 캐시 — 네트워크 없이 동기 조회.
+  ({double average, int count})? peekDramaAggregateStats(String dramaId) {
+    final id = dramaId.trim();
+    if (id.isEmpty) return null;
+    return _dramaAggregateStatsCache[id];
   }
 
   /// 최대 10개씩 `whereIn`으로 배치 조회 후 [_dramaAggregateStatsCache] 갱신.
   Future<void> prefetchDramaRatingStats(Iterable<String> dramaIds) async {
-    final unique =
-        dramaIds.map((e) => e.trim()).where((e) => e.isNotEmpty).toSet().toList();
-    final missing =
-        unique.where((id) => !_dramaAggregateStatsCache.containsKey(id)).toList();
+    final unique = dramaIds
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList();
+    final missing = unique
+        .where((id) => !_dramaAggregateStatsCache.containsKey(id))
+        .toList();
     if (missing.isEmpty) return;
     const chunk = 10;
     for (var i = 0; i < missing.length; i += chunk) {
@@ -598,6 +708,7 @@ class ReviewService {
         final cntBy = <String, int>{};
         for (final doc in snap.docs) {
           final d = doc.data();
+          if (!_firestoreReviewDocVisible(d)) continue;
           final did = (d['dramaId'] as String?)?.trim() ?? '';
           final r = (d['rating'] as num?)?.toDouble() ?? 0;
           if (did.isEmpty || r <= 0) continue;
@@ -606,11 +717,7 @@ class ReviewService {
         }
         for (final id in part) {
           final c = cntBy[id] ?? 0;
-          _putDramaAggregateStats(
-            id,
-            c > 0 ? (sumBy[id] ?? 0) / c : 0.0,
-            c,
-          );
+          _putDramaAggregateStats(id, c > 0 ? (sumBy[id] ?? 0) / c : 0.0, c);
         }
       } catch (e, st) {
         debugPrint('ReviewService.prefetchDramaRatingStats: $e\n$st');
@@ -624,7 +731,9 @@ class ReviewService {
   }
 
   /// 해당 드라마의 전체 유저 리뷰 기준 평균 평점 & 리뷰 수 (상세 페이지 표시용)
-  Future<({double average, int count})> getDramaRatingStats(String dramaId) async {
+  Future<({double average, int count})> getDramaRatingStats(
+    String dramaId,
+  ) async {
     final id = dramaId.trim();
     if (id.isEmpty) return (average: 0.0, count: 0);
     try {
@@ -640,7 +749,9 @@ class ReviewService {
       double sum = 0;
       var count = 0;
       for (final doc in snapshot.docs) {
-        final r = (doc.data()['rating'] as num?)?.toDouble() ?? 0;
+        final d = doc.data();
+        if (!_firestoreReviewDocVisible(d)) continue;
+        final r = (d['rating'] as num?)?.toDouble() ?? 0;
         if (r <= 0) continue;
         sum += r;
         count++;
@@ -656,6 +767,81 @@ class ReviewService {
     }
   }
 
+  /// 상세 페이지 등: `drama_reviews`를 **한 번만** 읽어 평균·개수·목록을 함께 반환.
+  /// [getDramaRatingStats] + [getDramaReviews]를 각각 호출하면 동일 컬렉션을 두 번 읽어 병목이 됨.
+  Future<({double average, int count, List<DramaReview> reviews})>
+  getDramaReviewDetailBundle(String dramaId, {String? country}) async {
+    final id = dramaId.trim();
+    if (id.isEmpty) {
+      return (average: 0.0, count: 0, reviews: <DramaReview>[]);
+    }
+    try {
+      final loc = (country != null && country.trim().isNotEmpty)
+          ? country.trim().toLowerCase()
+          : LocaleService.instance.locale.trim().toLowerCase();
+      final snapshot = await _firestore
+          .collection(_collection)
+          .where('dramaId', isEqualTo: id)
+          .get();
+      if (snapshot.docs.isEmpty) {
+        const r = (average: 0.0, count: 0);
+        _putDramaAggregateStats(id, r.average, r.count);
+        return (average: r.average, count: r.count, reviews: <DramaReview>[]);
+      }
+      final list = <DramaReview>[];
+      for (final doc in snapshot.docs) {
+        final d = doc.data();
+        if (!Post.documentVisibleInCountryFeed(d, loc)) continue;
+        final writtenAt = d['writtenAt'];
+        final at = writtenAt is Timestamp
+            ? writtenAt.toDate()
+            : DateTime.fromMillisecondsSinceEpoch(
+                (writtenAt as num?)?.toInt() ?? 0,
+                isUtc: false,
+              );
+        final ctry = (d['country'] as String?)?.trim();
+        list.add(
+          DramaReview(
+            id: doc.id,
+            userName: d['authorName'] as String? ?? 'u/익명',
+            rating: (d['rating'] as num?)?.toDouble() ?? 0,
+            comment: d['comment'] as String? ?? '',
+            timeAgo: formatTimeAgo(at, loc),
+            likeCount:
+                (d['likeCount'] as num?)?.toInt() ??
+                (d['likes'] as num?)?.toInt() ??
+                0,
+            writtenAt: at,
+            authorPhotoUrl: d['authorPhotoUrl'] as String?,
+            authorUid: d['uid'] as String?,
+            feedPostId: _trimOrNull(d['feedPostId'] as String?),
+            appLocale: ctry != null && ctry.isNotEmpty ? ctry : null,
+          ),
+        );
+      }
+      list.sort((a, b) {
+        final tb = b.writtenAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final ta = a.writtenAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return tb.compareTo(ta);
+      });
+      double sum = 0;
+      var ratingCount = 0;
+      for (final r in list) {
+        if (r.rating <= 0) continue;
+        sum += r.rating;
+        ratingCount++;
+      }
+      final avg = ratingCount > 0 ? sum / ratingCount : 0.0;
+      _putDramaAggregateStats(id, avg, ratingCount);
+      return (average: avg, count: ratingCount, reviews: list);
+    } catch (e) {
+      debugPrint('ReviewService getDramaReviewDetailBundle: $e');
+      const r = (average: 0.0, count: 0);
+      _putDramaAggregateStats(id, r.average, r.count);
+      return (average: r.average, count: r.count, reviews: <DramaReview>[]);
+    }
+  }
+
   /// 해당 드라마의 전체 리뷰 목록 (상세 페이지 평점·리뷰 섹션용)
   /// [country]: `us`/`kr`/`jp`/`cn` — 상대 시각 문자열([formatTimeAgo])에 사용.
   Future<List<DramaReview>> getDramaReviews(
@@ -664,41 +850,11 @@ class ReviewService {
   }) async {
     if (dramaId.isEmpty) return [];
     try {
-      final loc = (country != null && country.trim().isNotEmpty)
-          ? country.trim().toLowerCase()
-          : CountryService.instance.countryNotifier.value.toLowerCase();
-      final snapshot = await _firestore
-          .collection(_collection)
-          .where('dramaId', isEqualTo: dramaId)
-          .get();
-      final list = <DramaReview>[];
-      for (final doc in snapshot.docs) {
-        final d = doc.data();
-        final writtenAt = d['writtenAt'];
-        final at = writtenAt is Timestamp
-            ? writtenAt.toDate()
-            : DateTime.fromMillisecondsSinceEpoch((writtenAt as num?)?.toInt() ?? 0, isUtc: false);
-        list.add(DramaReview(
-          id: doc.id,
-          userName: d['authorName'] as String? ?? 'u/익명',
-          rating: (d['rating'] as num?)?.toDouble() ?? 0,
-          comment: d['comment'] as String? ?? '',
-          timeAgo: formatTimeAgo(at, loc),
-          likeCount: (d['likeCount'] as num?)?.toInt() ??
-              (d['likes'] as num?)?.toInt() ??
-              0,
-          writtenAt: at,
-          authorPhotoUrl: d['authorPhotoUrl'] as String?,
-          authorUid: d['uid'] as String?,
-          feedPostId: _trimOrNull(d['feedPostId'] as String?),
-        ));
-      }
-      list.sort((a, b) {
-        final tb = b.writtenAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-        final ta = a.writtenAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-        return tb.compareTo(ta);
-      });
-      return list;
+      final bundle = await getDramaReviewDetailBundle(
+        dramaId,
+        country: country,
+      );
+      return bundle.reviews;
     } catch (e) {
       debugPrint('ReviewService getDramaReviews: $e');
       return [];

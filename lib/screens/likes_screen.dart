@@ -1,3 +1,5 @@
+import 'dart:async' show unawaited;
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/cupertino.dart';
@@ -63,7 +65,8 @@ class _LikesScreenState extends State<LikesScreen>
     final headerBg = listsStyleSubpageHeaderBackground(theme);
     final overlay = listsStyleSubpageSystemOverlay(theme, headerBg);
 
-    return ListsStyleSwipeBack(
+    return ListsStyleSubpageHorizontalSwipeBack(
+      onSwipePop: () => popListsStyleSubpage(context),
       child: AnnotatedRegion<SystemUiOverlayStyle>(
       value: overlay,
       child: Scaffold(
@@ -131,16 +134,14 @@ class _LikesTabBody extends StatefulWidget {
   State<_LikesTabBody> createState() => _LikesTabBodyState();
 }
 
-typedef _LikesFetched = ({
-  List<Post> likedPosts,
-  List<({Post post, PostComment comment})> likedComments,
-});
-
 class _LikesTabBodyState extends State<_LikesTabBody> {
-  Future<_LikesFetched>? _dataFuture;
+  List<Post> _likedPosts = [];
+  List<({Post post, PostComment comment})>? _likedComments;
 
-  /// 상대 시간 문자열에 쓴 로케(us/kr/jp/cn). 언어 변경 시 다시 불러오기 위해 추적.
-  String _timeLocaleKey = '';
+  /// 포스트 쿼리 대기 중이고 화면에 캐시도 없을 때만 상단 바 표시.
+  bool _postsLoading = false;
+  int _loadGen = 0;
+  String _lastKickoffLocale = '';
 
   String _timeLocaleForFetch(BuildContext context) {
     return CountryScope.maybeOf(context)?.country ??
@@ -151,103 +152,160 @@ class _LikesTabBodyState extends State<_LikesTabBody> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     final loc = _timeLocaleForFetch(context);
-    if (_timeLocaleKey != loc || _dataFuture == null) {
-      _timeLocaleKey = loc;
-      _dataFuture = _fetch(loc);
-    }
+    if (_lastKickoffLocale == loc) return;
+    _lastKickoffLocale = loc;
+    unawaited(_loadLikesData(loc, usePeekCache: true));
   }
 
-  Future<_LikesFetched> _fetch(String countryForTimeAgo) async {
+  /// 포스트는 즉시 그리고, 댓글은 `getCommentsLikedByUid`(전체 글 스캔) 끝나면 탭만 갱신.
+  /// 프로필에서 [PostService.cacheLikedPostsForLikesScreen]이 있으면 첫 프레임부터 목록 표시.
+  Future<void> _loadLikesData(String loc, {required bool usePeekCache}) async {
+    _loadGen++;
+    final gen = _loadGen;
     final uid = AuthService.instance.currentUser.value?.uid ?? '';
+
     if (uid.isEmpty) {
-      return (
-        likedPosts: <Post>[],
-        likedComments: <({Post post, PostComment comment})>[],
-      );
+      if (!mounted || gen != _loadGen) return;
+      setState(() {
+        _likedPosts = [];
+        _likedComments = [];
+        _postsLoading = false;
+      });
+      return;
     }
-    // 포스트 + 코멘트 병렬 로드
-    final results = await Future.wait([
-      PostService.instance.getPostsLikedByUid(
-        uid,
-        countryForTimeAgo: countryForTimeAgo,
-      ),
-      PostService.instance.getCommentsLikedByUid(
-        uid,
-        countryForTimeAgo: countryForTimeAgo,
-      ),
-    ]);
-    return (
-      likedPosts: results[0] as List<Post>,
-      likedComments: results[1] as List<({Post post, PostComment comment})>,
+
+    if (usePeekCache) {
+      final peek = PostService.instance.peekCachedLikedPostsForLikesScreen(uid);
+      if (!mounted || gen != _loadGen) return;
+      if (peek != null) {
+        setState(() {
+          _likedPosts = List<Post>.from(peek);
+          _postsLoading = false;
+          _likedComments = null;
+        });
+      } else {
+        setState(() {
+          _likedPosts = [];
+          _postsLoading = true;
+          _likedComments = null;
+        });
+      }
+    } else {
+      if (!mounted || gen != _loadGen) return;
+      setState(() {
+        _postsLoading = true;
+        _likedComments = null;
+      });
+    }
+
+    final postsFuture = PostService.instance.getPostsLikedByUid(
+      uid,
+      countryForTimeAgo: loc,
+      hydrateViewerVotes: false,
     );
+    final commentsFuture = PostService.instance.getCommentsLikedByUid(
+      uid,
+      countryForTimeAgo: loc,
+    );
+
+    postsFuture.then((posts) {
+      if (!mounted || gen != _loadGen) return;
+      PostService.instance.cacheLikedPostsForLikesScreen(uid, posts);
+      setState(() {
+        _likedPosts = posts;
+        _postsLoading = false;
+      });
+    }).catchError((_) {
+      if (!mounted || gen != _loadGen) return;
+      setState(() {
+        _likedPosts = [];
+        _postsLoading = false;
+      });
+    });
+
+    commentsFuture.then((comments) {
+      if (!mounted || gen != _loadGen) return;
+      setState(() {
+        _likedComments = comments;
+      });
+    }).catchError((_) {
+      if (!mounted || gen != _loadGen) return;
+      setState(() {
+        _likedComments = [];
+      });
+    });
+
+    if (!usePeekCache) {
+      try {
+        await Future.wait([postsFuture, commentsFuture]);
+      } catch (_) {}
+    }
   }
 
   Future<void> _onRefresh() async {
     final uid = AuthService.instance.currentUser.value?.uid ?? '';
     if (uid.isEmpty) return;
     final loc = _timeLocaleForFetch(context);
-    setState(() {
-      _timeLocaleKey = loc;
-      _dataFuture = _fetch(loc);
-    });
-    await _dataFuture;
+    _lastKickoffLocale = loc;
+    await _loadLikesData(loc, usePeekCache: false);
   }
 
   @override
   Widget build(BuildContext context) {
     final s = widget.s;
     final cs = widget.cs;
+    final uid = AuthService.instance.currentUser.value?.uid ?? '';
+    final postsOnly = <Post>[];
+    final reviewsOnly = <Post>[];
+    for (final p in _likedPosts) {
+      if (uid.isEmpty || !p.likedBy.contains(uid)) continue;
+      if (postDisplayType(p) == 'review') {
+        reviewsOnly.add(p);
+      } else {
+        postsOnly.add(p);
+      }
+    }
 
-    return FutureBuilder<_LikesFetched>(
-      future: _dataFuture,
-      builder: (context, snap) {
-        if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        final data = snap.data;
-        final all = data?.likedPosts ?? [];
-        final likedComments = data?.likedComments ?? [];
-        final uid = AuthService.instance.currentUser.value?.uid ?? '';
-        final postsOnly = <Post>[];
-        final reviewsOnly = <Post>[];
-        for (final p in all) {
-          // 쿼리는 likedBy 기준이지만, 탭 분류 전에 한 번 더 확인 (리뷰 탭 = 내가 좋아요한 리뷰 글만).
-          if (uid.isEmpty || !p.likedBy.contains(uid)) continue;
-          if (postDisplayType(p) == 'review') {
-            reviewsOnly.add(p);
-          } else {
-            postsOnly.add(p);
-          }
-        }
-
-        return TabBarView(
-          controller: widget.tabController,
-          children: [
-            RefreshIndicator(
-              onRefresh: _onRefresh,
-              child: _LikedReviewsList(
-                posts: reviewsOnly,
-                s: s,
-                cs: cs,
-                emptyKey: 'likesEmptyReviews',
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (_postsLoading && _likedPosts.isEmpty)
+          const LinearProgressIndicator(minHeight: 2),
+        Expanded(
+          child: TabBarView(
+            controller: widget.tabController,
+            physics: const NeverScrollableScrollPhysics(),
+            children: [
+              RefreshIndicator(
+                onRefresh: _onRefresh,
+                child: _LikedReviewsList(
+                  posts: reviewsOnly,
+                  s: s,
+                  cs: cs,
+                  emptyKey: 'likesEmptyReviews',
+                ),
               ),
-            ),
-            RefreshIndicator(
-              onRefresh: _onRefresh,
-              child: _LikedPostsList(
-                posts: postsOnly,
-                s: s,
-                cs: cs,
-                emptyKey: 'likesEmptyPosts',
+              RefreshIndicator(
+                onRefresh: _onRefresh,
+                child: _LikedPostsList(
+                  posts: postsOnly,
+                  s: s,
+                  cs: cs,
+                  emptyKey: 'likesEmptyPosts',
+                ),
               ),
-            ),
-            RefreshIndicator(
-              onRefresh: _onRefresh,
-              child: _LikedCommentsList(items: likedComments, s: s, cs: cs),
-            ),
-          ],
-        );
-      },
+              RefreshIndicator(
+                onRefresh: _onRefresh,
+                child: _LikedCommentsList(
+                  items: _likedComments,
+                  s: s,
+                  cs: cs,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -712,13 +770,32 @@ class _LikedCommentsList extends StatelessWidget {
     required this.cs,
   });
 
-  final List<({Post post, PostComment comment})> items;
+  /// null: 아직 로딩 중(포스트는 이미 표시 가능).
+  final List<({Post post, PostComment comment})>? items;
   final dynamic s;
   final ColorScheme cs;
 
   @override
   Widget build(BuildContext context) {
-    if (items.isEmpty) {
+    if (items == null) {
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          SizedBox(
+            height: MediaQuery.sizeOf(context).height * 0.35,
+            child: const Center(
+              child: SizedBox(
+                width: 28,
+                height: 28,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+    final rows = items!;
+    if (rows.isEmpty) {
       return ListView(
         physics: const AlwaysScrollableScrollPhysics(),
         children: [
@@ -744,7 +821,7 @@ class _LikedCommentsList extends StatelessWidget {
     return ListView.separated(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.only(top: 4, bottom: 32),
-      itemCount: items.length,
+      itemCount: rows.length,
       separatorBuilder: (context, _) {
         final isDark = Theme.of(context).brightness == Brightness.dark;
         return Divider(
@@ -756,7 +833,7 @@ class _LikedCommentsList extends StatelessWidget {
         );
       },
       itemBuilder: (context, index) {
-        final item = items[index];
+        final item = rows[index];
         final country = CountryScope.of(context).country;
         final commentBody = item.comment.text
             .replaceAll(RegExp(r'\s+'), ' ')

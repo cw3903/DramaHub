@@ -73,6 +73,8 @@ class DramaReview {
     this.authorUid,
     /// DramaFeed `posts` 문서 id (없으면 [id]로 피드 조회 시도)
     this.feedPostId,
+    /// `drama_reviews.country` (us/kr/jp/cn). null이면 레거시.
+    this.appLocale,
   });
   final String userName;
   final double rating;
@@ -92,6 +94,8 @@ class DramaReview {
   final String? authorUid;
   /// 홈 리뷰 피드 `posts`와 1:1일 때만 채워짐
   final String? feedPostId;
+
+  final String? appLocale;
 }
 
 /// 드라마 상세 정보

@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
+import '../models/post.dart';
 import 'auth_service.dart';
+import 'locale_service.dart';
 
 /// 회차별 별점 저장 (Firestore). 로그인 사용자만 영구 저장.
 class EpisodeRatingService {
@@ -21,6 +23,33 @@ class EpisodeRatingService {
   final Map<String, ValueNotifier<Map<int, int>>> _countNotifiers = {};
 
   String? get _uid => AuthService.instance.currentUser.value?.uid;
+
+  static bool _docVisibleInCurrentLocale(Map<String, dynamic> data) =>
+      Post.userScopedFirestoreDocVisibleForLocale(
+        data,
+        LocaleService.instance.locale,
+      );
+
+  /// 언어 전환 시 회차 집계·내 별점 캐시 초기화.
+  void invalidateAllEpisodeCaches() {
+    for (final n in _notifiers.values) {
+      n.value = {};
+    }
+    for (final n in _averageNotifiers.values) {
+      n.value = {};
+    }
+    for (final n in _countNotifiers.values) {
+      n.value = {};
+    }
+  }
+
+  void invalidateEpisodeDataForDrama(String dramaId) {
+    final id = dramaId.trim();
+    if (id.isEmpty) return;
+    _notifiers.remove(id);
+    _averageNotifiers.remove(id);
+    _countNotifiers.remove(id);
+  }
 
   /// 해당 드라마의 내 회차별 별점 갱신용. 없으면 생성 후 반환.
   ValueNotifier<Map<int, double>> getNotifierForDrama(String dramaId) {
@@ -49,18 +78,32 @@ class EpisodeRatingService {
       return {};
     }
     try {
+      final loc = LocaleService.instance.locale;
       final snapshot = await _firestore
           .collection(_collection)
           .where('uid', isEqualTo: uid)
           .where('dramaId', isEqualTo: dramaId)
           .get();
-      final map = <int, double>{};
+      final best = <int, ({double r, int score})>{};
       for (final doc in snapshot.docs) {
         final data = doc.data();
-        final ep = data['episodeNumber'] as int?;
+        if (!_docVisibleInCurrentLocale(data)) continue;
+        final epNum = data['episodeNumber'];
+        final ep = epNum is int
+            ? epNum
+            : (epNum is num ? epNum.toInt() : null);
         final r = (data['rating'] as num?)?.toDouble();
-        if (ep != null && r != null) map[ep] = r;
+        if (ep == null || ep <= 0 || r == null || r <= 0) continue;
+        final c = (data['country'] as String?)?.trim() ?? '';
+        final score = (c == loc) ? 2 : (c.isEmpty ? 0 : 1);
+        final prev = best[ep];
+        if (prev == null || score >= prev.score) {
+          best[ep] = (r: r, score: score);
+        }
       }
+      final map = <int, double>{
+        for (final e in best.entries) e.key: e.value.r,
+      };
       _notifiers[dramaId] ??= ValueNotifier<Map<int, double>>({});
       _notifiers[dramaId]!.value = Map.from(map);
       return map;
@@ -86,14 +129,47 @@ class EpisodeRatingService {
 
     if (uid != null && dramaId.isNotEmpty) {
       try {
-        final docId = '${uid}_${dramaId}_$episodeNumber';
-        await _firestore.collection(_collection).doc(docId).set({
+        final loc = LocaleService.instance.locale;
+        final snap = await _firestore
+            .collection(_collection)
+            .where('uid', isEqualTo: uid)
+            .where('dramaId', isEqualTo: dramaId)
+            .get();
+        DocumentReference<Map<String, dynamic>>? scopedRef;
+        DocumentReference<Map<String, dynamic>>? legacyRef;
+        for (final d in snap.docs) {
+          final data = d.data();
+          final epNum = data['episodeNumber'];
+          final ep = epNum is int
+              ? epNum
+              : (epNum is num ? epNum.toInt() : null);
+          if (ep != episodeNumber) continue;
+          if (!_docVisibleInCurrentLocale(data)) continue;
+          final c = (data['country'] as String?)?.trim() ?? '';
+          if (c == loc) {
+            scopedRef = d.reference;
+            break;
+          }
+          if (c.isEmpty) {
+            legacyRef = d.reference;
+          }
+        }
+        final payload = <String, dynamic>{
           'uid': uid,
           'dramaId': dramaId,
           'episodeNumber': episodeNumber,
           'rating': clamped,
+          'country': loc,
           'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
+        };
+        if (scopedRef != null) {
+          await scopedRef.set(payload, SetOptions(merge: true));
+        } else if (legacyRef != null) {
+          await legacyRef.set(payload, SetOptions(merge: true));
+        } else {
+          payload['createdAt'] = FieldValue.serverTimestamp();
+          await _firestore.collection(_collection).add(payload);
+        }
         await loadEpisodeAverageRatings(dramaId);
       } catch (e) {
         debugPrint('EpisodeRatingService setRating: $e');
@@ -127,6 +203,7 @@ class EpisodeRatingService {
           .get();
       for (final doc in ratingsSnap.docs) {
         final data = doc.data();
+        if (!_docVisibleInCurrentLocale(data)) continue;
         final epNum = data['episodeNumber'];
         final ep = epNum is int ? epNum : (epNum is num ? epNum.toInt() : null);
         final r = (data['rating'] as num?)?.toDouble();
@@ -145,6 +222,7 @@ class EpisodeRatingService {
           .get();
       for (final doc in reviewsSnap.docs) {
         final data = doc.data();
+        if (!_docVisibleInCurrentLocale(data)) continue;
         final epNum = data['episodeNumber'];
         final ep = epNum is int ? epNum : (epNum is num ? epNum.toInt() : null);
         final r = (data['rating'] as num?)?.toDouble();
@@ -156,7 +234,9 @@ class EpisodeRatingService {
     }
 
     if (sumByEp.isEmpty) {
-      return getAverageNotifierForDrama(dramaId).value;
+      getAverageNotifierForDrama(dramaId).value = {};
+      getCountNotifierForDrama(dramaId).value = {};
+      return {};
     }
 
     final avg = <int, double>{};
@@ -164,17 +244,15 @@ class EpisodeRatingService {
       final n = countByEp[e] ?? 0;
       if (n > 0) avg[e] = sumByEp[e]! / n;
     }
-    final mergedAvg = Map<int, double>.from(getAverageNotifierForDrama(dramaId).value)..addAll(avg);
-    getAverageNotifierForDrama(dramaId).value = mergedAvg;
+    getAverageNotifierForDrama(dramaId).value = avg;
 
     final participantCount = <int, int>{};
     for (final e in uidSetByEp.keys) {
       participantCount[e] = uidSetByEp[e]!.length;
     }
-    final mergedCount = Map<int, int>.from(getCountNotifierForDrama(dramaId).value)..addAll(participantCount);
-    getCountNotifierForDrama(dramaId).value = mergedCount;
+    getCountNotifierForDrama(dramaId).value = participantCount;
 
-    return mergedAvg;
+    return avg;
   }
 
   /// 외부(EpisodeReviewService 등)에서 로컬 리뷰 목록으로 평균을 직접 갱신할 때 사용.

@@ -15,6 +15,7 @@ import '../utils/format_utils.dart';
 import '../utils/post_board_utils.dart';
 import 'auth_service.dart';
 import 'drama_list_service.dart';
+import 'locale_service.dart';
 import 'level_service.dart';
 import 'notification_service.dart';
 import 'review_service.dart';
@@ -66,6 +67,32 @@ class PostService {
 
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseStorage _storage = FirebaseStorage.instance;
+
+  /// [getPostsLikedByUid] 결과 — 프로필에서 미리 로드 시 [cacheLikedPostsForLikesScreen],
+  /// 좋아요 화면은 [peekCachedLikedPostsForLikesScreen]으로 첫 프레임을 바로 채움.
+  String? _likedPostsScreenCacheKey;
+  List<Post>? _likedPostsScreenCache;
+
+  void cacheLikedPostsForLikesScreen(String uid, List<Post> posts) {
+    if (uid.isEmpty) return;
+    _likedPostsScreenCacheKey = '${uid}_${LocaleService.instance.locale}';
+    _likedPostsScreenCache = List<Post>.from(posts);
+  }
+
+  /// 현재 로케일·uid와 키가 맞을 때만. 없으면 null.
+  List<Post>? peekCachedLikedPostsForLikesScreen(String uid) {
+    if (uid.isEmpty) return null;
+    final key = '${uid}_${LocaleService.instance.locale}';
+    if (_likedPostsScreenCacheKey != key || _likedPostsScreenCache == null) {
+      return null;
+    }
+    return _likedPostsScreenCache;
+  }
+
+  void clearLikedPostsScreenCache() {
+    _likedPostsScreenCacheKey = null;
+    _likedPostsScreenCache = null;
+  }
 
   static String _contentTypeForExtension(String ext) {
     switch (ext) {
@@ -260,30 +287,49 @@ class PostService {
   }
 
   Future<Post> _mergePostWithViewerVoteDocs(Post post, String uid) async {
-    final snaps = await Future.wait([
-      _postLikeDoc(post.id, uid).get(),
-      _postDislikeDoc(post.id, uid).get(),
-    ]);
-    final likeSnap = snaps[0];
-    final dislikeSnap = snaps[1];
-    final likeDoc = likeSnap.exists;
-    final dislikeDoc = dislikeSnap.exists;
-    var hasLike = likeDoc || post.likedBy.contains(uid);
-    var hasDislike = dislikeDoc || post.dislikedBy.contains(uid);
-    if (hasLike && hasDislike) {
-      if (likeDoc && !dislikeDoc) {
-        hasDislike = false;
-      } else if (!likeDoc && dislikeDoc) {
-        hasLike = false;
-      } else if (likeDoc && dislikeDoc) {
-        hasDislike = false;
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        final snaps = await Future.wait([
+          _postLikeDoc(post.id, uid).get(),
+          _postDislikeDoc(post.id, uid).get(),
+        ]);
+        final likeSnap = snaps[0];
+        final dislikeSnap = snaps[1];
+        final likeDoc = likeSnap.exists;
+        final dislikeDoc = dislikeSnap.exists;
+        var hasLike = likeDoc || post.likedBy.contains(uid);
+        var hasDislike = dislikeDoc || post.dislikedBy.contains(uid);
+        if (hasLike && hasDislike) {
+          if (likeDoc && !dislikeDoc) {
+            hasDislike = false;
+          } else if (!likeDoc && dislikeDoc) {
+            hasLike = false;
+          } else if (likeDoc && dislikeDoc) {
+            hasDislike = false;
+          }
+        }
+        var lb = post.likedBy.where((u) => u != uid).toList();
+        var db = post.dislikedBy.where((u) => u != uid).toList();
+        if (hasLike) lb = [...lb, uid];
+        if (hasDislike) db = [...db, uid];
+        return post.copyWith(likedBy: lb, dislikedBy: db);
+      } catch (e, st) {
+        final retry = e is FirebaseException &&
+            (e.code == 'unavailable' ||
+                e.code == 'deadline-exceeded' ||
+                e.code == 'resource-exhausted');
+        if (retry && attempt < 2) {
+          await Future<void>.delayed(Duration(milliseconds: 120 * (1 << attempt)));
+          continue;
+        }
+        if (kDebugMode) {
+          debugPrint('_mergePostWithViewerVoteDocs ${post.id}: $e');
+          debugPrint('$st');
+        }
+        return post;
       }
     }
-    var lb = post.likedBy.where((u) => u != uid).toList();
-    var db = post.dislikedBy.where((u) => u != uid).toList();
-    if (hasLike) lb = [...lb, uid];
-    if (hasDislike) db = [...db, uid];
-    return post.copyWith(likedBy: lb, dislikedBy: db);
+    return post;
   }
 
   /// Firestore에 넣을 수 있는 타입만 남기기 (직렬화 오류 방지)
@@ -560,10 +606,16 @@ class PostService {
         'commentsList': FieldValue.arrayUnion([commentMap]),
         'comments': FieldValue.increment(1),
       });
-      // 글 작성자에게 댓글 알림
+      // 글 작성자에게 댓글 알림 (구글엔 authorUid 없을 수 있음 → 닉네임으로 uid 조회)
       final postData = docSnap.data()!;
-      final postAuthorUid = postData['authorUid'] as String?;
-      if (postAuthorUid != null) {
+      var postAuthorUid = (postData['authorUid'] as String?)?.trim();
+      postAuthorUid = (postAuthorUid != null && postAuthorUid.isNotEmpty)
+          ? postAuthorUid
+          : post.authorUid?.trim();
+      postAuthorUid = (postAuthorUid != null && postAuthorUid.isNotEmpty)
+          ? postAuthorUid
+          : await NotificationService.instance.getUidByNickname(post.author);
+      if (postAuthorUid != null && postAuthorUid.isNotEmpty) {
         await NotificationService.instance.send(
           toUid: postAuthorUid,
           type: NotificationType.comment,
@@ -717,10 +769,14 @@ class PostService {
           .limit(40)
           .get();
       if (snap.docs.isEmpty) return null;
+      final loc = locale?.trim();
+      final viewer =
+          (loc != null && loc.isNotEmpty) ? loc : LocaleService.instance.locale;
       DocumentSnapshot<Map<String, dynamic>>? best;
       var bestAt = DateTime.fromMillisecondsSinceEpoch(0);
       for (final doc in snap.docs) {
         final data = doc.data();
+        if (!Post.documentVisibleInCountryFeed(data, viewer)) continue;
         final type = (data['type'] as String?)?.trim().toLowerCase();
         if (type != 'review') continue;
         final createdAt = data['createdAt'];
@@ -765,8 +821,9 @@ class PostService {
       await UserProfileService.instance.loadIfNeeded();
       await LevelService.instance.loadIfNeeded();
       final author = await UserProfileService.instance.getAuthorForPost();
-      final rawCountry = UserProfileService.instance.signupCountryNotifier.value?.trim().toLowerCase();
-      final countryOr = (rawCountry != null && rawCountry.isNotEmpty) ? rawCountry : 'us';
+      final countryOr = Post.normalizeFeedCountry(
+        UserProfileService.instance.signupCountryNotifier.value?.trim(),
+      );
       final titleText = dramaTitle.trim().isNotEmpty
           ? dramaTitle.trim()
           : DramaListService.instance.getDisplayTitle(did, countryOr);
@@ -855,10 +912,9 @@ class PostService {
       await UserProfileService.instance.loadIfNeeded();
       await LevelService.instance.loadIfNeeded();
       final author = await UserProfileService.instance.getAuthorForPost();
-      final rawCountry =
-          UserProfileService.instance.signupCountryNotifier.value?.trim().toLowerCase();
-      final countryOr =
-          (rawCountry != null && rawCountry.isNotEmpty) ? rawCountry : 'us';
+      final countryOr = Post.normalizeFeedCountry(
+        UserProfileService.instance.signupCountryNotifier.value?.trim(),
+      );
       final titleText = dramaTitle.trim().isNotEmpty
           ? dramaTitle.trim()
           : DramaListService.instance.getDisplayTitle(did, countryOr);
@@ -915,8 +971,9 @@ class PostService {
     final uid = AuthService.instance.currentUser.value?.uid;
     if (uid == null || postId.isEmpty) return null;
     bool? nowLiked;
-    String? notifyUid = postAuthorUid;
+    String? notifyUid = postAuthorUid?.trim();
     String? notifyTitle = postTitle;
+    String? authorLabelForNotify;
     try {
       await _firestore.runTransaction((transaction) async {
         final postRef = _col.doc(postId);
@@ -930,7 +987,10 @@ class PostService {
         final likeSnap = await transaction.get(likeRef);
         final dislikeSnap = await transaction.get(dislikeRef);
         final data = postSnap.data()!;
-        notifyUid ??= data['authorUid'] as String?;
+        authorLabelForNotify = data['author'] as String?;
+        final au = (data['authorUid'] as String?)?.trim();
+        final prevNotify = notifyUid;
+        notifyUid = (prevNotify != null && prevNotify.isNotEmpty) ? prevNotify : au;
         notifyTitle ??= (data['title'] as String?) ?? '';
         final likedBy = List<String>.from((data['likedBy'] as List<dynamic>?)?.map((e) => e.toString()) ?? []);
         final dislikedBy = List<String>.from((data['dislikedBy'] as List<dynamic>?)?.map((e) => e.toString()) ?? []);
@@ -973,7 +1033,15 @@ class PostService {
           nowLiked = true;
         }
       });
-      final notifyTargetUid = notifyUid;
+      var notifyTargetUid = notifyUid;
+      if (nowLiked == true &&
+          (notifyTargetUid == null || notifyTargetUid.isEmpty)) {
+        final label = authorLabelForNotify?.trim();
+        if (label != null && label.isNotEmpty) {
+          notifyTargetUid =
+              await NotificationService.instance.getUidByNickname(label);
+        }
+      }
       if (nowLiked == true && notifyTargetUid != null && notifyTargetUid.isNotEmpty) {
         final myNickname = 'u/${UserProfileService.instance.nicknameNotifier.value ?? uid}';
         unawaited(
@@ -1112,8 +1180,11 @@ class PostService {
       await docRef.update({'commentsList': newCommentsList});
       // 댓글 작성자에게 좋아요 알림
       if (newLiked) {
-        final commentAuthorUid = await NotificationService.instance.getUidByNickname(found.author);
-        if (commentAuthorUid != null) {
+        final cu = found.authorUid?.trim();
+        final commentAuthorUid = (cu != null && cu.isNotEmpty)
+            ? cu
+            : await NotificationService.instance.getUidByNickname(found.author);
+        if (commentAuthorUid != null && commentAuthorUid.isNotEmpty) {
           final myNickname = 'u/${UserProfileService.instance.nicknameNotifier.value ?? uid}';
           await NotificationService.instance.send(
             toUid: commentAuthorUid,
@@ -1231,7 +1302,12 @@ class PostService {
   /// 특정 작성자의 글만 조회 (닉네임/작성자명 기준)
   Future<List<Post>> getPostsByAuthor(String author) async {
     final all = await getPostsAllPages();
-    return all.where((p) => p.author == author).toList();
+    final loc = LocaleService.instance.locale;
+    return all
+        .where((p) =>
+            p.author == author &&
+            Post.documentVisibleInCountryFeed({'country': p.country}, loc))
+        .toList();
   }
 
   /// `authorUid`가 일치하는 게시글 (타인 프로필 통계·글 목록용).
@@ -1240,10 +1316,14 @@ class PostService {
     if (u.isEmpty) return [];
     try {
       final snap = await _col.where('authorUid', isEqualTo: u).get();
+      final loc = LocaleService.instance.locale;
       final out = <({Post post, DateTime sortAt})>[];
       for (final doc in snap.docs) {
         try {
           final data = Map<String, dynamic>.from(doc.data());
+          if (!Post.documentVisibleInCountryFeed(data, loc)) {
+            continue;
+          }
           data['id'] = doc.id;
           final createdAt = data['createdAt'];
           final sortAt = createdAt is Timestamp
@@ -1272,8 +1352,12 @@ class PostService {
     if (u.isEmpty) return [];
     try {
       final posts = await getPostsAllPages();
+      final loc = LocaleService.instance.locale;
       final result = <({Post post, PostComment comment})>[];
       for (final post in posts) {
+        if (!Post.documentVisibleInCountryFeed({'country': post.country}, loc)) {
+          continue;
+        }
         void collect(List<PostComment> list) {
           for (final c in list) {
             final cu = c.authorUid?.trim();
@@ -1365,9 +1449,12 @@ class PostService {
   }
 
   /// 프로필 별점 분포: `posts`(type=review, authorUid) + `drama_reviews`(uid). dramaId 기준 중복 제거.
+  /// [Post.documentVisibleInCountryFeed]: 현재 앱 언어(us/kr/jp/cn)와 문서 `country`가 맞는 것만 집계.
   /// 두 쿼리를 병렬 실행하여 순차 대기 병목 제거.
   Future<ProfileRatingHistogram> aggregateReviewRatingsForUid(String uid) async {
     if (uid.isEmpty) return ProfileRatingHistogram.empty();
+
+    final loc = LocaleService.instance.locale;
 
     // 두 Firestore 쿼리를 동시에 시작
     final postSnapF = _col.where('authorUid', isEqualTo: uid).get();
@@ -1391,6 +1478,7 @@ class PostService {
     if (postSnap != null) {
       for (final doc in postSnap!.docs) {
         final data = doc.data();
+        if (!Post.documentVisibleInCountryFeed(data, loc)) continue;
         final type = (data['type'] as String?)?.toLowerCase();
         if (type != 'review') continue;
         final r = (data['rating'] as num?)?.toDouble();
@@ -1404,6 +1492,7 @@ class PostService {
     if (drSnap != null) {
       for (final doc in drSnap!.docs) {
         final data = doc.data();
+        if (!Post.documentVisibleInCountryFeed(data, loc)) continue;
         final dramaId = (data['dramaId'] as String?)?.trim() ?? '';
         if (dramaId.isEmpty) continue;
         if (dramaIdToRating.containsKey(dramaId)) continue;
@@ -1418,8 +1507,12 @@ class PostService {
   /// 특정 작성자가 쓴 댓글 목록 (글 정보 포함). 댓글·답글 모두 포함.
   Future<List<({Post post, PostComment comment})>> getCommentsByAuthor(String author) async {
     final posts = await getPostsAllPages();
+    final loc = LocaleService.instance.locale;
     final result = <({Post post, PostComment comment})>[];
     for (final post in posts) {
+      if (!Post.documentVisibleInCountryFeed({'country': post.country}, loc)) {
+        continue;
+      }
       void collect(List<PostComment> list) {
         for (final c in list) {
           if (c.author == author) result.add((post: post, comment: c));
@@ -1435,16 +1528,21 @@ class PostService {
   /// [type]이 있으면 클라이언트에서 [postMatchesFeedFilter] 적용 (기존과 동일).
   /// [country]가 null이거나 빈 문자열이면 국가 필터를 적용하지 않음.
   /// 값이 있으면 클라이언트에서 [Post.documentVisibleInCountryFeed]로 필터.
-  /// 문서에 `country`가 없거나 비면 레거시로 간주해 해당 필터에서는 통과.
+  /// 문서에 `country`가 없거나 비면 레거시로 간주해 **`us`와 동일**하게 필터됨.
+  /// [timeAgoLocale]이 있으면 상대 시간 문자열만 이 값으로 (국가 필터와 분리).
   /// createdAt 없는 문서는 이 쿼리에서 제외됨.
   Future<({List<Post> posts, DocumentSnapshot<Map<String, dynamic>>? lastDocument, bool hasMore})> getPosts({
     String? country,
+    String? timeAgoLocale,
     String? type,
     DocumentSnapshot<Map<String, dynamic>>? lastDocument,
     int limit = 20,
   }) async {
     try {
       final countryEq = country?.trim();
+      final timeAgoKey = (timeAgoLocale?.trim().isNotEmpty ?? false)
+          ? timeAgoLocale!.trim()
+          : (countryEq?.isNotEmpty == true ? countryEq : null);
       // 국가는 클라이언트 필터만 사용. 서버 where(country)는 필드 없는 문서를 완전히 누락시킴.
       final Query<Map<String, dynamic>> q =
           _col.orderBy('createdAt', descending: true).limit(limit);
@@ -1468,7 +1566,7 @@ class PostService {
               ? createdAt.toDate()
               : DateTime.fromMillisecondsSinceEpoch(0);
           final normalized = _normalizePostMap(data);
-          normalized['timeAgo'] = formatTimeAgo(sortAt, country);
+          normalized['timeAgo'] = formatTimeAgo(sortAt, timeAgoKey);
           final post = Post.fromMap(normalized);
           if (board != null && board.isNotEmpty) {
             if (!postMatchesFeedFilter(post, board)) continue;
@@ -1480,7 +1578,14 @@ class PostService {
         }
       }
       final hasMore = snapshot.docs.length >= limit;
-      final hydrated = await hydratePostsViewerVotes(out);
+      // hydrate는 글마다 likes/dislikes get을 하므로 일시적 unavailable 시 전체가 빈 목록이 되지 않게 한다.
+      List<Post> hydrated = out;
+      try {
+        hydrated = await hydratePostsViewerVotes(out);
+      } catch (e, st) {
+        debugPrint('getPosts: hydratePostsViewerVotes 실패, 병합 없이 반환 - $e');
+        debugPrint('$st');
+      }
       return (posts: hydrated, lastDocument: pageLast, hasMore: hasMore);
     } catch (e, st) {
       debugPrint('getPosts 실패: $e');
@@ -1490,12 +1595,23 @@ class PostService {
   }
 
   /// [getPosts]를 cursor로 이어 붙여 전체 목록 (검색·레거시 호환).
-  Future<List<Post>> getPostsAllPages({String? country, String? type, int pageSize = 100}) async {
+  Future<List<Post>> getPostsAllPages({
+    String? country,
+    String? timeAgoLocale,
+    String? type,
+    int pageSize = 100,
+  }) async {
     final acc = <Post>[];
     final seen = <String>{};
     DocumentSnapshot<Map<String, dynamic>>? last;
     while (true) {
-      final r = await getPosts(country: country, type: type, lastDocument: last, limit: pageSize);
+      final r = await getPosts(
+        country: country,
+        timeAgoLocale: timeAgoLocale,
+        type: type,
+        lastDocument: last,
+        limit: pageSize,
+      );
       for (final p in r.posts) {
         if (seen.add(p.id)) acc.add(p);
       }
@@ -1544,6 +1660,7 @@ class PostService {
 
   /// [commentsList] 안에서 [likedBy]에 [uid]가 포함된 댓글·답글(글 정보 포함).
   /// 전체 `posts` 문서를 읽어 클라이언트에서 수집합니다([getPostsAllPages]).
+  /// 부모 글은 [Post.documentVisibleInCountryFeed]로 현재 앱 언어와 맞는 것만 포함.
   Future<List<({Post post, PostComment comment})>> getCommentsLikedByUid(
     String uid, {
     String? countryForTimeAgo,
@@ -1567,7 +1684,11 @@ class PostService {
           collect(post, c.replies);
         }
       }
+      final loc = LocaleService.instance.locale;
       for (final p in posts) {
+        if (!Post.documentVisibleInCountryFeed({'country': p.country}, loc)) {
+          continue;
+        }
         collect(p, p.commentsList);
       }
       out.sort((a, b) => b.sortAt.compareTo(a.sortAt));
@@ -1579,19 +1700,25 @@ class PostService {
   }
 
   /// [likedBy]에 [uid]가 포함된 게시글. `array-contains`만 사용 후 클라이언트에서 `createdAt` 내림차순 정렬.
-  /// 국가 피드 가리기는 적용하지 않음(내가 누른 좋아요는 모두 표시).
+  /// [Post.documentVisibleInCountryFeed]: 현재 앱 언어와 글 `country`가 맞는 것만 표시.
   Future<List<Post>> getPostsLikedByUid(
     String uid, {
     String? countryForTimeAgo,
     int limit = _likedPostsQueryLimit,
+    /// false: 목록 표시용으로 `posts/{id}/likes` N회 조회 생략(좋아요 탭 등).
+    bool hydrateViewerVotes = true,
   }) async {
     if (uid.isEmpty) return [];
     try {
       final snap = await _col.where('likedBy', arrayContains: uid).limit(limit).get();
+      final loc = LocaleService.instance.locale;
       final out = <({Post post, DateTime sortAt})>[];
       for (final doc in snap.docs) {
         try {
           final data = Map<String, dynamic>.from(doc.data());
+          if (!Post.documentVisibleInCountryFeed(data, loc)) {
+            continue;
+          }
           data['id'] = doc.id;
           final createdAt = data['createdAt'];
           final sortAt = createdAt is Timestamp
@@ -1607,6 +1734,7 @@ class PostService {
       }
       out.sort((a, b) => b.sortAt.compareTo(a.sortAt));
       final posts = out.map((e) => e.post).toList();
+      if (!hydrateViewerVotes) return posts;
       return await hydratePostsViewerVotes(posts);
     } catch (e, st) {
       debugPrint('getPostsLikedByUid: $e\n$st');

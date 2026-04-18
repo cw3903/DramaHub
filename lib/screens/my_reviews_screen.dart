@@ -414,6 +414,7 @@ DramaDetail _detailFromReview(BuildContext context, MyReviewItem item) {
     writtenAt: item.writtenAt,
     authorUid: AuthService.instance.currentUser.value?.uid,
     feedPostId: item.feedPostId,
+    appLocale: item.appLocale,
   );
   final reviews = [myReview];
   final episodes = [

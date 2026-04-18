@@ -92,7 +92,7 @@ class _UserPublicWatchlistScreenState
                       ),
                       const SizedBox(height: 16),
                       Text(
-                        s.get('watchlistEmptyTitle') as String,
+                        s.get('watchlistEmptyPublic') as String,
                         textAlign: TextAlign.center,
                         style: GoogleFonts.notoSansKr(
                           fontSize: 16,
@@ -131,16 +131,13 @@ class _UserPublicWatchlistScreenState
                   return _PosterCell(
                     key: ValueKey(dramaId),
                     imageUrl: imageUrl,
-                    onTap: () {
+                    onTap: () async {
                       final DramaItem item =
                           WatchlistService.instance.resolveDramaItem(dramaId);
-                      final detail = DramaListService.instance
-                          .buildDetailForItem(item, country ?? '');
-                      Navigator.push<void>(
+                      await DramaDetailPage.openFromItem(
                         ctx,
-                        CupertinoPageRoute<void>(
-                          builder: (_) => DramaDetailPage(detail: detail),
-                        ),
+                        item,
+                        country: country ?? '',
                       );
                     },
                     cs: cs,

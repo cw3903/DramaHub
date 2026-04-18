@@ -10,6 +10,7 @@ import '../models/drama.dart';
 import '../models/watchlist_item.dart';
 import '../services/auth_service.dart';
 import '../services/drama_list_service.dart';
+import '../services/locale_service.dart';
 import '../services/user_profile_service.dart';
 import '../services/watchlist_service.dart';
 import '../widgets/country_scope.dart';
@@ -21,7 +22,8 @@ import 'login_page.dart';
 
 bool _isFavoriteDrama(String dramaId) {
   if (dramaId.trim().isEmpty) return false;
-  return UserProfileService.instance.favoritesNotifier.value
+  return UserProfileService.instance
+      .favoritesVisibleForCurrentLocale()
       .any((e) => e.dramaId == dramaId);
 }
 
@@ -97,6 +99,7 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
 
     return AnimatedBuilder(
       animation: Listenable.merge([
+        LocaleService.instance.localeNotifier,
         WatchlistService.instance.itemsNotifier,
         UserProfileService.instance.favoritesNotifier,
         UserProfileService.instance.nicknameNotifier,
@@ -277,16 +280,13 @@ class _WatchlistBody extends StatelessWidget {
                     imageUrl: imageUrl,
                     showFavoriteStar: fav,
                     removeTooltip: s.get('watchlistRemoveTitle'),
-                    onOpen: () {
+                    onOpen: () async {
                       final item =
                           WatchlistService.instance.resolveDramaItem(dramaId);
-                      final detail = DramaListService.instance
-                          .buildDetailForItem(item, country);
-                      Navigator.push<void>(
+                      await DramaDetailPage.openFromItem(
                         context,
-                        CupertinoPageRoute<void>(
-                          builder: (_) => DramaDetailPage(detail: detail),
-                        ),
+                        item,
+                        country: country,
                       );
                     },
                     onRemove: () {

@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import '../models/drama.dart';
 import '../services/drama_list_service.dart';
 import '../services/drama_search_stats_service.dart';
+import '../services/locale_service.dart';
 import '../services/review_service.dart';
 import '../services/user_profile_service.dart';
 import '../widgets/country_scope.dart';
@@ -112,6 +113,7 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
   void initState() {
     super.initState();
     DramaListService.instance.loadFromAsset();
+    LocaleService.instance.localeNotifier.addListener(_onLocaleChangedForSearchRatings);
     // 즐겨찾기 등 pick 모드는 들어가자마자 키보드 올리지 않음.
     if (!widget.pickMode) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -120,8 +122,15 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
     }
   }
 
+  void _onLocaleChangedForSearchRatings() {
+    if (!mounted) return;
+    _searchGridRatingPrefetchSig = null;
+    setState(() {});
+  }
+
   @override
   void dispose() {
+    LocaleService.instance.localeNotifier.removeListener(_onLocaleChangedForSearchRatings);
     _searchController.dispose();
     _searchFocusNode.dispose();
     super.dispose();
@@ -585,12 +594,15 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
     );
   }
 
-  void _prefetchSearchGridRatings(List<DramaItem> displayList) {
+  void _prefetchSearchGridRatings(List<DramaItem> displayList, String? country) {
     final capped =
         displayList.length > 60 ? displayList.sublist(0, 60) : displayList;
     if (capped.isEmpty) return;
+    final loc = (country != null && country.trim().isNotEmpty)
+        ? country.trim()
+        : LocaleService.instance.locale;
     final sig =
-        '${displayList.length}\u001f${capped.map((e) => e.id).join('\u001f')}';
+        '$loc\u001f${displayList.length}\u001f${capped.map((e) => e.id).join('\u001f')}';
     if (sig == _searchGridRatingPrefetchSig) return;
     _searchGridRatingPrefetchSig = sig;
     unawaited(
@@ -616,7 +628,7 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
   }) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      _prefetchSearchGridRatings(displayList);
+      _prefetchSearchGridRatings(displayList, country);
     });
 
     final title = sectionTitle ?? s.get('popularSearch');
@@ -712,14 +724,11 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
                   unawaited(
                     DramaSearchStatsService.instance.incrementClick(item.id),
                   );
-                  final detail =
-                      DramaListService.instance.buildDetailForItem(item, country);
                   if (!mounted) return;
-                  await Navigator.push<void>(
+                  await DramaDetailPage.openFromItem(
                     context,
-                    CupertinoPageRoute<void>(
-                      builder: (_) => DramaDetailPage(detail: detail),
-                    ),
+                    item,
+                    country: country,
                   );
                   if (mounted) {
                     onReturnFromDetail?.call();
@@ -735,7 +744,8 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
 
   bool _isFavoriteDrama(String dramaId) {
     if (dramaId.trim().isEmpty) return false;
-    return UserProfileService.instance.favoritesNotifier.value
+    return UserProfileService.instance
+        .favoritesVisibleForCurrentLocale()
         .any((e) => e.dramaId == dramaId);
   }
 
@@ -747,7 +757,10 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
     Color gridBg,
   ) {
     return AnimatedBuilder(
-      animation: UserProfileService.instance.favoritesNotifier,
+      animation: Listenable.merge([
+        LocaleService.instance.localeNotifier,
+        UserProfileService.instance.favoritesNotifier,
+      ]),
       builder: (context, _) {
         return ColoredBox(
           color: gridBg,
@@ -781,14 +794,11 @@ class _DramaSearchScreenState extends State<DramaSearchScreen> {
                   unawaited(
                     DramaSearchStatsService.instance.incrementClick(dramaId),
                   );
-                  final detail =
-                      DramaListService.instance.buildDetailForItem(item, country);
                   if (!mounted) return;
-                  await Navigator.push<void>(
+                  await DramaDetailPage.openFromItem(
                     gridContext,
-                    CupertinoPageRoute<void>(
-                      builder: (_) => DramaDetailPage(detail: detail),
-                    ),
+                    item,
+                    country: country,
                   );
                 },
               );

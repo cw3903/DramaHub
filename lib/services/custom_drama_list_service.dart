@@ -5,7 +5,9 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 
 import '../models/custom_drama_list.dart';
+import '../models/post.dart';
 import 'auth_service.dart';
+import 'locale_service.dart';
 
 class CustomDramaListService {
   CustomDramaListService._();
@@ -18,6 +20,7 @@ class CustomDramaListService {
 
   bool _loaded = false;
   String? _lastUid;
+  String? _lastLocaleForFilter;
 
   String? get _uid => AuthService.instance.currentUser.value?.uid;
 
@@ -29,14 +32,19 @@ class CustomDramaListService {
 
   Future<void> loadIfNeeded({bool force = false}) async {
     final uid = _uid;
+    final loc = LocaleService.instance.locale;
     if (uid != _lastUid) {
       _loaded = false;
       _lastUid = uid;
+    }
+    if (_lastLocaleForFilter != null && _lastLocaleForFilter != loc) {
+      _loaded = false;
     }
     if (force) _loaded = false;
     if (uid == null) {
       listsNotifier.value = [];
       _loaded = true;
+      _lastLocaleForFilter = loc;
       return;
     }
     if (_loaded) return;
@@ -49,6 +57,7 @@ class CustomDramaListService {
         snapshot = await _listCol.get();
       }
       final lists = snapshot.docs
+          .where((d) => Post.userScopedFirestoreDocVisibleForLocale(d.data(), loc))
           .map((d) => CustomDramaList.fromDoc(d.id, d.data()))
           .where((e) => e.title.trim().isNotEmpty && e.dramaIds.isNotEmpty)
           .toList();
@@ -59,12 +68,14 @@ class CustomDramaListService {
       listsNotifier.value = [];
     }
     _loaded = true;
+    _lastLocaleForFilter = loc;
   }
 
   void clearForLogout() {
     listsNotifier.value = [];
     _loaded = false;
     _lastUid = null;
+    _lastLocaleForFilter = null;
   }
 
   /// 갤러리 표지 업로드. Storage 규칙상 `posts/` 경로 사용.
@@ -118,6 +129,7 @@ class CustomDramaListService {
 
     final now = FieldValue.serverTimestamp();
     final ref = _listCol.doc();
+    final loc = LocaleService.instance.locale;
     final data = <String, dynamic>{
       'title': cleanTitle,
       'description': cleanDesc,
@@ -126,6 +138,7 @@ class CustomDramaListService {
       'updatedAt': now,
       'likeCount': 0,
       'likedBy': <String>[],
+      'country': loc,
     };
     if (validImg != null) {
       data['coverImageUrl'] = validImg;
@@ -146,6 +159,7 @@ class CustomDramaListService {
       coverImageUrl: validImg,
       likeCount: 0,
       likedBy: const [],
+      appLocale: loc,
     );
     final cur = listsNotifier.value;
     listsNotifier.value = [inserted, ...cur.where((e) => e.id != inserted.id)];
@@ -255,6 +269,7 @@ class CustomDramaListService {
         coverImageUrl: clearAllCovers ? null : (validImg ?? e.coverImageUrl),
         likeCount: e.likeCount,
         likedBy: e.likedBy,
+        appLocale: e.appLocale,
       );
     }).toList();
     listsNotifier.value = updated;
@@ -296,7 +311,9 @@ class CustomDramaListService {
             .collection('custom_lists')
             .get();
       }
+      final loc = LocaleService.instance.locale;
       return snap.docs
+          .where((d) => Post.userScopedFirestoreDocVisibleForLocale(d.data(), loc))
           .map((d) => CustomDramaList.fromDoc(d.id, d.data()))
           .where((e) => e.title.trim().isNotEmpty && e.dramaIds.isNotEmpty)
           .toList();
@@ -354,6 +371,7 @@ class CustomDramaListService {
         coverImageUrl: cur.coverImageUrl,
         likedBy: nextLikedBy,
         likeCount: nextCount,
+        appLocale: cur.appLocale,
       );
       final optimistic = List<CustomDramaList>.from(before);
       optimistic[idx] = updated;

@@ -32,8 +32,31 @@ class FollowScreen extends StatefulWidget {
 
 class _FollowScreenState extends State<FollowScreen> {
   int _segment = 0;
+  double _horizontalSwipeAccumDx = 0;
 
   static const Color _lbGreen = Color(0xFF00C030);
+  static const double _kSwipeDistancePx = 72;
+  static const double _kSwipeVelocityPxPerS = 200;
+
+  void _onFollowHorizontalDragEnd(DragEndDetails details) {
+    final dx = _horizontalSwipeAccumDx;
+    final v = details.primaryVelocity ?? 0;
+    _horizontalSwipeAccumDx = 0;
+
+    final goLeft = dx <= -_kSwipeDistancePx || v <= -_kSwipeVelocityPxPerS;
+    final goRight = dx >= _kSwipeDistancePx || v >= _kSwipeVelocityPxPerS;
+    if (!goLeft && !goRight) return;
+
+    if (_segment == 0) {
+      if (goRight) {
+        popListsStyleSubpage(context);
+      } else if (goLeft) {
+        setState(() => _segment = 1);
+      }
+    } else if (goRight) {
+      setState(() => _segment = 0);
+    }
+  }
 
   String _effectiveOwnerUid() => widget.networkOwnerUid ?? AuthService.instance.currentUser.value?.uid ?? '';
 
@@ -58,7 +81,8 @@ class _FollowScreenState extends State<FollowScreen> {
     final headerBg = listsStyleSubpageHeaderBackground(theme);
 
     if (ownerUid.isEmpty) {
-      return ListsStyleSwipeBack(
+      return ListsStyleSubpageHorizontalSwipeBack(
+        onSwipePop: () => popListsStyleSubpage(context),
         child: AnnotatedRegion<SystemUiOverlayStyle>(
         value: listsStyleSubpageSystemOverlay(theme, headerBg),
         child: Scaffold(
@@ -85,8 +109,7 @@ class _FollowScreenState extends State<FollowScreen> {
       );
     }
 
-    return ListsStyleSwipeBack(
-      child: AnnotatedRegion<SystemUiOverlayStyle>(
+    return AnnotatedRegion<SystemUiOverlayStyle>(
       value: listsStyleSubpageSystemOverlay(theme, headerBg),
       child: Scaffold(
         backgroundColor: theme.scaffoldBackgroundColor,
@@ -97,43 +120,50 @@ class _FollowScreenState extends State<FollowScreen> {
             onBack: () => popListsStyleSubpage(context),
           ),
         ),
-        body: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            TwoTabSegmentBar(
-              selectedIndex: _segment,
-              onSelect: (i) => setState(() => _segment = i),
-              // Letterboxd-style: Followers (left) · Following (right).
-              labelLeft: s.get('tabFollowers'),
-              labelRight: s.get('tabFollowing'),
-              colorScheme: cs,
-              brightness: theme.brightness,
-            ),
-            Expanded(
-              child: IndexedStack(
-                index: _segment,
-                children: [
-                  _NetworkList(
-                    ownerUid: ownerUid,
-                    isFollowingTab: false,
-                    cs: cs,
-                    s: s,
-                    lbGreen: _lbGreen,
-                  ),
-                  _NetworkList(
-                    ownerUid: ownerUid,
-                    isFollowingTab: true,
-                    cs: cs,
-                    s: s,
-                    lbGreen: _lbGreen,
-                  ),
-                ],
+        body: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onHorizontalDragStart: (_) => _horizontalSwipeAccumDx = 0,
+          onHorizontalDragUpdate: (d) =>
+              _horizontalSwipeAccumDx += d.delta.dx,
+          onHorizontalDragEnd: _onFollowHorizontalDragEnd,
+          onHorizontalDragCancel: () => _horizontalSwipeAccumDx = 0,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TwoTabSegmentBar(
+                selectedIndex: _segment,
+                onSelect: (i) => setState(() => _segment = i),
+                // Letterboxd-style: Followers (left) · Following (right).
+                labelLeft: s.get('tabFollowers'),
+                labelRight: s.get('tabFollowing'),
+                colorScheme: cs,
+                brightness: theme.brightness,
               ),
-            ),
-          ],
+              Expanded(
+                child: IndexedStack(
+                  index: _segment,
+                  children: [
+                    _NetworkList(
+                      ownerUid: ownerUid,
+                      isFollowingTab: false,
+                      cs: cs,
+                      s: s,
+                      lbGreen: _lbGreen,
+                    ),
+                    _NetworkList(
+                      ownerUid: ownerUid,
+                      isFollowingTab: true,
+                      cs: cs,
+                      s: s,
+                      lbGreen: _lbGreen,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
-    ),
     );
   }
 

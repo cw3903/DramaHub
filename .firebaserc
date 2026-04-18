@@ -1,5 +1,8 @@
 {
   "projects": {
-    "default": "dramahub-22ff2"
-  }
+    "default": "dramahub-22ff2",
+    "d": "dramahub-22ff2"
+  },
+  "targets": {},
+  "etags": {}
 }

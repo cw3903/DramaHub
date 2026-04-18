@@ -2,7 +2,9 @@ import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../models/post.dart';
 import 'auth_service.dart';
+import 'locale_service.dart';
 
 /// 숏폼에서 시청한 드라마 항목
 class WatchedDramaItem {
@@ -16,6 +18,7 @@ class WatchedDramaItem {
     required this.views,
     required this.watchedAt,
     this.imageUrl,
+    this.appLocale,
   });
 
   final String id;
@@ -31,6 +34,9 @@ class WatchedDramaItem {
 
   /// 드라마 썸네일 이미지 URL (프로필 카드 표시용)
   final String? imageUrl;
+
+  /// 저장 시 앱 언어(us/kr/jp/cn). null이면 레거시(`Post`: `us` 구역으로만 표시).
+  final String? appLocale;
 
   /// 구버전(엔트리 id = 드라마 id)과 신버전(엔트리 id 분리) 모두 지원.
   String get dramaKey {
@@ -49,6 +55,7 @@ class WatchedDramaItem {
     'views': views,
     'watchedAt': watchedAt.millisecondsSinceEpoch,
     if (imageUrl != null && imageUrl!.isNotEmpty) 'imageUrl': imageUrl,
+    if (appLocale != null && appLocale!.trim().isNotEmpty) 'country': appLocale!.trim(),
   };
 
   static WatchedDramaItem fromMap(Map<String, dynamic> map) => WatchedDramaItem(
@@ -64,6 +71,7 @@ class WatchedDramaItem {
       isUtc: false,
     ),
     imageUrl: map['imageUrl'] as String?,
+    appLocale: (map['country'] as String?)?.trim(),
   );
 }
 
@@ -81,6 +89,7 @@ class WatchHistoryService {
       ValueNotifier<List<WatchedDramaItem>>([]);
   bool _loaded = false;
   String? _lastUid;
+  String? _lastLocaleForFilter;
 
   List<WatchedDramaItem> get list => listNotifier.value;
 
@@ -92,7 +101,16 @@ class WatchHistoryService {
     return _firestore.collection('users').doc(uid).collection('watch_history');
   }
 
+  bool _visibleForLocale(WatchedDramaItem e, String loc) {
+    final m = <String, dynamic>{};
+    if (e.appLocale != null && e.appLocale!.trim().isNotEmpty) {
+      m['country'] = e.appLocale!.trim();
+    }
+    return Post.documentVisibleInCountryFeed(m, loc);
+  }
+
   Future<void> _load() async {
+    final loc = LocaleService.instance.locale;
     List<WatchedDramaItem> list = [];
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -101,6 +119,7 @@ class WatchHistoryService {
         list = (jsonDecode(json) as List<dynamic>)
             .map((e) => WatchedDramaItem.fromMap(e as Map<String, dynamic>))
             .where((e) => e.id.isNotEmpty)
+            .where((e) => _visibleForLocale(e, loc))
             .toList();
       }
     } catch (_) {}
@@ -115,6 +134,7 @@ class WatchHistoryService {
         final fromFirestore = snapshot.docs
             .map((d) => _itemFromFirestore(d.id, d.data()))
             .whereType<WatchedDramaItem>()
+            .where((e) => _visibleForLocale(e, loc))
             .toList();
         for (final r in fromFirestore) {
           list.removeWhere((e) => e.id == r.id);
@@ -132,6 +152,7 @@ class WatchHistoryService {
     listNotifier.value = list;
     _loaded = true;
     _lastUid = _uid;
+    _lastLocaleForFilter = loc;
     _persist(list);
   }
 
@@ -146,6 +167,7 @@ class WatchHistoryService {
             (watchedAt as num?)?.toInt() ?? 0,
             isUtc: false,
           );
+    final loc = (data['country'] as String?)?.trim();
     return WatchedDramaItem(
       id: id,
       dramaId: data['dramaId'] as String? ?? data['id'] as String?,
@@ -156,6 +178,7 @@ class WatchHistoryService {
       views: data['views'] as String? ?? '0',
       watchedAt: at,
       imageUrl: data['imageUrl'] as String?,
+      appLocale: loc != null && loc.isNotEmpty ? loc : null,
     );
   }
 
@@ -171,8 +194,12 @@ class WatchHistoryService {
 
   Future<void> loadIfNeeded() async {
     final uid = _uid;
+    final loc = LocaleService.instance.locale;
     // UID가 바뀌면 이전 사용자 데이터를 즉시 클리어하고 재로드
     if (uid != _lastUid) await clearForLogout();
+    if (_lastLocaleForFilter != null && _lastLocaleForFilter != loc) {
+      _loaded = false;
+    }
     if (!_loaded) await _load();
   }
 
@@ -181,6 +208,7 @@ class WatchHistoryService {
     listNotifier.value = [];
     _loaded = false;
     _lastUid = null;
+    _lastLocaleForFilter = null;
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_key);
@@ -213,10 +241,12 @@ class WatchHistoryService {
             .collection('watch_history')
             .get();
       }
+      final loc = LocaleService.instance.locale;
       final items = snap.docs
           .map((d) => _itemFromFirestore(d.id, d.data()))
           .whereType<WatchedDramaItem>()
           .where((e) => e.id.isNotEmpty)
+          .where((e) => _visibleForLocale(e, loc))
           .toList();
       items.sort((a, b) => b.watchedAt.compareTo(a.watchedAt));
       return items;
@@ -258,6 +288,7 @@ class WatchHistoryService {
     final dramaId = id.trim();
     if (dramaId.isEmpty) return;
     final entryId = '${dramaId}_${now.microsecondsSinceEpoch}';
+    final loc = LocaleService.instance.locale;
     final item = WatchedDramaItem(
       id: entryId,
       dramaId: dramaId,
@@ -268,6 +299,7 @@ class WatchHistoryService {
       views: views,
       watchedAt: now,
       imageUrl: imageUrl,
+      appLocale: loc,
     );
     var list = List<WatchedDramaItem>.from(listNotifier.value);
     list.insert(0, item);
@@ -292,6 +324,7 @@ class WatchHistoryService {
             'views': views,
             'watchedAt': Timestamp.fromDate(now),
             if (imageUrl != null && imageUrl.isNotEmpty) 'imageUrl': imageUrl,
+            'country': loc,
           })
           .timeout(const Duration(seconds: 8))
           .catchError((e) {

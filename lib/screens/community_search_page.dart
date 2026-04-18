@@ -6,6 +6,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../models/post.dart';
 import '../services/drama_list_service.dart';
+import '../services/locale_service.dart';
 import '../services/post_service.dart';
 import '../services/user_profile_service.dart';
 import '../services/watchlist_service.dart';
@@ -350,7 +351,8 @@ class _CommunitySearchPageState extends State<CommunitySearchPage> {
 
   bool _isFavoriteDrama(String dramaId) {
     if (dramaId.trim().isEmpty) return false;
-    return UserProfileService.instance.favoritesNotifier.value
+    return UserProfileService.instance
+        .favoritesVisibleForCurrentLocale()
         .any((e) => e.dramaId == dramaId);
   }
 
@@ -358,12 +360,8 @@ class _CommunitySearchPageState extends State<CommunitySearchPage> {
     await DramaListService.instance.loadFromAsset();
     if (!mounted) return;
     final item = WatchlistService.instance.resolveDramaItem(dramaId);
-    final detail = DramaListService.instance.buildDetailForItem(item, country);
     if (!mounted) return;
-    await Navigator.push<void>(
-      context,
-      CupertinoPageRoute<void>(builder: (_) => DramaDetailPage(detail: detail)),
-    );
+    await DramaDetailPage.openFromItem(context, item, country: country);
   }
 
   /// [WatchlistScreen] 그리드와 동일 비율·간격, 셀은 포스터만.
@@ -377,6 +375,7 @@ class _CommunitySearchPageState extends State<CommunitySearchPage> {
 
     return AnimatedBuilder(
       animation: Listenable.merge([
+        LocaleService.instance.localeNotifier,
         DramaListService.instance.listNotifier,
         UserProfileService.instance.favoritesNotifier,
       ]),

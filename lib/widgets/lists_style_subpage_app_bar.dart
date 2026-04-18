@@ -83,6 +83,49 @@ class ListsStyleSwipeBack extends StatelessWidget {
   }
 }
 
+/// 화면 아무 곳에서 시작해 오른쪽으로 쓸면 [onSwipePop] (거리·플링 둘 중 하나).
+/// 드라마 상세·글 상세(Recent Activity 워치/리뷰 등) 공통.
+class ListsStyleSubpageHorizontalSwipeBack extends StatefulWidget {
+  const ListsStyleSubpageHorizontalSwipeBack({
+    super.key,
+    required this.onSwipePop,
+    required this.child,
+  });
+
+  final VoidCallback onSwipePop;
+  final Widget child;
+
+  @override
+  State<ListsStyleSubpageHorizontalSwipeBack> createState() =>
+      _ListsStyleSubpageHorizontalSwipeBackState();
+}
+
+class _ListsStyleSubpageHorizontalSwipeBackState
+    extends State<ListsStyleSubpageHorizontalSwipeBack> {
+  double _dragX = 0;
+
+  static const double _distanceThreshold = 72;
+  static const double _minFlingVelocityPxPerS = 200;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onHorizontalDragStart: (_) => _dragX = 0,
+      onHorizontalDragUpdate: (d) => _dragX += d.delta.dx,
+      onHorizontalDragEnd: (details) {
+        final v = details.primaryVelocity ?? 0;
+        if (_dragX >= _distanceThreshold || v > _minFlingVelocityPxPerS) {
+          widget.onSwipePop();
+        }
+        _dragX = 0;
+      },
+      onHorizontalDragCancel: () => _dragX = 0,
+      child: widget.child,
+    );
+  }
+}
+
 /// [ListsScreen]·워치리스트 헤더 trailing 공통 — 24×24 다크 칩 + 흰색 십자.
 class ListsStyleSubpageHeaderAddButton extends StatelessWidget {
   const ListsStyleSubpageHeaderAddButton({super.key, required this.onTap});

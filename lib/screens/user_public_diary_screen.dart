@@ -126,16 +126,11 @@ class _UserPublicDiaryScreenState extends State<UserPublicDiaryScreen> {
     );
   }
 
-  void _openDrama(BuildContext context, WatchedDramaItem item) {
+  Future<void> _openDrama(BuildContext context, WatchedDramaItem item) async {
     final country = CountryScope.maybeOf(context)?.country ??
         CountryService.instance.countryNotifier.value;
     final dramaItem = dramaItemForDiaryEntry(item, country);
-    final detail =
-        DramaListService.instance.buildDetailForItem(dramaItem, country);
-    Navigator.push<void>(
-      context,
-      MaterialPageRoute<void>(builder: (_) => DramaDetailPage(detail: detail)),
-    );
+    await DramaDetailPage.openFromItem(context, dramaItem, country: country);
   }
 
   @override

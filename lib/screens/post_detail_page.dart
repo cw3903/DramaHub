@@ -1211,6 +1211,16 @@ class _PostDetailPageState extends State<PostDetailPage>
     tabIndex: _morePostsTabIndex,
   );
 
+  /// 가로 스와이프 뒤로: 글 스택이 있으면 이전 글, 없으면 [_goBack]과 동일하게 닫기.
+  void _onHorizontalSwipeBack() {
+    if (_backStack.isNotEmpty) {
+      _goBack();
+      return;
+    }
+    _forwardStack.add((_post, _morePostsTabIndex));
+    popListsStyleSubpage(context, _buildResult());
+  }
+
   void _goBack() {
     if (_backStack.isEmpty) {
       // 더 이상 뒤로 갈 글이 없으면 현재 글을 forwardStack에 넣고 화면 종료
@@ -1924,12 +1934,8 @@ class _PostDetailPageState extends State<PostDetailPage>
         imageUrl: hasImg ? thumb : null,
       );
     }
-    final detail = DramaListService.instance.buildDetailForItem(item, locale);
     if (!mounted) return;
-    await Navigator.push<void>(
-      context,
-      CupertinoPageRoute<void>(builder: (_) => DramaDetailPage(detail: detail)),
-    );
+    await DramaDetailPage.openFromItem(context, item, country: locale);
   }
 
   Future<void> _onLetterboxdPostMenuSelected(
@@ -2908,7 +2914,9 @@ class _PostDetailPageState extends State<PostDetailPage>
           _goBack();
         }
       },
-      child: Scaffold(
+      child: ListsStyleSubpageHorizontalSwipeBack(
+        onSwipePop: _onHorizontalSwipeBack,
+        child: Scaffold(
         resizeToAvoidBottomInset: true,
         backgroundColor: (isTypedReview && !useScaffoldBgForReview)
             ? _kLetterboxdReviewScreenBg
@@ -4273,6 +4281,7 @@ class _PostDetailPageState extends State<PostDetailPage>
                 : mainStack;
           },
         ),
+        ),
       ),
     );
   }
@@ -4441,9 +4450,10 @@ class _MorePostsSectionState extends State<_MorePostsSection>
       DocumentSnapshot<Map<String, dynamic>>? cursor = _tabLastDoc[tabIndex];
       var pageHasMore = _tabHasMore[tabIndex];
 
-      for (var attempt = 0; attempt < 24; attempt++) {
+      for (var attempt = 0; attempt < 48; attempt++) {
         final page = await PostService.instance.getPosts(
-          country: viewerLanguage,
+          country: null,
+          timeAgoLocale: viewerLanguage,
           type: _feedBoards[tabIndex],
           lastDocument: cursor,
           limit: 20,

@@ -8,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../models/drama.dart';
 import '../services/drama_list_service.dart';
 import '../services/drama_view_service.dart';
+import '../services/locale_service.dart';
 import '../services/review_service.dart';
 import '../widgets/country_scope.dart';
 import '../widgets/drama_grid_card.dart';
@@ -251,8 +252,9 @@ class _DramaScreenState extends State<DramaScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    final s = CountryScope.of(context).strings;
-    final country = CountryScope.maybeOf(context)?.country;
+    final scope = CountryScope.of(context);
+    final s = scope.strings;
+    final country = scope.country;
     /// 상단 헤더 세로는 `dramaFeedHeaderContentHeight` = [dramaFeedHeaderToolbarRh]+[dramaFeedHeaderTabStripRh]·rh+[dramaFeedHeaderSlopPx] 고정.
     final rh = dramaFeedHeaderScale(context);
 
@@ -773,13 +775,9 @@ class _DramaScreenState extends State<DramaScreen> {
     );
   }
 
-  void _openDetail(DramaItem item) {
-    final country = CountryScope.maybeOf(context)?.country;
-    final detail = DramaListService.instance.buildDetailForItem(item, country);
-    Navigator.push<void>(
-      context,
-      CupertinoPageRoute<void>(builder: (_) => DramaDetailPage(detail: detail)),
-    );
+  Future<void> _openDetail(DramaItem item) async {
+    final country = CountryScope.of(context).country;
+    await DramaDetailPage.openFromItem(context, item, country: country);
   }
 
   Widget _posterPlaceholder(BuildContext context) {
@@ -825,11 +823,19 @@ class _DramaGridWithPaginationState extends State<_DramaGridWithPagination> {
   void initState() {
     super.initState();
     _scrollController.addListener(_onScroll);
+    LocaleService.instance.localeNotifier.addListener(_onLocaleChangedForRatings);
     WidgetsBinding.instance.addPostFrameCallback((_) => _fillUntilScrollableOrEnd());
+  }
+
+  void _onLocaleChangedForRatings() {
+    if (!mounted) return;
+    _ratingPrefetchSig = null;
+    setState(() {});
   }
 
   @override
   void dispose() {
+    LocaleService.instance.localeNotifier.removeListener(_onLocaleChangedForRatings);
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     super.dispose();
@@ -838,14 +844,18 @@ class _DramaGridWithPaginationState extends State<_DramaGridWithPagination> {
   @override
   void didUpdateWidget(covariant _DramaGridWithPagination oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.list != widget.list) {
+    if (oldWidget.list != widget.list ||
+        oldWidget.country != widget.country) {
       _ratingPrefetchSig = null;
     }
   }
 
   void _maybePrefetchRatingsForVisible(List<DramaItem> visible) {
     if (visible.isEmpty) return;
-    final sig = visible.map((e) => e.id).join('\u001f');
+    final loc = (widget.country != null && widget.country!.trim().isNotEmpty)
+        ? widget.country!.trim()
+        : LocaleService.instance.locale;
+    final sig = '$loc\u001f${visible.map((e) => e.id).join('\u001f')}';
     if (sig == _ratingPrefetchSig) return;
     _ratingPrefetchSig = sig;
     unawaited(
