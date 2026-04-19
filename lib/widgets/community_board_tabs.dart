@@ -2220,7 +2220,7 @@ class _ReviewFeedInlineComposer extends StatelessWidget {
                 ? Colors.white
                 : cs.onSurface.withValues(alpha: 0.38);
             return Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 avatar,
                 const SizedBox(width: 8),
@@ -2454,7 +2454,7 @@ class _ReviewCommentComposerOverlayState
                             ? Colors.white
                             : cs.onSurface.withValues(alpha: 0.38);
                         return Row(
-                          crossAxisAlignment: CrossAxisAlignment.end,
+                          crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
                             avatar,
                             const SizedBox(width: 8),

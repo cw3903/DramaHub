@@ -14,12 +14,15 @@ import '../theme/app_theme.dart';
 import '../utils/format_utils.dart';
 import 'user_profile_nav.dart';
 import 'app_delete_confirm_dialog.dart';
-import 'episode_review_thread_sheet.dart';
 import 'drama_review_feed_tile.dart' show kDramaReviewFeedVerticalGap;
+import '../screens/login_page.dart';
 import 'drama_row_profile_avatar.dart';
 import 'feed_inline_action_colors.dart';
 import 'feed_review_star_row.dart'
     show FeedReviewRatingStars, kFeedReviewRatingThumbWidth;
+import 'review_card_tap_highlight.dart';
+import 'review_feed_comment_row.dart';
+import 'review_feed_inline_composer.dart';
 
 /// 하단 고정 리뷰 시트 — 화면 좌우와 띄워 모서리·그림자·세로 테두리가 보이게.
 const double _kPinnedComposerSheetHorizontalMargin = 6;
@@ -28,19 +31,43 @@ const double _kPinnedComposerSheetHorizontalMargin = 6;
 /// ([main_screen.dart] `SafeArea` 아래 Row와 동일 기준)
 const double _kMainScreenBottomNavContentHeight = 64.0;
 
+/// 하단 시트 **펼침**: 입력칸·시트를 탭에서 띄우는 추가 여백.
+const double _kEpisodeReviewComposerBottomLiftExpanded = 20.0;
+
+/// 하단 시트 **접힘**: 핸들만 살짝 띄움.
+const double _kEpisodeReviewComposerBottomLiftCollapsed = 6.0;
+
 /// [MainScreen] `extendBody`일 때 보디·시트가 피해야 할 하단 오버레이.
 ///
-/// - 탭 행 자체는 [_kMainScreenBottomNavContentHeight].
-/// - 그 아래 홈 인디케이터·제스처 바는 [MediaQuery.viewPadding]·[MediaQuery.padding] 중 큰 값.
-///   (`viewPadding.bottom`만 0인 안드로이드 제스처 내비 대응)
+/// - `padding.bottom` > `viewPadding.bottom` 이면 하단 탭·세이프가 이미 [padding]에 포함된 경우가 많음 → [padding.bottom]만 쓰고 [_kMainScreenBottomNavContentHeight]는 **더하지 않음** (이중 여백 방지).
+/// - 그렇지 않으면 탭 높이(64) + 세이프를 직접 더함.
 double _episodeReviewPinnedComposerBottomPad(BuildContext context) {
   final mq = MediaQuery.of(context);
-  final systemBottom = math.max(mq.viewPadding.bottom, mq.padding.bottom);
   const hairlineSafety = 2.0;
+  final viewPb = mq.viewPadding.bottom;
+  final padPb = mq.padding.bottom;
+  // 탭(~56)+세이프 등이 padding에 들어오면 보통 viewPadding보다 20px 이상 큼.
+  if (padPb >= viewPb + 20) {
+    return padPb +
+        hairlineSafety +
+        mq.viewInsets.bottom +
+        _kEpisodeReviewComposerBottomLiftExpanded;
+  }
+  final systemBottom = math.max(viewPb, padPb);
   return systemBottom +
       _kMainScreenBottomNavContentHeight +
       hairlineSafety +
-      mq.viewInsets.bottom;
+      mq.viewInsets.bottom +
+      _kEpisodeReviewComposerBottomLiftExpanded;
+}
+
+/// 하단 시트 **접힘**: 시트 윗줄·핸들이 하단 탭 바로 위에 오도록 내부 하단만 최소화.
+/// [extendBody] 등으로 `padding.bottom`에 탭·세이프가 잡히면 그걸 우선.
+double _episodeReviewPinnedComposerBottomPadCollapsed(BuildContext context) {
+  final mq = MediaQuery.of(context);
+  final systemBottom = math.max(mq.viewPadding.bottom, mq.padding.bottom);
+  final insetBottom = math.max(systemBottom + 2, mq.padding.bottom);
+  return insetBottom + mq.viewInsets.bottom + _kEpisodeReviewComposerBottomLiftCollapsed;
 }
 
 /// [community_board_tabs.reviewInlineActionHitTarget]과 동일 — 스플래시 없이 터치만 확장.
@@ -261,7 +288,9 @@ class _EpisodeReviewPanelState extends State<EpisodeReviewPanel> {
   }
 
   Widget _buildPinnedComposerSheet(BuildContext context, ColorScheme cs) {
-    final bottomPad = _episodeReviewPinnedComposerBottomPad(context);
+    final bottomPad = _composerSheetExpanded
+        ? _episodeReviewPinnedComposerBottomPad(context)
+        : _episodeReviewPinnedComposerBottomPadCollapsed(context);
     final sheetOutline = cs.outline.withValues(alpha: 0.28);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: _kPinnedComposerSheetHorizontalMargin),
@@ -319,14 +348,17 @@ class _EpisodeReviewPanelState extends State<EpisodeReviewPanel> {
                     ),
                   ),
                 ),
-                AnimatedSize(
-                  duration: const Duration(milliseconds: 260),
-                  curve: Curves.easeInOut,
-                  alignment: Alignment.topCenter,
-                  clipBehavior: Clip.hardEdge,
-                  child: _composerSheetExpanded
-                      ? _buildComposerBlock(cs, belowSheetHeader: true)
-                      : const SizedBox.shrink(),
+                // [AnimatedSize]는 내부적으로 SingleTickerProviderStateMixin을 쓰는데,
+                // 상세 [drama_detail_page] 회차 영역의 [AnimatedSize]와 중첩되면
+                // "multiple tickers were created" assert가 날 수 있어 티커 없이 접는다.
+                ClipRect(
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    heightFactor: _composerSheetExpanded ? 1.0 : 0.0,
+                    child: _composerSheetExpanded
+                        ? _buildComposerBlock(cs, belowSheetHeader: true)
+                        : const SizedBox.shrink(),
+                  ),
                 ),
               ],
             ),
@@ -414,12 +446,14 @@ class _EpisodeReviewPanelState extends State<EpisodeReviewPanel> {
               top: isDivider ? 10 : 0,
             ),
             child: EpisodeReviewCard(
+              key: ValueKey<String>(r.id),
               item: r,
               dramaId: widget.dramaId,
               episodeNumber: widget.episodeNumber,
               strings: widget.strings,
               hideTimestamp: widget.hideReviewCardTimestamp,
-              embedInLightCard: !isDivider,
+              // 구분선 리스트에서도 행 배경(Material) 없음 — 인라인 카드와 동일.
+              embedInLightCard: true,
               onEdit: (rev) {
                 setState(() {
                   _editingReviewId = rev.id;
@@ -548,6 +582,8 @@ class _EpisodeReviewPanelState extends State<EpisodeReviewPanel> {
               },
             ),
           ),
+          // 펼침일 때만 리스트·시트 간격. 접으면 시트 윗줄이 하단 탭 바로 위로 붙게.
+          if (_composerSheetExpanded) const SizedBox(height: 10),
           _buildPinnedComposerSheet(context, cs),
         ],
       );
@@ -691,7 +727,7 @@ class _EpisodeReviewPanelState extends State<EpisodeReviewPanel> {
   }
 }
 
-class EpisodeReviewCard extends StatelessWidget {
+class EpisodeReviewCard extends StatefulWidget {
   const EpisodeReviewCard({
     super.key,
     required this.item,
@@ -715,47 +751,315 @@ class EpisodeReviewCard extends StatelessWidget {
   final bool embedInLightCard;
 
   @override
+  State<EpisodeReviewCard> createState() => _EpisodeReviewCardState();
+}
+
+class _EpisodeReviewCardState extends State<EpisodeReviewCard> {
+  bool _threadExpanded = false;
+  EpisodeReviewThreadItem? _replyingTo;
+  TextEditingController? _threadCommentCtrl;
+  final FocusNode _threadFocusNode = FocusNode();
+  bool _sendingThread = false;
+  /// [ReviewFeedInlineComposer] 연속 탭·비동기 겹침 방지 ([unawaited] 제거와 함께).
+  bool _threadSendInFlight = false;
+  StreamSubscription<List<EpisodeReviewThreadItem>>? _threadStreamSub;
+  List<EpisodeReviewThreadItem> _threadStreamItems = [];
+
+  void _cancelThreadStream() {
+    final s = _threadStreamSub;
+    _threadStreamSub = null;
+    if (s != null) {
+      unawaited(s.cancel());
+    }
+  }
+
+  void _attachThreadStream() {
+    _cancelThreadStream();
+    final id = widget.item.id.trim();
+    if (id.isEmpty) return;
+    _threadStreamSub = EpisodeReviewService.instance.watchThread(id).listen(
+      (items) {
+        if (!mounted) return;
+        // 스냅샷 직후 동기 [setState]는 트리 비활성화와 겹쳐 `InheritedElement._dependents` assert 유발 가능.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          setState(() {
+            _threadStreamItems = List<EpisodeReviewThreadItem>.from(items);
+          });
+        });
+      },
+      onError: (Object e, StackTrace st) {
+        debugPrint('EpisodeReviewCard thread stream: $e\n$st');
+      },
+      cancelOnError: false,
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant EpisodeReviewCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.item.id != widget.item.id) {
+      _cancelThreadStream();
+      _threadStreamItems = [];
+      if (_threadExpanded) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _threadExpanded) {
+            _attachThreadStream();
+          }
+        });
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _cancelThreadStream();
+    _threadCommentCtrl?.dispose();
+    _threadFocusNode.dispose();
+    super.dispose();
+  }
+
+  static int _threadItemDepth(
+    EpisodeReviewThreadItem t,
+    Map<String, EpisodeReviewThreadItem> byId,
+  ) {
+    var d = 0;
+    String? p = t.parentCommentId;
+    final guard = <String>{};
+    while (p != null && byId.containsKey(p)) {
+      if (!guard.add(p)) break;
+      d++;
+      p = byId[p]!.parentCommentId;
+    }
+    return d;
+  }
+
+  /// [focusComposerOnOpen]: 댓글 아이콘 탭 등 입력 유도 시 true — 글 본문 탭은 레이팅스와 같이 false.
+  void _toggleThread({bool focusComposerOnOpen = false}) {
+    HapticFeedback.lightImpact();
+    if (_threadExpanded) {
+      _cancelThreadStream();
+      setState(() {
+        _threadExpanded = false;
+        _replyingTo = null;
+        _threadStreamItems = [];
+        _threadFocusNode.unfocus();
+      });
+    } else {
+      setState(() {
+        _threadExpanded = true;
+        _threadCommentCtrl ??= TextEditingController();
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_threadExpanded) return;
+        _attachThreadStream();
+        if (focusComposerOnOpen) {
+          _threadFocusNode.requestFocus();
+        }
+      });
+    }
+  }
+
+  Future<void> _sendThreadComment() async {
+    final ctrl = _threadCommentCtrl;
+    if (ctrl == null || _threadSendInFlight) return;
+    final text = ctrl.text.trim();
+    if (text.isEmpty) return;
+    if (!AuthService.instance.isLoggedIn.value) {
+      await Navigator.push<void>(
+        context,
+        MaterialPageRoute<void>(builder: (_) => const LoginPage()),
+      );
+      if (!mounted || !AuthService.instance.isLoggedIn.value) return;
+    }
+    _threadSendInFlight = true;
+    setState(() => _sendingThread = true);
+    String? err;
+    EpisodeReviewThreadItem? added;
+    try {
+      final r = await EpisodeReviewService.instance.addThreadComment(
+        reviewId: widget.item.id,
+        dramaId: widget.dramaId,
+        episodeNumber: widget.episodeNumber,
+        text: text,
+        parentCommentId: _replyingTo?.id,
+      );
+      err = r.$1;
+      added = r.$2;
+    } finally {
+      _threadSendInFlight = false;
+      if (mounted) {
+        setState(() => _sendingThread = false);
+      }
+    }
+    if (!mounted) return;
+    if (err != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(widget.strings.get(err), style: GoogleFonts.notoSansKr()),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    if (added != null) {
+      final merged = added;
+      setState(() {
+        if (!_threadStreamItems.any((e) => e.id == merged.id)) {
+          final next = List<EpisodeReviewThreadItem>.from(_threadStreamItems)..add(merged);
+          next.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+          _threadStreamItems = next;
+        }
+      });
+    }
+    ctrl.clear();
+    setState(() => _replyingTo = null);
+    _threadFocusNode.unfocus();
+  }
+
+  Widget _threadCommentsList(ColorScheme cs) {
+    final s = widget.strings;
+    const innerH = 12.0;
+    final items = _threadStreamItems;
+    if (items.isEmpty) return const SizedBox.shrink();
+    final byId = {for (final t in items) t.id: t};
+    return ListView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(innerH, 10, innerH, 4),
+      itemCount: items.length,
+      itemBuilder: (context, i) {
+        final t = items[i];
+        final depth = _threadItemDepth(t, byId).clamp(0, 8);
+        return ReviewFeedCommentRow(
+          colorScheme: cs,
+          depth: depth,
+          showReplyIcon: true,
+          authorName: t.authorName,
+          authorUid: t.uid,
+          comment: t.comment,
+          avatar: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              final uid = t.uid.trim();
+              if (uid.isNotEmpty) {
+                openUserProfileFromAuthorUid(context, uid);
+              }
+            },
+            child: DramaRowProfileAvatar(
+              imageUrl: null,
+              authorUid: t.uid,
+              colorScheme: cs,
+            ),
+          ),
+          likeCount: 0,
+          isLiked: false,
+          onLikeTap: null,
+          onReplyTap: () {
+            setState(() => _replyingTo = t);
+            _threadFocusNode.requestFocus();
+          },
+          replyLabel: s.get('reply'),
+        );
+      },
+    );
+  }
+
+  /// 레이팅스 [DramaReviewsListFeedRow] 펼침 영역과 비슷: 스레드 + 하단 입력.
+  Widget _buildInlineThreadPanel(ColorScheme cs) {
+    final s = widget.strings;
+    const innerH = 12.0;
+    return ColoredBox(
+      color: cs.surfaceContainerHighest.withValues(alpha: 0.4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _threadCommentsList(cs),
+          if (_replyingTo != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(innerH, 0, innerH, 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${s.get('reply')}: ${_replyingTo!.authorName}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.notoSansKr(
+                        fontSize: 12,
+                        color: cs.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => setState(() => _replyingTo = null),
+                    child: Text(s.get('cancel')),
+                  ),
+                ],
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(innerH, 0, innerH, 10),
+            child: ReviewFeedInlineComposer(
+              controller: _threadCommentCtrl!,
+              focusNode: _threadFocusNode,
+              isSubmitting: _sendingThread,
+              autofocus: false,
+              hintText: null,
+              sendSemanticLabel: s.get('replySubmit'),
+              onSend: _sendThreadComment,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final currentUid = AuthService.instance.currentUser.value?.uid;
-    final isMine = currentUid != null && item.uid == currentUid;
+    final isMine = currentUid != null && widget.item.uid == currentUid;
     const hPad = 14.0;
     final rowBg = cs.surfaceContainerHighest;
 
-    final name = item.authorName.trim().isEmpty ? '—' : item.authorName;
-    final body = item.comment.trim();
-    final rating = (item.rating ?? 0).clamp(0.0, 5.0);
+    final name = widget.item.authorName.trim().isEmpty ? '—' : widget.item.authorName;
+    final body = widget.item.comment.trim();
+    final rating = (widget.item.rating ?? 0).clamp(0.0, 5.0);
     final showStars = rating > 0;
 
     void openProfile() {
-      openUserProfileFromAuthorUid(context, item.uid);
+      openUserProfileFromAuthorUid(context, widget.item.uid);
     }
 
-    final profileCell = Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: openProfile,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 140),
-              child: Text(
-                name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.right,
-                style: appUnifiedNicknameStyle(cs),
+    final profileCell = ReviewCardSuppressParentTap(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: openProfile,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 140),
+                child: Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.right,
+                  style: appUnifiedNicknameStyle(cs),
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
-            DramaRowProfileAvatar(
-              imageUrl: item.authorPhotoUrl,
-              authorUid: item.uid,
-              colorScheme: cs,
-              size: kAppUnifiedProfileAvatarSize,
-            ),
-          ],
+              const SizedBox(width: 8),
+              DramaRowProfileAvatar(
+                imageUrl: widget.item.authorPhotoUrl,
+                authorUid: widget.item.uid,
+                colorScheme: cs,
+                size: kAppUnifiedProfileAvatarSize,
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -778,23 +1082,23 @@ class EpisodeReviewCard extends StatelessWidget {
 
     const actionIconSize = 13.0;
     final actionFg = feedInlineActionMutedForeground(cs);
-    final liked = item.likedByUid(currentUid);
-    final likeCount = item.likeCount;
-    final replyCount = item.replyCount;
+    final liked = widget.item.likedByUid(currentUid);
+    final likeCount = widget.item.likeCount;
+    final replyCount = widget.item.replyCount;
 
     void onLikeTap() {
       HapticFeedback.lightImpact();
       unawaited(() async {
         final err = await EpisodeReviewService.instance.toggleEpisodeReviewLike(
-          reviewId: item.id,
-          dramaId: dramaId,
-          episodeNumber: episodeNumber,
+          reviewId: widget.item.id,
+          dramaId: widget.dramaId,
+          episodeNumber: widget.episodeNumber,
         );
         if (!context.mounted) return;
         if (err != null) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(strings.get(err), style: GoogleFonts.notoSansKr()),
+              content: Text(widget.strings.get(err), style: GoogleFonts.notoSansKr()),
               behavior: SnackBarBehavior.floating,
             ),
           );
@@ -802,20 +1106,10 @@ class EpisodeReviewCard extends StatelessWidget {
       }());
     }
 
-    void onCommentTap() {
-      HapticFeedback.lightImpact();
-      unawaited(
-        EpisodeReviewThreadSheet.show(
-          context: context,
-          reviewId: item.id,
-          dramaId: dramaId,
-          episodeNumber: episodeNumber,
-          strings: strings,
-        ),
-      );
-    }
-
-    final column = Column(
+    final mainColumn = ReviewCardTapHighlight(
+      onTap: () => _toggleThread(focusComposerOnOpen: false),
+      pressColor: cs.onSurface.withValues(alpha: 0.12),
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -848,97 +1142,105 @@ class EpisodeReviewCard extends StatelessWidget {
             padding: EdgeInsets.fromLTRB(hPad, 0, hPad, 6),
             child: Row(
               children: [
-                _episodeReviewActionHitTarget(
-                  onTap: onLikeTap,
-                  visual: Padding(
-                    padding: const EdgeInsets.fromLTRB(0, 2, 4, 2),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          liked ? Icons.favorite : Icons.favorite_border,
-                          size: actionIconSize,
-                          color: liked ? Colors.redAccent : actionFg,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          formatCompactCount(likeCount),
-                          style: GoogleFonts.notoSansKr(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                            height: 1.0,
-                            color: actionFg,
+                ReviewCardSuppressParentTap(
+                  child: _episodeReviewActionHitTarget(
+                    onTap: onLikeTap,
+                    visual: Padding(
+                      padding: const EdgeInsets.fromLTRB(0, 2, 4, 2),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            liked ? Icons.favorite : Icons.favorite_border,
+                            size: actionIconSize,
+                            color: liked ? Colors.redAccent : actionFg,
                           ),
-                        ),
-                      ],
+                          const SizedBox(width: 4),
+                          Text(
+                            formatCompactCount(likeCount),
+                            style: GoogleFonts.notoSansKr(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                              height: 1.0,
+                              color: actionFg,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
                 const SizedBox(width: 4),
-                _episodeReviewActionHitTarget(
-                  onTap: onCommentTap,
-                  visual: Padding(
-                    padding: const EdgeInsets.fromLTRB(0, 2, 4, 2),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          LucideIcons.message_circle,
-                          size: actionIconSize,
-                          color: actionFg,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          formatCompactCount(replyCount),
-                          style: GoogleFonts.notoSansKr(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                            height: 1.0,
+                ReviewCardSuppressParentTap(
+                  child: _episodeReviewActionHitTarget(
+                    onTap: () => _toggleThread(focusComposerOnOpen: true),
+                    visual: Padding(
+                      padding: const EdgeInsets.fromLTRB(0, 2, 4, 2),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            LucideIcons.message_circle,
+                            size: actionIconSize,
                             color: actionFg,
                           ),
-                        ),
-                      ],
+                          const SizedBox(width: 4),
+                          Text(
+                            formatCompactCount(replyCount),
+                            style: GoogleFonts.notoSansKr(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                              height: 1.0,
+                              color: actionFg,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
                 if (isMine) ...[
                   const SizedBox(width: 6),
-                  _episodeReviewActionHitTarget(
-                    onTap: () => onEdit(item),
-                    outsets: const EdgeInsets.fromLTRB(10, 0, 10, 8),
-                    visual: Padding(
-                      padding: const EdgeInsets.fromLTRB(0, 2, 2, 2),
-                      child: Text(
-                        strings.get('edit'),
-                        style: GoogleFonts.notoSansKr(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w600,
-                          height: 1.0,
-                          color: actionFg,
+                  ReviewCardSuppressParentTap(
+                    child: _episodeReviewActionHitTarget(
+                      onTap: () => widget.onEdit(widget.item),
+                      outsets: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+                      visual: Padding(
+                        padding: const EdgeInsets.fromLTRB(0, 2, 2, 2),
+                        child: Text(
+                          widget.strings.get('edit'),
+                          style: GoogleFonts.notoSansKr(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            height: 1.0,
+                            color: actionFg,
+                          ),
                         ),
                       ),
                     ),
                   ),
-                  _episodeReviewActionHitTarget(
-                    onTap: () async {
-                      final ok = await showAppDeleteConfirmDialog(
-                        context,
-                        message: strings.get('deletePostConfirm'),
-                        cancelText: strings.get('cancel'),
-                        confirmText: strings.get('delete'),
-                      );
-                      if (ok == true) onDelete(item.id);
-                    },
-                    outsets: const EdgeInsets.fromLTRB(10, 0, 10, 8),
-                    visual: Padding(
-                      padding: const EdgeInsets.fromLTRB(2, 2, 0, 2),
-                      child: Text(
-                        strings.get('delete'),
-                        style: GoogleFonts.notoSansKr(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                          height: 1.0,
-                          color: kAppDeleteActionColor,
+                  ReviewCardSuppressParentTap(
+                    child: _episodeReviewActionHitTarget(
+                      onTap: () async {
+                        final ok = await showAppDeleteConfirmDialog(
+                          context,
+                          message: widget.strings.get('deletePostConfirm'),
+                          cancelText: widget.strings.get('cancel'),
+                          confirmText: widget.strings.get('delete'),
+                        );
+                        if (ok == true) widget.onDelete(widget.item.id);
+                      },
+                      outsets: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+                      visual: Padding(
+                        padding: const EdgeInsets.fromLTRB(2, 2, 0, 2),
+                        child: Text(
+                          widget.strings.get('delete'),
+                          style: GoogleFonts.notoSansKr(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            height: 1.0,
+                            color: kAppDeleteActionColor,
+                          ),
                         ),
                       ),
                     ),
@@ -948,16 +1250,26 @@ class EpisodeReviewCard extends StatelessWidget {
             ),
           ),
         ],
+      ),
     );
 
-    if (embedInLightCard) {
-      return column;
+    final withThread = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        mainColumn,
+        if (_threadExpanded) _buildInlineThreadPanel(cs),
+      ],
+    );
+
+    if (widget.embedInLightCard) {
+      return withThread;
     }
     return Material(
       color: rowBg,
       surfaceTintColor: Colors.transparent,
       elevation: 0,
-      child: column,
+      child: withThread,
     );
   }
 }
@@ -1026,12 +1338,13 @@ class _EpisodeReviewInputState extends State<EpisodeReviewInput> {
     final borderColor = cs.outline.withValues(alpha: 0.4);
     final radius = BorderRadius.circular(8);
     final compact = widget.compact;
-    final fieldHeight = compact ? 58.0 : 72.0;
+    // 하단 고정 시트(compact): 입력칸 세로 여유 (기존 58 → 늘림).
+    final fieldHeight = compact ? 86.0 : 72.0;
     final contentPad = EdgeInsets.fromLTRB(
       8,
-      compact ? 7 : 12,
-      compact ? 42 : 52,
-      compact ? 7 : 12,
+      compact ? 10 : 12,
+      compact ? 44 : 52,
+      compact ? 10 : 12,
     );
     return SizedBox(
       height: fieldHeight,
@@ -1057,7 +1370,7 @@ class _EpisodeReviewInputState extends State<EpisodeReviewInput> {
               focusedBorder: OutlineInputBorder(borderRadius: radius, borderSide: BorderSide(color: borderColor)),
             ),
             style: GoogleFonts.notoSansKr(fontSize: 13, color: cs.onSurface),
-            maxLines: compact ? 2 : 3,
+            maxLines: compact ? 4 : 3,
             textAlignVertical: TextAlignVertical.top,
           ),
           Positioned(

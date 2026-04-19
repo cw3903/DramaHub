@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import '../models/post.dart';
@@ -254,21 +256,68 @@ class EpisodeReviewService {
     );
   }
 
+  static String _threadStrField(Map<String, dynamic> data, String key) {
+    final v = data[key];
+    if (v == null) return '';
+    if (v is String) return v;
+    return v.toString();
+  }
+
   static EpisodeReviewThreadItem? _threadItemFromDoc(String id, Map<String, dynamic> data) {
-    final at = _readTimestamp(data, 'createdAt');
-    if (at.millisecondsSinceEpoch == 0) return null;
+    var at = _readTimestamp(data, 'createdAt');
+    if (at.millisecondsSinceEpoch == 0) {
+      at = _readTimestamp(data, 'updatedAt');
+    }
+    if (at.millisecondsSinceEpoch == 0) {
+      // `serverTimestamp()` 확정 전 로컬 스냅샷에서는 `createdAt`이 비어 0으로 올 수 있음.
+      // 이때 null을 반환하면 방금 쓴 댓글이 목록에서 빠져 "저장 안 됨"처럼 보인다.
+      at = DateTime.now();
+    }
     final parent = data['parentCommentId'];
+    String? parentId;
+    if (parent is DocumentReference) {
+      final t = parent.id.trim();
+      if (t.isNotEmpty) parentId = t;
+    } else if (parent is String) {
+      final t = parent.trim();
+      if (t.isNotEmpty) parentId = t;
+    } else if (parent != null) {
+      final t = parent.toString().trim();
+      if (t.isNotEmpty) parentId = t;
+    }
     return EpisodeReviewThreadItem(
       id: id,
-      uid: data['uid'] as String? ?? '',
-      authorName: data['authorName'] as String? ?? '',
-      comment: data['comment'] as String? ?? '',
+      uid: _threadStrField(data, 'uid'),
+      authorName: _threadStrField(data, 'authorName'),
+      comment: _threadStrField(data, 'comment'),
       createdAt: at,
-      parentCommentId: parent is String && parent.trim().isNotEmpty ? parent.trim() : null,
+      parentCommentId: parentId,
     );
   }
 
+  static List<EpisodeReviewThreadItem> _parseThreadSnapshot(
+    QuerySnapshot<Map<String, dynamic>> snap,
+  ) {
+    final items = <EpisodeReviewThreadItem>[];
+    for (final d in snap.docs) {
+      try {
+        final item = _threadItemFromDoc(d.id, d.data());
+        if (item != null) items.add(item);
+      } catch (e, st) {
+        debugPrint('EpisodeReviewService thread doc ${d.id}: $e\n$st');
+      }
+    }
+    items.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    return items;
+  }
+
   /// 리뷰 스레드 실시간 스트림 (작성순).
+  ///
+  /// Firestore `snapshots()` 오류·문서 파싱 예외는 [StreamBuilder.hasError]로 흘러가지 않게
+  /// 빈 목록으로 삼키고 로그만 남긴다(기존 UI가 `episodeReviewSaveFailed`로 오해 표시).
+  ///
+  /// [StreamController]로 감싸 `onCancel`에서 `close()`하면 구독 해제와 트리 비활성화가
+  /// 겹칠 때 `InheritedElement._dependents.isEmpty` assert가 날 수 있어, 변환기만 쓴다.
   Stream<List<EpisodeReviewThreadItem>> watchThread(String reviewId) {
     final rid = reviewId.trim();
     if (rid.isEmpty) return const Stream.empty();
@@ -276,16 +325,33 @@ class EpisodeReviewService {
         .collection(_collection)
         .doc(rid)
         .collection(_threadSubcollection)
-        .orderBy('createdAt', descending: false)
         .snapshots()
-        .map((snap) => snap.docs
-            .map((d) => _threadItemFromDoc(d.id, d.data()))
-            .whereType<EpisodeReviewThreadItem>()
-            .toList());
+        .transform<List<EpisodeReviewThreadItem>>(
+          StreamTransformer<QuerySnapshot<Map<String, dynamic>>,
+              List<EpisodeReviewThreadItem>>.fromHandlers(
+            handleData: (snap, sink) {
+              try {
+                sink.add(_parseThreadSnapshot(snap));
+              } catch (e, st) {
+                debugPrint('EpisodeReviewService watchThread parse: $e\n$st');
+                sink.add(const []);
+              }
+            },
+            handleError: (Object e, StackTrace st, sink) {
+              debugPrint('EpisodeReviewService watchThread listen: $e\n$st');
+              sink.add(const []);
+            },
+          ),
+        );
   }
 
   /// 스레드에 댓글·대댓글 추가. [parentCommentId]가 있으면 해당 댓글에 대한 답글.
-  Future<String?> addThreadComment({
+  ///
+  /// 반환 `(에러 키, null)` 실패, `(null, 추가된 항목)` 성공, `(null, null)`은 본문 비어 호출용.
+  /// 스레드는 [FieldValue.serverTimestamp] 대신 **클라이언트 [Timestamp]**를 쓴다.
+  /// `serverTimestamp` + `parentCommentId` 조합에서 규칙/캐시·파싱 타이밍 이슈로 답글만
+  /// 실패하거나 목록에 안 보이는 사례가 있어 피드 답글과 동일하게 즉시 읽을 수 있게 한다.
+  Future<(String?, EpisodeReviewThreadItem?)> addThreadComment({
     required String reviewId,
     required String dramaId,
     required int episodeNumber,
@@ -293,37 +359,87 @@ class EpisodeReviewService {
     String? parentCommentId,
   }) async {
     final uid = _uid;
-    if (uid == null) return 'loginRequired';
+    if (uid == null) return ('loginRequired', null);
     final trimmed = text.trim();
-    if (trimmed.isEmpty) return null;
-    if (reviewId.startsWith('local_')) return null;
-    final loc = LocaleService.instance.locale;
+    if (trimmed.isEmpty) return (null, null);
+    final rid = reviewId.trim();
+    if (rid.isEmpty) return (saveFailedMessageKey, null);
+    if (rid.startsWith('local_')) return (saveFailedMessageKey, null);
+
+    final loc = Post.normalizeFeedCountry(LocaleService.instance.locale);
     final authorName = await UserProfileService.instance.getAuthorBaseName();
-    final authorPhotoUrl = UserProfileService.instance.profileImageUrlNotifier.value;
+    final rawPhoto = UserProfileService.instance.profileImageUrlNotifier.value?.trim();
+    final photoUrl =
+        (rawPhoto != null && rawPhoto.startsWith('http')) ? rawPhoto : null;
+
+    String? parent = parentCommentId?.trim();
+    if (parent != null && parent.isEmpty) parent = null;
+    // thread/{parentId} 가 아니라 에피 리뷰 문서 id와 동일하면 exists 규칙 등에서 답글만 거절될 수 있음.
+    if (parent != null && parent == rid) {
+      debugPrint(
+        'EpisodeReviewService addThreadComment: parentCommentId equals review doc id, ignored',
+      );
+      parent = null;
+    }
+
+    final createdAtLocal = DateTime.now();
+    final createdAtTs = Timestamp.fromDate(createdAtLocal.toUtc());
+
+    final payload = <String, dynamic>{};
+    if (parent != null) {
+      payload['parentCommentId'] = parent;
+    }
+    payload.addAll({
+      'uid': uid,
+      'authorName': authorName,
+      'comment': trimmed,
+      'createdAt': createdAtTs,
+      'country': loc,
+    });
+    if (photoUrl != null) {
+      payload['authorPhotoUrl'] = photoUrl;
+    }
+
+    late final String newDocId;
     try {
-      await _firestore
+      final ref = await _firestore
           .collection(_collection)
-          .doc(reviewId)
+          .doc(rid)
           .collection(_threadSubcollection)
-          .add({
-        'uid': uid,
-        'authorName': authorName,
-        'comment': trimmed,
-        'createdAt': FieldValue.serverTimestamp(),
-        'country': loc,
-        'authorPhotoUrl': authorPhotoUrl,
-        if (parentCommentId != null && parentCommentId.trim().isNotEmpty)
-          'parentCommentId': parentCommentId.trim(),
-      });
-      await _firestore.collection(_collection).doc(reviewId).update({
+          .add(payload);
+      newDocId = ref.id;
+    } catch (e, st) {
+      if (e is FirebaseException) {
+        debugPrint(
+          'EpisodeReviewService addThreadComment thread add: '
+          '${e.code} ${e.message}',
+        );
+      }
+      debugPrint('EpisodeReviewService addThreadComment thread add: $e\n$st');
+      return (saveFailedMessageKey, null);
+    }
+
+    try {
+      await _firestore.collection(_collection).doc(rid).update({
         'replyCount': FieldValue.increment(1),
       });
-      await loadReviews(dramaId, episodeNumber);
-      return null;
-    } catch (e) {
-      debugPrint('EpisodeReviewService addThreadComment: $e');
-      return saveFailedMessageKey;
+    } catch (e, st) {
+      debugPrint(
+        'EpisodeReviewService addThreadComment replyCount update (non-fatal): $e\n$st',
+      );
     }
+
+    await loadReviews(dramaId, episodeNumber);
+
+    final added = EpisodeReviewThreadItem(
+      id: newDocId,
+      uid: uid,
+      authorName: authorName,
+      comment: trimmed,
+      createdAt: createdAtLocal,
+      parentCommentId: parent,
+    );
+    return (null, added);
   }
 
   /// 좋아요 토글 (로그인 필요).

@@ -12,7 +12,6 @@ import '../widgets/lists_style_subpage_app_bar.dart'
     show
         ListsStyleSubpageHeaderBar,
         ListsStyleSubpageHorizontalSwipeBack,
-        kListsStyleSubpageLeadingEdgeInset,
         listsStyleSubpageBarForeground,
         listsStyleSubpageHeaderBackground,
         listsStyleSubpageSystemOverlay,
@@ -145,21 +144,16 @@ class _DramaEpisodeReviewsScreenState extends State<DramaEpisodeReviewsScreen> {
                 onBack: () => popListsStyleSubpage(context),
               ),
               Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: kListsStyleSubpageLeadingEdgeInset,
-                  ),
-                  child: EpisodeReviewPanel(
-                    dramaId: widget.dramaId,
-                    episodeNumber: widget.episodeNumber,
-                    onClose: () => popListsStyleSubpage(context),
-                    strings: s,
-                    showCloseButton: false,
-                    listStyle: EpisodeReviewListStyle.divider,
-                    hideSummaryHeader: true,
-                    hideReviewCardTimestamp: true,
-                    pinComposerToBottom: true,
-                  ),
+                child: EpisodeReviewPanel(
+                  dramaId: widget.dramaId,
+                  episodeNumber: widget.episodeNumber,
+                  onClose: () => popListsStyleSubpage(context),
+                  strings: s,
+                  showCloseButton: false,
+                  listStyle: EpisodeReviewListStyle.divider,
+                  hideSummaryHeader: true,
+                  hideReviewCardTimestamp: true,
+                  pinComposerToBottom: true,
                 ),
               ),
             ],

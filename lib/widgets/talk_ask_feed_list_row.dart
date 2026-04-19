@@ -15,7 +15,6 @@ import '../services/auth_service.dart';
 import '../services/post_service.dart';
 import '../services/user_profile_service.dart';
 import '../utils/format_utils.dart';
-import '../utils/post_board_utils.dart';
 import 'feed_inline_action_colors.dart';
 import 'feed_post_card.dart' show TalkAskHeartVote;
 import 'optimized_network_image.dart';
@@ -143,18 +142,8 @@ class _TalkListAuthorAvatar extends StatelessWidget {
 
 const Color _kTalkAskRowDividerLight = Color(0xFFEEEEEE);
 
-/// [FeedPostCard] 톡·에스크 카드 배경과 동일 톤 — 리스트 행도 한 덩어리로 보이게.
 Color _talkAskListRowFillColor(BuildContext context, ColorScheme cs, Post post) {
-  final theme = Theme.of(context);
-  final baseCardColor = theme.cardTheme.color ?? cs.surface;
-  final boardKind = postDisplayType(post);
-  if (boardKind != 'talk' && boardKind != 'ask') return baseCardColor;
-  return Color.lerp(
-        baseCardColor,
-        Colors.black,
-        theme.brightness == Brightness.dark ? 0.18 : 0.17,
-      ) ??
-      baseCardColor;
+  return Colors.transparent;
 }
 
 /// 톡·에스크 피드 — 구분선 리스트(헤더·본문+썸네일·하트·댓글).
@@ -214,7 +203,8 @@ class _TalkAskFeedListRowState extends State<TalkAskFeedListRow> {
   }
 
   Future<void> _onHeartTap() async {
-    if (!AuthService.instance.isLoggedIn.value) {
+    final uid = AuthService.instance.currentUser.value?.uid;
+    if (uid == null) {
       await Navigator.of(context).push<void>(
         MaterialPageRoute<void>(builder: (_) => const LoginPage()),
       );
@@ -291,12 +281,12 @@ class _TalkAskFeedListRowState extends State<TalkAskFeedListRow> {
           Divider(height: 1, thickness: 1, color: dividerColor),
         Material(
           color: _talkAskListRowFillColor(context, cs, widget.post),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              InkWell(
-                onTap: widget.onTap,
-                child: Padding(
+          child: InkWell(
+            onTap: widget.onTap,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
                   padding: const EdgeInsets.fromLTRB(18, 16, 18, 0),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -313,23 +303,38 @@ class _TalkAskFeedListRowState extends State<TalkAskFeedListRow> {
                           ),
                           const SizedBox(width: 6),
                           Expanded(
-                            child: Text.rich(
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              TextSpan(
-                                children: [
-                                  TextSpan(
-                                    text: nickname,
-                                    style: appUnifiedNicknameStyle(cs).copyWith(
-                                      height: 1.2,
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: () {
+                                final authorUid =
+                                    widget.post.authorUid?.trim();
+                                if (authorUid != null &&
+                                    authorUid.isNotEmpty) {
+                                  openUserProfileFromAuthorUid(
+                                    context,
+                                    authorUid,
+                                  );
+                                }
+                              },
+                              child: Text.rich(
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                TextSpan(
+                                  children: [
+                                    TextSpan(
+                                      text: nickname,
+                                      style: appUnifiedNicknameStyle(cs)
+                                          .copyWith(
+                                        height: 1.2,
+                                      ),
                                     ),
-                                  ),
-                                  TextSpan(
-                                    text: ' · ${widget.post.timeAgo}',
-                                    style: appUnifiedNicknameMetaTimeStyle(cs)
-                                        .copyWith(height: 1.2),
-                                  ),
-                                ],
+                                    TextSpan(
+                                      text: ' · ${widget.post.timeAgo}',
+                                      style: appUnifiedNicknameMetaTimeStyle(cs)
+                                          .copyWith(height: 1.2),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
@@ -401,51 +406,51 @@ class _TalkAskFeedListRowState extends State<TalkAskFeedListRow> {
                     ],
                   ),
                 ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(18, 10, 18, 10),
-                child: Row(
-                  children: [
-                    TalkAskHeartVote(
-                      voteState: _voteState,
-                      count: _displayCount,
-                      onTap: _onHeartTap,
-                    ),
-                    const SizedBox(width: 4),
-                    GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: widget.onTap,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 4,
-                          vertical: 2,
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              LucideIcons.message_circle,
-                              size: 13,
-                              color: feedInlineActionMutedForeground(cs),
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              formatCompactCount(widget.post.comments),
-                              style: GoogleFonts.notoSansKr(
-                                fontSize: 10,
-                                fontWeight: FontWeight.w600,
-                                height: 1.0,
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 10, 18, 10),
+                  child: Row(
+                    children: [
+                      TalkAskHeartVote(
+                        voteState: _voteState,
+                        count: _displayCount,
+                        onTap: _onHeartTap,
+                      ),
+                      const SizedBox(width: 4),
+                      GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: widget.onTap,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 2,
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                LucideIcons.message_circle,
+                                size: 13,
                                 color: feedInlineActionMutedForeground(cs),
                               ),
-                            ),
-                          ],
+                              const SizedBox(width: 4),
+                              Text(
+                                formatCompactCount(widget.post.comments),
+                                style: GoogleFonts.notoSansKr(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                  height: 1.0,
+                                  color: feedInlineActionMutedForeground(cs),
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ],

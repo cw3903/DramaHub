@@ -9,7 +9,6 @@ import 'package:google_fonts/google_fonts.dart';
 import '../constants/app_profile_avatar_size.dart';
 import '../models/drama.dart';
 import '../models/post.dart';
-import '../theme/app_theme.dart';
 import '../screens/login_page.dart';
 import '../services/auth_service.dart';
 import '../services/post_service.dart';
@@ -23,6 +22,8 @@ import 'drama_review_feed_tile.dart';
 import 'feed_inline_action_colors.dart';
 import 'optimized_network_image.dart';
 import 'review_card_tap_highlight.dart';
+import 'review_feed_comment_row.dart';
+import 'review_feed_inline_composer.dart';
 import 'write_review_sheet.dart';
 
 /// [community_board_tabs]의 `reviewInlineActionHitTarget`과 동일 — 터치 영역만 확장.
@@ -557,322 +558,29 @@ class _DramaReviewsListFeedRowState extends State<DramaReviewsListFeedRow> {
     return fallback();
   }
 
-  // ignore: unused_element
   Widget _commentRow(_InlineCommentEntry entry, ColorScheme cs, {required bool showReplyIcon}) {
     final c = entry.comment;
-    final isReply = entry.depth > 0;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    const avatarSize = kAppUnifiedProfileAvatarSize;
     final uid = AuthService.instance.currentUser.value?.uid ?? '';
     final likeState = _commentLikeState[c.id];
     final isLiked = likeState?.liked ?? c.likedBy.contains(uid);
     final likeCount = likeState?.count ?? c.votes;
+    final authorText = c.author.startsWith('u/') ? c.author.substring(2) : c.author;
 
-    // ── 톡/에스크 게시판과 동일한 색상·스타일 ──────────────────────────
-    final metaColor = cs.onSurface.withValues(alpha: 0.44);
-    final bodyFontSize = isReply ? 12.0 : 13.0;
-    final bodyTextStyle = GoogleFonts.notoSansKr(
-      fontSize: bodyFontSize,
-      color: cs.onSurface,
-      height: 1.38,
-    );
-    const talkAskBodyTextHeightBehavior = TextHeightBehavior(
-      applyHeightToLastDescent: false,
-    );
-    final replyStyle = appUnifiedNicknameStyle(cs).copyWith(
-      fontWeight: FontWeight.w500,
-      color: cs.onSurface.withValues(alpha: 0.30),
-      height: 1.2,
-    );
-    final countStyle = appUnifiedNicknameStyle(cs).copyWith(
-      fontWeight: FontWeight.w500,
-      color: isLiked ? Colors.redAccent : metaColor,
-      height: 1.2,
-    );
-
-    // ── 상수 (톡/에스크와 동일) ─────────────────────────────────────────
-    const talkAskLikeColW = 40.0;
-    const talkAskLikeCountDownNudge = 1.0;
-    const talkAskBodyVisualUpNudge = 1.5;
-    const heartIconSize = 16.0;
-    const heartVPad = 4.0;
-    final heartBlockH = heartVPad + heartIconSize + heartVPad;
-    const gapNameToBody = 1.0;
-    const bodyMicroUpPx = 1.0;
-    final gapTalkAskNameBodyReply = gapNameToBody - bodyMicroUpPx;
-
-    Widget heartHitTarget() {
-      return GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => unawaited(_toggleCommentLike(c)),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: heartVPad),
-          child: Icon(
-            isLiked ? Icons.favorite : Icons.favorite_border,
-            size: heartIconSize,
-            color: isLiked ? Colors.redAccent : metaColor,
-          ),
-        ),
-      );
-    }
-
-    // ── LayoutBuilder + Stack (톡/에스크와 동일한 픽셀 배치) ───────────
-    const replyArrowW = 18.0; // 14px 아이콘 + 4px gap
-    final commentBody = LayoutBuilder(
-      builder: (context, cons) {
-        final innerMaxW = cons.maxWidth;
-        final textColumnMaxW =
-            (innerMaxW - avatarSize - 8 - talkAskLikeColW -
-                    ((isReply || showReplyIcon) ? replyArrowW : 0.0))
-                .clamp(1.0, 9999.0);
-        final textScaler = MediaQuery.textScalerOf(context);
-        final textDir = Directionality.of(context);
-
-        final authorLineStyle = appUnifiedNicknameStyle(cs);
-        final authorText =
-            c.author.startsWith('u/') ? c.author.substring(2) : c.author;
-
-        final tpAuthorLine = TextPainter(
-          text: TextSpan(
-            text: authorText.isEmpty ? ' ' : authorText,
-            style: authorLineStyle,
-          ),
-          textDirection: textDir,
-          maxLines: 1,
-          textScaler: textScaler,
-        )..layout(maxWidth: textColumnMaxW);
-        final nameBlockH = tpAuthorLine.height;
-
-        final tpReply = TextPainter(
-          text: TextSpan(text: 'Reply', style: replyStyle),
-          textDirection: textDir,
-          maxLines: 1,
-          textScaler: textScaler,
-        )..layout();
-        final replyRowH = math.max(tpReply.height + 2.0, 18.0);
-
-        final tpCountSlot = TextPainter(
-          text: TextSpan(
-            text: '0',
-            style: appUnifiedNicknameStyle(cs).copyWith(
-              fontWeight: FontWeight.w500,
-              color: metaColor,
-              height: 1.2,
-            ),
-          ),
-          textDirection: textDir,
-          maxLines: 1,
-          textScaler: textScaler,
-        )..layout();
-        final countSlotH = tpCountSlot.height;
-
-        final yBodyTop = nameBlockH + gapTalkAskNameBodyReply;
-        final hasText = c.text.trim().isNotEmpty;
-
-        double bodyH = 0;
-        List<LineMetrics>? bodyLineMetrics;
-        if (hasText) {
-          final tpBody = TextPainter(
-            text: TextSpan(text: c.text, style: bodyTextStyle),
-            textDirection: textDir,
-            maxLines: null,
-            textScaler: textScaler,
-            textHeightBehavior: talkAskBodyTextHeightBehavior,
-          )..layout(maxWidth: textColumnMaxW);
-          bodyH = tpBody.height;
-          bodyLineMetrics = tpBody.computeLineMetrics();
-        }
-
-        double countH = countSlotH;
-        if (likeCount > 0) {
-          final tpC = TextPainter(
-            text: TextSpan(
-              text: formatCompactCount(likeCount),
-              style: countStyle,
-            ),
-            textDirection: textDir,
-            maxLines: 1,
-            textScaler: textScaler,
-          )..layout();
-          countH = math.max(countSlotH, tpC.height);
-        }
-
-        final double heartTop;
-        final double countTop;
-        final double replyRowTop;
-
-        if (hasText && bodyH > 0 && bodyLineMetrics != null) {
-          final lines = bodyLineMetrics;
-          if (lines.length >= 2) {
-            final h0 = lines[0].height;
-            final h1 = lines[1].height;
-            final line0CenterY = yBodyTop + h0 / 2;
-            final line1CenterY = yBodyTop + h0 + h1 / 2;
-            heartTop = line0CenterY - heartBlockH / 2;
-            countTop =
-                line1CenterY - countH / 2 + talkAskLikeCountDownNudge;
-            replyRowTop = yBodyTop + bodyH + gapTalkAskNameBodyReply;
-          } else {
-            replyRowTop = yBodyTop + bodyH + gapTalkAskNameBodyReply;
-            heartTop = yBodyTop + bodyH / 2 - heartBlockH / 2;
-            final countCenterY = replyRowTop + replyRowH / 2;
-            final ct =
-                countCenterY - countH / 2 + talkAskLikeCountDownNudge;
-            final replyBandMin = replyRowTop;
-            final replyBandMax = replyRowTop + replyRowH - countH;
-            countTop = replyBandMax >= replyBandMin
-                ? ct.clamp(replyBandMin, replyBandMax)
-                : replyBandMin;
-          }
-        } else {
-          replyRowTop =
-              hasText ? yBodyTop + bodyH + gapTalkAskNameBodyReply : yBodyTop;
-          heartTop = yBodyTop + replyRowH / 2 - heartBlockH / 2;
-          final countCenterY = replyRowTop + replyRowH / 2;
-          final ct =
-              countCenterY - countH / 2 + talkAskLikeCountDownNudge;
-          final replyBandMin = replyRowTop;
-          final replyBandMax = replyRowTop + replyRowH - countH;
-          countTop = replyBandMax >= replyBandMin
-              ? ct.clamp(replyBandMin, replyBandMax)
-              : replyBandMin;
-        }
-
-        final contentBottom = math.max(
-          hasText
-              ? yBodyTop + bodyH + gapTalkAskNameBodyReply
-              : replyRowTop,
-          replyRowTop + replyRowH,
-        );
-        var stackH = math.max(
-          contentBottom,
-          math.max(heartTop + heartBlockH, countTop + countH),
-        );
-        stackH = math.max(stackH, avatarSize.toDouble());
-
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (isReply || showReplyIcon) ...[
-              Padding(
-                padding: EdgeInsets.only(
-                  left: showReplyIcon && !isReply ? 2 : 0,
-                  top: 2,
-                ),
-                child: Transform.rotate(
-                  angle: math.pi,
-                  child: Icon(
-                    LucideIcons.reply,
-                    size: 14,
-                    color: metaColor,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 4),
-            ],
-            _commentAvatar(c, avatarSize, cs),
-            const SizedBox(width: 8),
-            Expanded(
-              child: SizedBox(
-                height: stackH,
-                child: Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    // 닉네임
-                    Positioned(
-                      left: 0,
-                      right: talkAskLikeColW,
-                      top: 0,
-                      child: Transform.translate(
-                        offset: const Offset(0, -1.5),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Flexible(
-                              child: Text(
-                                authorText,
-                                style: authorLineStyle,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    // 댓글 본문
-                    if (hasText)
-                      Positioned(
-                        left: 0,
-                        right: talkAskLikeColW,
-                        top: yBodyTop,
-                        child: Transform.translate(
-                          offset: const Offset(0, -talkAskBodyVisualUpNudge),
-                          child: Text(
-                            c.text,
-                            style: bodyTextStyle,
-                            textHeightBehavior: talkAskBodyTextHeightBehavior,
-                          ),
-                        ),
-                      ),
-                    // Reply 버튼
-                    Positioned(
-                      left: 0,
-                      right: talkAskLikeColW,
-                      top: replyRowTop,
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () {
-                          if (_feedPostId != null) _startReply(c);
-                        },
-                        child: Text('Reply', style: replyStyle),
-                      ),
-                    ),
-                    // 하트 아이콘
-                    Positioned(
-                      right: 0,
-                      top: heartTop,
-                      width: talkAskLikeColW,
-                      height: heartBlockH,
-                      child: Center(child: heartHitTarget()),
-                    ),
-                    // 하트 숫자
-                    Positioned(
-                      right: 0,
-                      top: countTop,
-                      width: talkAskLikeColW,
-                      height: countH,
-                      child: Center(
-                        child: likeCount > 0
-                            ? Text(
-                                formatCompactCount(likeCount),
-                                textAlign: TextAlign.center,
-                                style: countStyle,
-                              )
-                            : const SizedBox.shrink(),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        );
+    return ReviewFeedCommentRow(
+      colorScheme: cs,
+      depth: entry.depth,
+      showReplyIcon: showReplyIcon,
+      authorName: authorText,
+      authorUid: c.authorUid,
+      comment: c.text,
+      avatar: _commentAvatar(c, kAppUnifiedProfileAvatarSize, cs),
+      likeCount: likeCount,
+      isLiked: isLiked,
+      onLikeTap: () => unawaited(_toggleCommentLike(c)),
+      onReplyTap: () {
+        if (_feedPostId != null) _startReply(c);
       },
-    );
-
-    // depth 0: 일반 댓글
-    if (!isReply) {
-      return Padding(
-        padding: const EdgeInsets.fromLTRB(0, 20, 0, 8),
-        child: commentBody,
-      );
-    }
-
-    // depth 1+: 화살표 표시 (아바타 왼쪽), 배경 박스 없음
-    return Padding(
-      padding: const EdgeInsets.only(top: 12),
-      child: commentBody,
+      replyLabel: 'Reply',
     );
   }
 
@@ -907,10 +615,7 @@ class _DramaReviewsListFeedRowState extends State<DramaReviewsListFeedRow> {
       commentWidgets.add(row);
 
       if (hasReplies && !isExpanded) {
-        final hasArrow = entry.depth > 0 || showReplyIcon;
-        final toggleLeft = (hasArrow ? 18.0 : 0.0) +
-            kAppUnifiedProfileAvatarSize +
-            8.0;
+        final toggleLeft = 18.0 + kAppUnifiedProfileAvatarSize + 8.0;
         final repliesN = comment.replies.length;
         final label = repliesN == 1 ? 'reply' : 'replies';
         final metaColor = cs.onSurface.withValues(alpha: 0.44);
@@ -953,10 +658,7 @@ class _DramaReviewsListFeedRowState extends State<DramaReviewsListFeedRow> {
         final parentComment = parent.comment;
         final parentExpanded = _expandedReplyThreads.contains(parentComment.id);
         if (!parentExpanded || parentComment.replies.isEmpty) continue;
-        const parentHasArrow = true;
-        final toggleLeft = (parentHasArrow ? 18.0 : 0.0) +
-            kAppUnifiedProfileAvatarSize +
-            8.0;
+        final toggleLeft = 18.0 + kAppUnifiedProfileAvatarSize + 8.0;
         final label = parentComment.replies.length == 1 ? 'reply' : 'replies';
         final metaColor = cs.onSurface.withValues(alpha: 0.44);
         commentWidgets.add(
@@ -1018,12 +720,12 @@ class _DramaReviewsListFeedRowState extends State<DramaReviewsListFeedRow> {
               }),
               cs: cs,
             ),
-          _DramaReviewsListInlineComposer(
+          ReviewFeedInlineComposer(
             controller: ctrl,
             focusNode: _commentFocus,
             isSubmitting: _submitting,
             autofocus: !hasComments,
-            sendLabel: sendLabel,
+            sendSemanticLabel: sendLabel,
             onSend: _submitComment,
           ),
         ],
@@ -1199,171 +901,6 @@ class _DramaReviewsListFeedRowState extends State<DramaReviewsListFeedRow> {
           ),
           if (_expanded) _buildExpanded(cs),
         ],
-      ),
-    );
-  }
-}
-
-class _DramaReviewsListInlineComposer extends StatelessWidget {
-  const _DramaReviewsListInlineComposer({
-    required this.controller,
-    required this.focusNode,
-    required this.isSubmitting,
-    required this.autofocus,
-    required this.onSend,
-    required this.sendLabel,
-  });
-
-  final TextEditingController controller;
-  final FocusNode focusNode;
-  final bool isSubmitting;
-  final bool autofocus;
-  final Future<void> Function() onSend;
-  final String sendLabel;
-
-  static const Color _sendBlue = Color(0xFF0A84FF);
-
-  Widget _defaultAvatar(int colorIdx, double size) {
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        color: UserProfileService.bgColorFromIndex(colorIdx),
-        shape: BoxShape.circle,
-      ),
-      child: Center(
-        child: Icon(
-          Icons.person,
-          size: size * 0.55,
-          color: UserProfileService.iconColorFromIndex(colorIdx),
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-    return Material(
-      color: Colors.transparent,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(10, 2, 10, 8),
-        child: ListenableBuilder(
-          listenable: Listenable.merge([
-            UserProfileService.instance.profileImageUrlNotifier,
-            UserProfileService.instance.avatarColorNotifier,
-            controller,
-          ]),
-          builder: (context, _) {
-            final rawUrl =
-                UserProfileService.instance.profileImageUrlNotifier.value;
-            final url = rawUrl?.trim();
-            final colorIdx =
-                UserProfileService.instance.avatarColorNotifier.value ?? 0;
-            const avatarSize = kAppUnifiedProfileAvatarSize;
-            final Widget avatar = (url != null && url.isNotEmpty)
-                ? ClipOval(
-                    child: OptimizedNetworkImage.avatar(
-                      imageUrl: url,
-                      size: avatarSize,
-                      errorWidget: _defaultAvatar(colorIdx, avatarSize),
-                    ),
-                  )
-                : _defaultAvatar(colorIdx, avatarSize);
-            final canSend = !isSubmitting && controller.text.trim().isNotEmpty;
-            final sendBg = canSend
-                ? _sendBlue
-                : cs.onSurface.withValues(alpha: 0.22);
-            final sendIconColor = canSend
-                ? Colors.white
-                : cs.onSurface.withValues(alpha: 0.38);
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                avatar,
-                const SizedBox(width: 8),
-                Expanded(
-                  child: TextField(
-                    controller: controller,
-                    focusNode: focusNode,
-                    autofocus: autofocus,
-                    minLines: 1,
-                    maxLines: 6,
-                    style: GoogleFonts.notoSansKr(fontSize: 14, height: 1.32),
-                    decoration: InputDecoration(
-                      filled: true,
-                      fillColor: theme.brightness == Brightness.dark
-                          ? cs.surfaceContainerHigh
-                          : cs.surface,
-                      isDense: true,
-                      contentPadding: const EdgeInsets.fromLTRB(14, 8, 4, 8),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(22),
-                        borderSide: BorderSide(
-                          color: cs.outline.withValues(alpha: 0.28),
-                        ),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(22),
-                        borderSide: BorderSide(
-                          color: cs.outline.withValues(alpha: 0.28),
-                        ),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(22),
-                        borderSide: BorderSide(
-                          color: cs.outline.withValues(alpha: 0.45),
-                        ),
-                      ),
-                      suffixIcon: Padding(
-                        padding: const EdgeInsets.fromLTRB(0, 4, 4, 4),
-                        child: Material(
-                          color: sendBg,
-                          shape: const CircleBorder(),
-                          clipBehavior: Clip.antiAlias,
-                          child: InkWell(
-                            customBorder: const CircleBorder(),
-                            onTap: (!canSend || isSubmitting)
-                                ? null
-                                : () {
-                                    unawaited(onSend());
-                                  },
-                            child: SizedBox(
-                              width: 30,
-                              height: 30,
-                              child: Center(
-                                child: isSubmitting
-                                    ? const SizedBox(
-                                        width: 16,
-                                        height: 16,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: Colors.white,
-                                        ),
-                                      )
-                                    : Icon(
-                                        Icons.arrow_upward,
-                                        color: sendIconColor,
-                                        size: 17,
-                                        semanticLabel: sendLabel,
-                                      ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      suffixIconConstraints: const BoxConstraints(
-                        minWidth: 40,
-                        minHeight: 36,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            );
-          },
-        ),
       ),
     );
   }

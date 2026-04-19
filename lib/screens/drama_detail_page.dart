@@ -1688,12 +1688,14 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
             ),
           ],
         ),
-        AnimatedSize(
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeInOut,
-          alignment: Alignment.topCenter,
-          child: _episodesExpanded
-              ? Column(
+        // 회차 블록 + [EpisodeReviewPanel]과 하단 시트 [AnimatedSize]가 겹치면
+        // 티커 중복 assert가 날 수 있어 [AnimatedSize] 대신 [ClipRect]+[Align] 사용.
+        ClipRect(
+          child: Align(
+            alignment: Alignment.topCenter,
+            heightFactor: _episodesExpanded ? 1.0 : 0.0,
+            child: _episodesExpanded
+                ? Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -1898,7 +1900,8 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
                     ],
                   ],
                 )
-              : const SizedBox.shrink(),
+                : const SizedBox.shrink(),
+          ),
         ),
       ],
     );
@@ -2626,6 +2629,8 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
+                            // 큰 별 제거 전과 동일: SizedBox(6) + 별 60 + SizedBox(8) 다음에 점수 열이 오던 위치.
+                            const SizedBox(width: 6 + 60 + 8),
                             Column(
                               mainAxisSize: MainAxisSize.min,
                               crossAxisAlignment: CrossAxisAlignment.center,
@@ -2845,6 +2850,57 @@ class _LikedHeartIcon extends StatelessWidget {
   }
 }
 
+/// [_ReplyInput] 왼쪽 — [ReviewFeedInlineComposer]와 동일한 내 프로필 표시.
+class _MeProfileAvatarForReplyComposer extends StatelessWidget {
+  const _MeProfileAvatarForReplyComposer();
+
+  static Widget _defaultAvatar(int colorIdx, double size) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: UserProfileService.bgColorFromIndex(colorIdx),
+        shape: BoxShape.circle,
+      ),
+      child: Center(
+        child: Icon(
+          Icons.person,
+          size: size * 0.55,
+          color: UserProfileService.iconColorFromIndex(colorIdx),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const size = kAppUnifiedProfileAvatarSize;
+    return ListenableBuilder(
+      listenable: Listenable.merge([
+        UserProfileService.instance.profileImageUrlNotifier,
+        UserProfileService.instance.avatarColorNotifier,
+      ]),
+      builder: (context, _) {
+        final rawUrl =
+            UserProfileService.instance.profileImageUrlNotifier.value;
+        final url = rawUrl?.trim();
+        final colorIdx =
+            UserProfileService.instance.avatarColorNotifier.value ?? 0;
+        if (url != null && url.isNotEmpty) {
+          return ClipOval(
+            child: OptimizedNetworkImage.avatar(
+              imageUrl: url,
+              size: size,
+              errorWidget: _defaultAvatar(colorIdx, size),
+            ),
+          );
+        }
+        return _defaultAvatar(colorIdx, size);
+      },
+    );
+  }
+}
+
 /// 답글 입력창 (리뷰 카드 하단)
 class _ReplyInput extends StatefulWidget {
   const _ReplyInput({required this.strings, required this.onSubmitted});
@@ -2879,7 +2935,6 @@ class _ReplyInputState extends State<_ReplyInput> {
     final hasText = _controller.text.trim().isNotEmpty;
     final cs = Theme.of(context).colorScheme;
     return Container(
-      margin: const EdgeInsets.only(left: 8),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
         color: cs.surface,
@@ -2887,6 +2942,7 @@ class _ReplyInputState extends State<_ReplyInput> {
         border: Border.all(color: cs.outline.withOpacity(0.3)),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Expanded(
             child: TextField(
@@ -3463,7 +3519,19 @@ class _ReviewCardState extends State<_ReviewCard> {
         ),
       ],
       const SizedBox(height: 10),
-      _ReplyInput(strings: widget.strings, onSubmitted: _addReply),
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          const _MeProfileAvatarForReplyComposer(),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _ReplyInput(
+              strings: widget.strings,
+              onSubmitted: _addReply,
+            ),
+          ),
+        ],
+      ),
     ];
   }
 

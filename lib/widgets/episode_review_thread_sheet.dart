@@ -4,6 +4,8 @@ import 'package:google_fonts/google_fonts.dart';
 import '../services/episode_review_service.dart';
 import '../theme/app_theme.dart';
 import 'lists_style_subpage_app_bar.dart' show kListsStyleSubpageLeadingEdgeInset;
+import 'review_feed_inline_composer.dart';
+import 'user_profile_nav.dart';
 
 /// 에피소드 리뷰 한 건에 대한 댓글·대댓글 (`episode_reviews/{id}/thread`).
 class EpisodeReviewThreadSheet {
@@ -62,7 +64,7 @@ class _EpisodeReviewThreadSheetBodyState extends State<_EpisodeReviewThreadSheet
     final text = _textController.text.trim();
     if (text.isEmpty || _sending) return;
     setState(() => _sending = true);
-    final err = await EpisodeReviewService.instance.addThreadComment(
+    final (err, _) = await EpisodeReviewService.instance.addThreadComment(
       reviewId: widget.reviewId,
       dramaId: widget.dramaId,
       episodeNumber: widget.episodeNumber,
@@ -156,15 +158,7 @@ class _EpisodeReviewThreadSheetBodyState extends State<_EpisodeReviewThreadSheet
                   }
                   final items = snap.data ?? [];
                   if (items.isEmpty) {
-                    return Center(
-                      child: Text(
-                        widget.strings.get('commentBeFirst'),
-                        style: GoogleFonts.notoSansKr(
-                          fontSize: 14,
-                          color: cs.onSurfaceVariant,
-                        ),
-                      ),
-                    );
+                    return const SizedBox.shrink();
                   }
                   final byId = {for (final t in items) t.id: t};
                   return ListView.builder(
@@ -187,12 +181,21 @@ class _EpisodeReviewThreadSheetBodyState extends State<_EpisodeReviewThreadSheet
                             Row(
                               children: [
                                 Expanded(
-                                  child: Text(
-                                    t.authorName,
-                                    style: GoogleFonts.notoSansKr(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600,
-                                      color: cs.onSurfaceVariant.withValues(alpha: 0.85),
+                                  child: GestureDetector(
+                                    behavior: HitTestBehavior.opaque,
+                                    onTap: () {
+                                      final uid = t.uid.trim();
+                                      if (uid.isNotEmpty) {
+                                        openUserProfileFromAuthorUid(context, uid);
+                                      }
+                                    },
+                                    child: Text(
+                                      t.authorName,
+                                      style: GoogleFonts.notoSansKr(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                        color: cs.onSurfaceVariant.withValues(alpha: 0.85),
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -274,62 +277,18 @@ class _EpisodeReviewThreadSheetBodyState extends State<_EpisodeReviewThreadSheet
               ),
             Padding(
               padding: const EdgeInsets.fromLTRB(
-                kListsStyleSubpageLeadingEdgeInset,
+                kListsStyleSubpageLeadingEdgeInset - 10,
                 4,
-                kListsStyleSubpageLeadingEdgeInset,
+                kListsStyleSubpageLeadingEdgeInset - 10,
                 12,
               ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _textController,
-                      focusNode: _focusNode,
-                      minLines: 1,
-                      maxLines: 4,
-                      textCapitalization: TextCapitalization.sentences,
-                      decoration: InputDecoration(
-                        hintText: widget.strings.get('joinConversation'),
-                        hintStyle: GoogleFonts.notoSansKr(
-                          fontSize: 14,
-                          color: cs.onSurfaceVariant.withValues(alpha: 0.65),
-                        ),
-                        filled: true,
-                        fillColor: cs.surfaceContainerHighest.withValues(alpha: 0.45),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide(color: cs.outline.withValues(alpha: 0.35)),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide(color: cs.outline.withValues(alpha: 0.35)),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide(color: cs.primary.withValues(alpha: 0.65)),
-                        ),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                      ),
-                      style: GoogleFonts.notoSansKr(fontSize: 14, color: cs.onSurface),
-                      onSubmitted: (_) => _send(),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton.filled(
-                    onPressed: _sending ? null : _send,
-                    icon: _sending
-                        ? SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: cs.onInverseSurface,
-                            ),
-                          )
-                        : Icon(Icons.send_rounded, size: 20, color: cs.onInverseSurface),
-                  ),
-                ],
+              child: ReviewFeedInlineComposer(
+                controller: _textController,
+                focusNode: _focusNode,
+                isSubmitting: _sending,
+                autofocus: false,
+                onSend: _send,
+                sendSemanticLabel: widget.strings.get('replySubmit'),
               ),
             ),
           ],
