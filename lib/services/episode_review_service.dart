@@ -21,6 +21,8 @@ class EpisodeReviewItem {
     this.authorPhotoUrl,
     this.authorAvatarColorIndex,
     this.appLocale,
+    this.likedUids = const [],
+    this.replyCount = 0,
   });
 
   final String id;
@@ -37,7 +39,61 @@ class EpisodeReviewItem {
   /// Firestore `country` (us/kr/jp/cn). null이면 레거시.
   final String? appLocale;
 
-  String get timeAgo => formatTimeAgo(createdAt);
+  /// 좋아요 누른 uid 목록 (`arrayUnion` / `arrayRemove`).
+  final List<String> likedUids;
+
+  /// `thread` 서브컬렉션 댓글·대댓글 개수 (문서 필드 `replyCount`).
+  final int replyCount;
+
+  String get timeAgo => formatTimeAgo(createdAt, LocaleService.instance.locale);
+
+  int get likeCount => likedUids.length;
+
+  bool likedByUid(String? uid) =>
+      uid != null && uid.isNotEmpty && likedUids.contains(uid);
+
+  EpisodeReviewItem copyWith({
+    List<String>? likedUids,
+    int? replyCount,
+  }) {
+    return EpisodeReviewItem(
+      id: id,
+      dramaId: dramaId,
+      episodeNumber: episodeNumber,
+      uid: uid,
+      authorName: authorName,
+      comment: comment,
+      createdAt: createdAt,
+      rating: rating,
+      authorPhotoUrl: authorPhotoUrl,
+      authorAvatarColorIndex: authorAvatarColorIndex,
+      appLocale: appLocale,
+      likedUids: likedUids ?? this.likedUids,
+      replyCount: replyCount ?? this.replyCount,
+    );
+  }
+}
+
+/// 에피소드 리뷰 아래 스레드 댓글·대댓글 (`episode_reviews/{id}/thread`).
+class EpisodeReviewThreadItem {
+  const EpisodeReviewThreadItem({
+    required this.id,
+    required this.uid,
+    required this.authorName,
+    required this.comment,
+    required this.createdAt,
+    this.parentCommentId,
+  });
+
+  final String id;
+  final String uid;
+  final String authorName;
+  final String comment;
+  final DateTime createdAt;
+  /// null이면 리뷰에 대한 직접 댓글, 있으면 해당 댓글의 대댓글.
+  final String? parentCommentId;
+
+  String get timeAgo => formatTimeAgo(createdAt, LocaleService.instance.locale);
 }
 
 /// 회차별 리뷰/댓글 (Firestore). 로그인 사용자만 작성·저장.
@@ -47,6 +103,7 @@ class EpisodeReviewService {
   static final EpisodeReviewService instance = EpisodeReviewService._();
 
   static const _collection = 'episode_reviews';
+  static const _threadSubcollection = 'thread';
 
   /// [add] 중복 시 UI에서 `strings.get(duplicateReviewMessageKey)` 로 표시
   static const duplicateReviewMessageKey = 'episodeReviewAlreadyExists';
@@ -156,13 +213,30 @@ class EpisodeReviewService {
     }
   }
 
+  static DateTime _readTimestamp(Map<String, dynamic> data, String key) {
+    final v = data[key];
+    if (v is Timestamp) return v.toDate();
+    if (v is int) return DateTime.fromMillisecondsSinceEpoch(v, isUtc: false);
+    if (v is num) return DateTime.fromMillisecondsSinceEpoch(v.toInt(), isUtc: false);
+    return DateTime.fromMillisecondsSinceEpoch(0, isUtc: false);
+  }
+
   static EpisodeReviewItem? _itemFromFirestore(String id, Map<String, dynamic> data) {
-    final createdAt = data['createdAt'];
-    final at = createdAt is Timestamp
-        ? createdAt.toDate()
-        : DateTime.fromMillisecondsSinceEpoch((createdAt as num?)?.toInt() ?? 0, isUtc: false);
+    var at = _readTimestamp(data, 'createdAt');
+    if (at.millisecondsSinceEpoch == 0) {
+      at = _readTimestamp(data, 'updatedAt');
+    }
     final colorIdx = data['authorAvatarColorIndex'];
     final loc = (data['country'] as String?)?.trim();
+    final likedRaw = data['likedUids'];
+    final likedUids = <String>[];
+    if (likedRaw is List) {
+      for (final e in likedRaw) {
+        if (e is String && e.trim().isNotEmpty) likedUids.add(e.trim());
+      }
+    }
+    final rc = data['replyCount'];
+    final replyCount = rc is num ? rc.toInt() : int.tryParse('$rc') ?? 0;
     return EpisodeReviewItem(
       id: id,
       dramaId: data['dramaId'] as String? ?? '',
@@ -175,7 +249,154 @@ class EpisodeReviewService {
       authorPhotoUrl: data['authorPhotoUrl'] as String?,
       authorAvatarColorIndex: colorIdx is num ? colorIdx.toInt() : null,
       appLocale: loc != null && loc.isNotEmpty ? loc : null,
+      likedUids: likedUids,
+      replyCount: replyCount,
     );
+  }
+
+  static EpisodeReviewThreadItem? _threadItemFromDoc(String id, Map<String, dynamic> data) {
+    final at = _readTimestamp(data, 'createdAt');
+    if (at.millisecondsSinceEpoch == 0) return null;
+    final parent = data['parentCommentId'];
+    return EpisodeReviewThreadItem(
+      id: id,
+      uid: data['uid'] as String? ?? '',
+      authorName: data['authorName'] as String? ?? '',
+      comment: data['comment'] as String? ?? '',
+      createdAt: at,
+      parentCommentId: parent is String && parent.trim().isNotEmpty ? parent.trim() : null,
+    );
+  }
+
+  /// 리뷰 스레드 실시간 스트림 (작성순).
+  Stream<List<EpisodeReviewThreadItem>> watchThread(String reviewId) {
+    final rid = reviewId.trim();
+    if (rid.isEmpty) return const Stream.empty();
+    return _firestore
+        .collection(_collection)
+        .doc(rid)
+        .collection(_threadSubcollection)
+        .orderBy('createdAt', descending: false)
+        .snapshots()
+        .map((snap) => snap.docs
+            .map((d) => _threadItemFromDoc(d.id, d.data()))
+            .whereType<EpisodeReviewThreadItem>()
+            .toList());
+  }
+
+  /// 스레드에 댓글·대댓글 추가. [parentCommentId]가 있으면 해당 댓글에 대한 답글.
+  Future<String?> addThreadComment({
+    required String reviewId,
+    required String dramaId,
+    required int episodeNumber,
+    required String text,
+    String? parentCommentId,
+  }) async {
+    final uid = _uid;
+    if (uid == null) return 'loginRequired';
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return null;
+    if (reviewId.startsWith('local_')) return null;
+    final loc = LocaleService.instance.locale;
+    final authorName = await UserProfileService.instance.getAuthorBaseName();
+    final authorPhotoUrl = UserProfileService.instance.profileImageUrlNotifier.value;
+    try {
+      await _firestore
+          .collection(_collection)
+          .doc(reviewId)
+          .collection(_threadSubcollection)
+          .add({
+        'uid': uid,
+        'authorName': authorName,
+        'comment': trimmed,
+        'createdAt': FieldValue.serverTimestamp(),
+        'country': loc,
+        'authorPhotoUrl': authorPhotoUrl,
+        if (parentCommentId != null && parentCommentId.trim().isNotEmpty)
+          'parentCommentId': parentCommentId.trim(),
+      });
+      await _firestore.collection(_collection).doc(reviewId).update({
+        'replyCount': FieldValue.increment(1),
+      });
+      await loadReviews(dramaId, episodeNumber);
+      return null;
+    } catch (e) {
+      debugPrint('EpisodeReviewService addThreadComment: $e');
+      return saveFailedMessageKey;
+    }
+  }
+
+  /// 좋아요 토글 (로그인 필요).
+  /// 목록은 즉시 낙관 반영 후 Firestore만 갱신한다. 전체 [loadReviews] 호출 없음(지연·병목 제거).
+  Future<String?> toggleEpisodeReviewLike({
+    required String reviewId,
+    required String dramaId,
+    required int episodeNumber,
+  }) async {
+    final uid = _uid;
+    if (uid == null) return 'loginRequired';
+    if (reviewId.startsWith('local_')) return null;
+    final notifier = getNotifierForEpisode(dramaId, episodeNumber);
+    final before = List<EpisodeReviewItem>.from(notifier.value);
+    final idx = before.indexWhere((r) => r.id == reviewId);
+    if (idx < 0) {
+      return _toggleEpisodeReviewLikeReloadPath(reviewId, dramaId, episodeNumber);
+    }
+    final item = before[idx];
+    final liked = item.likedByUid(uid);
+    final nextLikes = List<String>.from(item.likedUids);
+    if (liked) {
+      nextLikes.removeWhere((x) => x == uid);
+    } else if (!nextLikes.contains(uid)) {
+      nextLikes.add(uid);
+    }
+    final optimistic = List<EpisodeReviewItem>.from(before);
+    optimistic[idx] = item.copyWith(likedUids: nextLikes);
+    notifier.value = optimistic;
+
+    try {
+      final ref = _firestore.collection(_collection).doc(reviewId);
+      if (liked) {
+        await ref.update({'likedUids': FieldValue.arrayRemove([uid])});
+      } else {
+        await ref.update({'likedUids': FieldValue.arrayUnion([uid])});
+      }
+      return null;
+    } catch (e) {
+      debugPrint('EpisodeReviewService toggleEpisodeReviewLike: $e');
+      notifier.value = before;
+      return saveFailedMessageKey;
+    }
+  }
+
+  /// 캐시에 없을 때만: 기존처럼 읽기·쓰기 후 전체 로드.
+  Future<String?> _toggleEpisodeReviewLikeReloadPath(
+    String reviewId,
+    String dramaId,
+    int episodeNumber,
+  ) async {
+    final uid = _uid;
+    if (uid == null) return 'loginRequired';
+    try {
+      final ref = _firestore.collection(_collection).doc(reviewId);
+      final snap = await ref.get();
+      if (!snap.exists) return saveFailedMessageKey;
+      final data = snap.data() ?? {};
+      final likes = List<String>.from(
+        (data['likedUids'] as List?)?.map((e) => e.toString()) ?? [],
+      );
+      final liked = likes.contains(uid);
+      if (liked) {
+        await ref.update({'likedUids': FieldValue.arrayRemove([uid])});
+      } else {
+        await ref.update({'likedUids': FieldValue.arrayUnion([uid])});
+      }
+      await loadReviews(dramaId, episodeNumber);
+      return null;
+    } catch (e) {
+      debugPrint('EpisodeReviewService _toggleEpisodeReviewLikeReloadPath: $e');
+      return saveFailedMessageKey;
+    }
   }
 
   /// 새 리뷰 등록. 문서 id는 자동 생성, `uid`는 필드로만 저장.
@@ -189,55 +410,29 @@ class EpisodeReviewService {
   }) async {
     if (dramaId.isEmpty || comment.trim().isEmpty) return null;
     final uid = _uid;
-    final notifier = getNotifierForEpisode(dramaId, episodeNumber);
+    if (uid == null) return 'loginRequired';
     final trimmed = comment.trim();
-
     final loc = LocaleService.instance.locale;
-    if (uid != null) {
-      try {
-        final dup = await _firestore
-            .collection(_collection)
-            .where('dramaId', isEqualTo: dramaId)
-            .where('episodeNumber', isEqualTo: episodeNumber)
-            .get();
-        for (final d in dup.docs) {
-          if ((d.data()['uid'] as String?) != uid) continue;
-          if (_docVisibleInCurrentLocale(d.data())) {
-            return duplicateReviewMessageKey;
-          }
+
+    try {
+      final dup = await _firestore
+          .collection(_collection)
+          .where('dramaId', isEqualTo: dramaId)
+          .where('episodeNumber', isEqualTo: episodeNumber)
+          .get();
+      for (final d in dup.docs) {
+        if ((d.data()['uid'] as String?) != uid) continue;
+        if (_docVisibleInCurrentLocale(d.data())) {
+          return duplicateReviewMessageKey;
         }
-      } catch (e) {
-        debugPrint('EpisodeReviewService add duplicate check: $e');
-        // 인덱스 미배포 등으로 쿼리 실패 시에는 저장 단계까지 진행
       }
+    } catch (e) {
+      debugPrint('EpisodeReviewService add duplicate check: $e');
     }
 
-    final authorName = uid != null
-        ? await UserProfileService.instance.getAuthorBaseName()
-        : (UserProfileService.instance.nicknameNotifier.value?.trim() ?? '회원');
+    final authorName = await UserProfileService.instance.getAuthorBaseName();
     final authorPhotoUrl = UserProfileService.instance.profileImageUrlNotifier.value;
     final authorAvatarColorIndex = UserProfileService.instance.avatarColorNotifier.value;
-    final now = DateTime.now();
-
-    if (uid == null) {
-      final docId = 'local_${dramaId}_${episodeNumber}_${now.millisecondsSinceEpoch}';
-      final newItem = EpisodeReviewItem(
-        id: docId,
-        dramaId: dramaId,
-        episodeNumber: episodeNumber,
-        uid: '',
-        authorName: authorName,
-        comment: trimmed,
-        createdAt: now,
-        rating: rating,
-        authorPhotoUrl: authorPhotoUrl,
-        authorAvatarColorIndex: authorAvatarColorIndex,
-        appLocale: loc,
-      );
-      notifier.value = [...notifier.value, newItem];
-      _syncAverage(dramaId, episodeNumber, notifier.value);
-      return null;
-    }
 
     try {
       await _firestore.collection(_collection).add({
@@ -251,6 +446,8 @@ class EpisodeReviewService {
         'createdAt': FieldValue.serverTimestamp(),
         'authorPhotoUrl': authorPhotoUrl,
         'authorAvatarColorIndex': authorAvatarColorIndex,
+        'likedUids': <String>[],
+        'replyCount': 0,
       });
       await loadReviews(dramaId, episodeNumber);
       if (rating != null && rating > 0) {
@@ -325,7 +522,20 @@ class EpisodeReviewService {
     final notifier = getNotifierForEpisode(dramaId, episodeNumber);
     notifier.value = notifier.value.where((e) => e.id != reviewId).toList();
     _syncAverage(dramaId, episodeNumber, notifier.value);
+    if (reviewId.startsWith('local_')) return;
     try {
+      final threadRef =
+          _firestore.collection(_collection).doc(reviewId).collection(_threadSubcollection);
+      const chunk = 400;
+      while (true) {
+        final snap = await threadRef.limit(chunk).get();
+        if (snap.docs.isEmpty) break;
+        final batch = _firestore.batch();
+        for (final d in snap.docs) {
+          batch.delete(d.reference);
+        }
+        await batch.commit();
+      }
       await _firestore.collection(_collection).doc(reviewId).delete();
     } catch (e) {
       debugPrint('EpisodeReviewService deleteById: $e');

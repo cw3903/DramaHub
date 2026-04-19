@@ -1879,6 +1879,21 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
                         onClose: () =>
                             setState(() => _selectedEpisodeNumber = null),
                         strings: widget.strings,
+                        showCloseButton: false,
+                        hideReviewCardTimestamp: true,
+                        maxVisibleReviews: 3,
+                        onViewAll: () {
+                          final n = _selectedEpisodeNumber;
+                          if (n == null || !context.mounted) return;
+                          Navigator.of(context).push<void>(
+                            MaterialPageRoute<void>(
+                              builder: (_) => DramaEpisodeReviewsScreen(
+                                dramaId: widget.dramaId,
+                                episodeNumber: n,
+                              ),
+                            ),
+                          );
+                        },
                       ),
                     ],
                   ],
@@ -2611,13 +2626,6 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
-                            const SizedBox(width: 6),
-                            Icon(
-                              Icons.star_rounded,
-                              size: 60,
-                              color: AppColors.ratingStar,
-                            ),
-                            const SizedBox(width: 8),
                             Column(
                               mainAxisSize: MainAxisSize.min,
                               crossAxisAlignment: CrossAxisAlignment.center,
@@ -2693,32 +2701,29 @@ class _RatingsAndReviewsSectionState extends State<_RatingsAndReviewsSection> {
                           card,
                         ];
                       }),
-                      if (list.length > _kDetailReviewPreviewMax)
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
-                          child: Center(
-                            child: TextButton(
-                              style: TextButton.styleFrom(
-                                foregroundColor: cs.onSurfaceVariant.withValues(
-                                  alpha: 0.55,
-                                ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
+                        child: Center(
+                          child: TextButton(
+                            style: TextButton.styleFrom(
+                              foregroundColor: cs.onSurfaceVariant.withValues(
+                                alpha: 0.55,
                               ),
-                              onPressed: widget.onReviewsListTap,
-                              child: Text(
-                                s.get('dramaAllReviewsCta'),
-                                style: GoogleFonts.notoSansKr(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w500,
-                                  color: cs.onSurfaceVariant.withValues(
-                                    alpha: 0.55,
-                                  ),
+                            ),
+                            onPressed: widget.onReviewsListTap,
+                            child: Text(
+                              s.get('dramaAllReviewsCta'),
+                              style: GoogleFonts.notoSansKr(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                                color: cs.onSurfaceVariant.withValues(
+                                  alpha: 0.55,
                                 ),
                               ),
                             ),
                           ),
-                        )
-                      else
-                        const SizedBox(height: 8),
+                        ),
+                      ),
                     ],
                   ],
                 ),

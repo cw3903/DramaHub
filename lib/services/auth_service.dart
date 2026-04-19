@@ -39,13 +39,13 @@ class AuthService {
   }
 
   /// 이메일/비밀번호 로그인
-  Future<User?> signInWithEmailAndPassword(String email, String password) async {
+  Future<User?> signInWithEmailAndPassword(
+    String email,
+    String password,
+  ) async {
     try {
       final result = await _auth
-          .signInWithEmailAndPassword(
-            email: email,
-            password: password,
-          )
+          .signInWithEmailAndPassword(email: email, password: password)
           .timeout(authNetworkTimeout);
       isLoggedIn.value = true;
       currentUser.value = result.user;
@@ -57,13 +57,13 @@ class AuthService {
   }
 
   /// 이메일/비밀번호 회원가입
-  Future<User?> signUpWithEmailAndPassword(String email, String password) async {
+  Future<User?> signUpWithEmailAndPassword(
+    String email,
+    String password,
+  ) async {
     try {
       final result = await _auth
-          .createUserWithEmailAndPassword(
-            email: email,
-            password: password,
-          )
+          .createUserWithEmailAndPassword(email: email, password: password)
           .timeout(authNetworkTimeout);
       isLoggedIn.value = true;
       currentUser.value = result.user;
@@ -80,7 +80,8 @@ class AuthService {
       final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
       if (googleUser == null) return null;
 
-      final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
+      final GoogleSignInAuthentication googleAuth =
+          await googleUser.authentication;
       final credential = GoogleAuthProvider.credential(
         accessToken: googleAuth.accessToken,
         idToken: googleAuth.idToken,

@@ -109,6 +109,10 @@ service cloud.firestore {
     match /episode_reviews/{docId} {
       allow read: if true;
       allow create, update, delete: if request.auth != null;
+      match /thread/{threadId} {
+        allow read: if true;
+        allow create, update, delete: if request.auth != null;
+      }
     }
   }
 }

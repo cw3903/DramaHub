@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_theme.dart';
+import 'app_delete_confirm_dialog.dart';
 import '../widgets/country_scope.dart';
 import '../widgets/review_body_lines_indicator.dart';
 import '../services/drama_list_service.dart';
@@ -66,6 +67,7 @@ class _WriteReviewSheetState extends State<WriteReviewSheet>
   late final TextEditingController _controller;
   final FocusNode _commentFocus = FocusNode();
   bool _ratingStripFocused = false;
+  bool _confirmingClose = false;
 
   bool get _isEditMode => widget.editingReviewId != null;
   String? _validationMessage;
@@ -75,6 +77,66 @@ class _WriteReviewSheetState extends State<WriteReviewSheet>
   static const _toastDisplayDuration = Duration(seconds: 2);
   /// 별점만 있어도 저장 가능 (본문은 선택).
   bool get _canSave => _rating > 0;
+
+  /// 워치 시트와 동일: 입력·별점이 있으면 바깥 닫기 시 discard 확인.
+  bool get _hasUnsavedChanges {
+    if (_isEditMode) {
+      final initR = widget.initialRating ?? 0;
+      final initC = (widget.initialComment ?? '').trim();
+      return _rating != initR || _controller.text.trim() != initC;
+    }
+    return _rating > 0 || _controller.text.trim().isNotEmpty;
+  }
+
+  Future<bool> _confirmDiscardIfNeeded() async {
+    if (!_hasUnsavedChanges) return true;
+    if (_confirmingClose) return false;
+    _confirmingClose = true;
+    final cs = Theme.of(context).colorScheme;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: cs.surfaceContainerHigh,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          'Discard entry?',
+          style: GoogleFonts.notoSansKr(
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
+            color: cs.onSurface,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.notoSansKr(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: cs.onSurfaceVariant,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(
+              'Discard entry',
+              style: GoogleFonts.notoSansKr(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: kAppDeleteActionColor,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    _confirmingClose = false;
+    return confirmed == true;
+  }
+
+  Future<bool> _onWillPop() async => _confirmDiscardIfNeeded();
 
   @override
   void initState() {
@@ -296,19 +358,21 @@ class _WriteReviewSheetState extends State<WriteReviewSheet>
     final headerStarLit = _rating > 0;
     final headerReviewLit =
         _commentFocus.hasFocus || _controller.text.trim().isNotEmpty;
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      body: Stack(
-        children: [
-          Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () {
-                _hideValidationMessage();
-                Navigator.pop(context);
-              },
+    return WillPopScope(
+      onWillPop: _onWillPop,
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  _hideValidationMessage();
+                  Navigator.maybePop(context);
+                },
+              ),
             ),
-          ),
           Positioned(
             left: 0,
             right: 0,
@@ -637,7 +701,8 @@ class _WriteReviewSheetState extends State<WriteReviewSheet>
                 ),
               ),
             ),
-        ],
+          ],
+        ),
       ),
     );
   }

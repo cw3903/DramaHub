@@ -1789,7 +1789,7 @@ class _CategoryPill extends StatelessWidget {
             children: [
               Icon(
                 icon,
-                size: 15,
+                size: 14,
                 color: selected ? cs.onInverseSurface : dim,
               ),
               const SizedBox(width: 5),
@@ -1798,9 +1798,9 @@ class _CategoryPill extends StatelessWidget {
                 style: GoogleFonts.notoSansKr(
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
-                  height: 1.0,
+                  height: 1.2,
                   color: selected ? cs.onInverseSurface : dim,
-                ),
+                ).copyWith(inherit: false),
               ),
             ],
           ),

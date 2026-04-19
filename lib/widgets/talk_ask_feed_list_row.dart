@@ -1,6 +1,8 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -8,10 +10,14 @@ import '../constants/app_profile_avatar_size.dart';
 import '../models/post.dart';
 import '../theme/app_theme.dart'
     show AppColors, appUnifiedNicknameMetaTimeStyle, appUnifiedNicknameStyle;
+import '../screens/login_page.dart';
 import '../services/auth_service.dart';
+import '../services/post_service.dart';
 import '../services/user_profile_service.dart';
 import '../utils/format_utils.dart';
+import '../utils/post_board_utils.dart';
 import 'feed_inline_action_colors.dart';
+import 'feed_post_card.dart' show TalkAskHeartVote;
 import 'optimized_network_image.dart';
 import 'user_profile_nav.dart';
 
@@ -135,9 +141,25 @@ class _TalkListAuthorAvatar extends StatelessWidget {
   }
 }
 
+const Color _kTalkAskRowDividerLight = Color(0xFFEEEEEE);
+
+/// [FeedPostCard] 톡·에스크 카드 배경과 동일 톤 — 리스트 행도 한 덩어리로 보이게.
+Color _talkAskListRowFillColor(BuildContext context, ColorScheme cs, Post post) {
+  final theme = Theme.of(context);
+  final baseCardColor = theme.cardTheme.color ?? cs.surface;
+  final boardKind = postDisplayType(post);
+  if (boardKind != 'talk' && boardKind != 'ask') return baseCardColor;
+  return Color.lerp(
+        baseCardColor,
+        Colors.black,
+        theme.brightness == Brightness.dark ? 0.18 : 0.17,
+      ) ??
+      baseCardColor;
+}
+
 /// 톡·에스크 피드 — 구분선 리스트(헤더·본문+썸네일·하트·댓글).
-/// 하트·댓글 아이콘/숫자는 [PopularPostsTab._buildReviewInlineActionBar]와 동일 스케일.
-class TalkAskFeedListRow extends StatelessWidget {
+/// 하트는 [FeedPostCard]와 동일하게 상세 이동과 분리([TalkAskHeartVote] + 토글).
+class TalkAskFeedListRow extends StatefulWidget {
   const TalkAskFeedListRow({
     super.key,
     required this.post,
@@ -151,18 +173,95 @@ class TalkAskFeedListRow extends StatelessWidget {
   final bool showLeadingDivider;
   final VoidCallback? onTap;
 
-  static const Color _dividerLight = Color(0xFFEEEEEE);
+  @override
+  State<TalkAskFeedListRow> createState() => _TalkAskFeedListRowState();
+}
+
+class _TalkAskFeedListRowState extends State<TalkAskFeedListRow> {
+  int _voteState = 0;
+  late int _displayCount;
+  Timer? _likeDebounce;
+
+  @override
+  void initState() {
+    super.initState();
+    _displayCount = widget.post.likeCount;
+    _syncVoteFromPost();
+  }
+
+  @override
+  void dispose() {
+    _likeDebounce?.cancel();
+    super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant TalkAskFeedListRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.post.id == widget.post.id &&
+        (oldWidget.post.likedBy != widget.post.likedBy ||
+            oldWidget.post.likeCount != widget.post.likeCount)) {
+      _displayCount = widget.post.likeCount;
+      _syncVoteFromPost();
+    }
+  }
+
+  void _syncVoteFromPost() {
+    final uid = AuthService.instance.currentUser.value?.uid;
+    final liked = uid != null && widget.post.likedBy.contains(uid);
+    final next = liked ? 1 : 0;
+    if (_voteState != next) setState(() => _voteState = next);
+  }
+
+  Future<void> _onHeartTap() async {
+    if (!AuthService.instance.isLoggedIn.value) {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(builder: (_) => const LoginPage()),
+      );
+      return;
+    }
+    HapticFeedback.lightImpact();
+    final nowLiked = _voteState != 1;
+    setState(() {
+      if (nowLiked) {
+        _voteState = 1;
+        _displayCount += 1;
+      } else {
+        _voteState = 0;
+        _displayCount -= 1;
+      }
+    });
+    final prevVoteForNet = nowLiked ? 0 : 1;
+    final snapCount = _displayCount;
+    _likeDebounce?.cancel();
+    _likeDebounce = Timer(const Duration(milliseconds: 350), () async {
+      if (!mounted) return;
+      final result = await PostService.instance.togglePostLike(
+        widget.post.id,
+        currentVoteState: prevVoteForNet,
+        postAuthorUid: widget.post.authorUid,
+        postTitle: widget.post.title,
+      );
+      if (!mounted) return;
+      if (result == null) {
+        setState(() {
+          _voteState = prevVoteForNet;
+          _displayCount = snapCount + (nowLiked ? -1 : 1);
+        });
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
-    final cs = colorScheme;
+    final cs = widget.colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final dividerColor = isDark
         ? cs.outline.withValues(alpha: 0.35)
-        : _dividerLight;
-    final preview = talkAskPlainBodyPreview(post.body);
-    final nickname = _displayAuthor(post.author);
-    final thumbUrl = _thumbUrlForPost(post);
+        : _kTalkAskRowDividerLight;
+    final preview = talkAskPlainBodyPreview(widget.post.body);
+    final nickname = _displayAuthor(widget.post.author);
+    final thumbUrl = _thumbUrlForPost(widget.post);
     const titleFontSize = 16.0;
     const bodyFontSize = 12.0;
     final titleStyleList = GoogleFonts.notoSansKr(
@@ -188,185 +287,165 @@ class TalkAskFeedListRow extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (showLeadingDivider)
+        if (widget.showLeadingDivider)
           Divider(height: 1, thickness: 1, color: dividerColor),
         Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: onTap,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 21, 20, 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
+          color: _talkAskListRowFillColor(context, cs, widget.post),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              InkWell(
+                onTap: widget.onTap,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 16, 18, 0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _TalkListAuthorAvatar(
-                        photoUrl: post.authorPhotoUrl,
-                        author: post.author,
-                        authorUid: post.authorUid,
-                        colorIndex: post.authorAvatarColorIndex,
-                        size: _kTalkAskListAuthorAvatarSize,
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text.rich(
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          TextSpan(
-                            children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          _TalkListAuthorAvatar(
+                            photoUrl: widget.post.authorPhotoUrl,
+                            author: widget.post.author,
+                            authorUid: widget.post.authorUid,
+                            colorIndex: widget.post.authorAvatarColorIndex,
+                            size: _kTalkAskListAuthorAvatarSize,
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text.rich(
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                               TextSpan(
-                                text: nickname,
-                                style: appUnifiedNicknameStyle(cs).copyWith(
-                                  height: 1.2,
-                                ),
+                                children: [
+                                  TextSpan(
+                                    text: nickname,
+                                    style: appUnifiedNicknameStyle(cs).copyWith(
+                                      height: 1.2,
+                                    ),
+                                  ),
+                                  TextSpan(
+                                    text: ' · ${widget.post.timeAgo}',
+                                    style: appUnifiedNicknameMetaTimeStyle(cs)
+                                        .copyWith(height: 1.2),
+                                  ),
+                                ],
                               ),
-                              TextSpan(
-                                text: ' · ${post.timeAgo}',
-                                style: appUnifiedNicknameMetaTimeStyle(cs)
-                                    .copyWith(height: 1.2),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      if (thumb == null)
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              widget.post.title,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: titleStyleList,
+                            ),
+                            if (preview.isNotEmpty) ...[
+                              const SizedBox(height: _kTalkAskListTitleBodyGap),
+                              Text(
+                                preview,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: bodyStyleList,
                               ),
                             ],
-                          ),
+                          ],
+                        )
+                      else
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: SizedBox(
+                                height: _kTalkAskListThumbSide,
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    SizedBox(
+                                      height: _kTalkAskListTitleBlockH,
+                                      width: double.infinity,
+                                      child: Text(
+                                        widget.post.title,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: titleStyleList,
+                                      ),
+                                    ),
+                                    const SizedBox(
+                                      height: _kTalkAskListTitleBodyGap,
+                                    ),
+                                    SizedBox(
+                                      height: _kTalkAskListBodyBlockH,
+                                      width: double.infinity,
+                                      child: Text(
+                                        preview,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: bodyStyleList,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            thumb,
+                          ],
                         ),
-                      ),
                     ],
                   ),
-                  const SizedBox(height: 10),
-                  if (thumb == null)
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          post.title,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: titleStyleList,
-                        ),
-                        if (preview.isNotEmpty) ...[
-                          const SizedBox(height: _kTalkAskListTitleBodyGap),
-                          Text(
-                            preview,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: bodyStyleList,
-                          ),
-                        ],
-                      ],
-                    )
-                  else
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          child: SizedBox(
-                            height: _kTalkAskListThumbSide,
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                SizedBox(
-                                  height: _kTalkAskListTitleBlockH,
-                                  width: double.infinity,
-                                  child: Text(
-                                    post.title,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: titleStyleList,
-                                  ),
-                                ),
-                                const SizedBox(
-                                  height: _kTalkAskListTitleBodyGap,
-                                ),
-                                SizedBox(
-                                  height: _kTalkAskListBodyBlockH,
-                                  width: double.infinity,
-                                  child: Text(
-                                    preview,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: bodyStyleList,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        thumb,
-                      ],
-                    ),
-                  const SizedBox(height: 16),
-                  ValueListenableBuilder<User?>(
-                    valueListenable: AuthService.instance.currentUser,
-                    builder: (context, user, _) {
-                      const iconSize = 13.0;
-                      final uid = user?.uid;
-                      final liked = uid != null && post.likedBy.contains(uid);
-                      final actionFg = feedInlineActionMutedForeground(cs);
-                      final countStyle = GoogleFonts.notoSansKr(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                        height: 1.0,
-                        color: actionFg,
-                      );
-                      // [_buildReviewInlineActionBar]와 동일: 그룹마다 horizontal 4 + 그룹 사이 4
-                      return Row(
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 4,
-                              vertical: 2,
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  liked
-                                      ? Icons.favorite
-                                      : Icons.favorite_border,
-                                  size: iconSize,
-                                  color: liked
-                                      ? Colors.redAccent
-                                      : actionFg,
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  formatCompactCount(post.likeCount),
-                                  style: countStyle,
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 4),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 4,
-                              vertical: 2,
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  LucideIcons.message_circle,
-                                  size: iconSize,
-                                  color: actionFg,
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  formatCompactCount(post.comments),
-                                  style: countStyle,
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      );
-                    },
-                  ),
-                ],
+                ),
               ),
-            ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 10, 18, 10),
+                child: Row(
+                  children: [
+                    TalkAskHeartVote(
+                      voteState: _voteState,
+                      count: _displayCount,
+                      onTap: _onHeartTap,
+                    ),
+                    const SizedBox(width: 4),
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: widget.onTap,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 4,
+                          vertical: 2,
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              LucideIcons.message_circle,
+                              size: 13,
+                              color: feedInlineActionMutedForeground(cs),
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              formatCompactCount(widget.post.comments),
+                              style: GoogleFonts.notoSansKr(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                                height: 1.0,
+                                color: feedInlineActionMutedForeground(cs),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ),
       ],

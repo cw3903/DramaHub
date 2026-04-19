@@ -363,6 +363,24 @@ class PostService {
   DocumentReference<Map<String, dynamic>> _postDislikeDoc(String postId, String uid) =>
       _col.doc(postId).collection('dislikes').doc(uid);
 
+  /// Firestore는 부모 문서 삭제 시 서브컬렉션을 자동 삭제하지 않는다. 고아 likes/dislikes 방지용.
+  Future<void> _deletePostVoteSubcollections(DocumentReference<Map<String, dynamic>> postRef) async {
+    const subcollectionNames = ['likes', 'dislikes'];
+    const chunk = 400;
+    for (final name in subcollectionNames) {
+      final subRef = postRef.collection(name);
+      while (true) {
+        final snap = await subRef.limit(chunk).get();
+        if (snap.docs.isEmpty) break;
+        final batch = _firestore.batch();
+        for (final d in snap.docs) {
+          batch.delete(d.reference);
+        }
+        await batch.commit();
+      }
+    }
+  }
+
   /// posts/{postId}/likes|dislikes/{uid} 존재 여부로 현재 사용자 투표 상태를 [Post.likedBy]/[Post.dislikedBy]에 반영.
   Future<List<Post>> hydratePostsViewerVotes(List<Post> posts) async {
     final uid = AuthService.instance.currentUser.value?.uid;
@@ -639,6 +657,7 @@ class PostService {
           }
         }
       }
+      await _deletePostVoteSubcollections(docRef);
       await docRef.delete();
       if (reviewPostForCleanup != null) {
         try {
@@ -671,6 +690,9 @@ class PostService {
       while (true) {
         final snapshot = await _col.limit(500).get();
         if (snapshot.docs.isEmpty) break;
+        for (final doc in snapshot.docs) {
+          await _deletePostVoteSubcollections(doc.reference);
+        }
         final batch = _firestore.batch();
         for (final doc in snapshot.docs) {
           batch.delete(doc.reference);
